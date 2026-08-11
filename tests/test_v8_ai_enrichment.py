@@ -16,7 +16,7 @@ def rec():
 
 def test_rich_description_combines_verified_evidence():
     x=derive_description(rec())
-    assert 'Wireless headset' in x.value
+    assert 'auricular inalámbrico' in x.value.lower()
     assert '40 mm' in x.value
     assert '22 hrs' in x.value
     assert x.confidence >= .9

@@ -14,6 +14,7 @@ from .ai_enrichment import AIConfig
 from .models import ProductIdentity, ProductRecord
 from .normalize import key_norm
 from .pipeline import ProductPipeline
+from .record_builder import build_record_strict
 from .template_intelligence import analyze_matrix
 
 
@@ -150,3 +151,44 @@ def run_batch(template:str, output_dir:str, overwrite:bool=False, log=lambda m:N
     summary={"mode":"manual_part_numbers" if manual_mode else "excel_detected","products_detected":len(items),"products_scraped":len(records),"products_failed":len(failures),"failures":failures,"output_excel":output_xlsx,"trace":trace,"mapping":report.get('summary',{})}
     (out/'resumen.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
     return summary
+
+
+# MULTI_SOURCE_PRODUCT_MERGE_V1
+def _merge_valid_records(records:list[ProductRecord])->ProductRecord:
+    if not records:raise ValueError('no records to merge')
+    def rank(rec):return (2 if (rec.fetch or {}).get('source_class')=='manufacturer' else 1,2 if rec.identity.match_level=='EXACT' else 1,float(rec.identity.confidence or 0),len(rec.evidence))
+    ordered=sorted(records,key=rank,reverse=True);primary=ordered[0]
+    evidence=[];sources=[];warnings=[];notes=[];media_by_url={}
+    for rec in ordered:
+        evidence.extend(rec.evidence);sources.extend(rec.sources);warnings.extend(rec.warnings);notes.extend(rec.technical_notes)
+        for item in rec.media:
+            url=item.get('url')
+            if not url:continue
+            old=media_by_url.get(url)
+            if old is None or item.get('confidence',0)>old.get('confidence',0):media_by_url[url]=item
+    merged=build_record_strict(primary.identity,evidence,list(dict.fromkeys(sources)))
+    merged.media=list(media_by_url.values())
+    merged.images=[m for m in merged.media if m.get('media_type')=='image' and m.get('scope') in {'EXACT_VARIANT','EXACT_PRODUCT'} and m.get('confidence',0)>=.80 and m.get('autofill_eligible')]
+    merged.videos=[m for m in merged.media if m.get('media_type')=='video' and m.get('scope') in {'EXACT_VARIANT','EXACT_PRODUCT'} and m.get('confidence',0)>=.80 and m.get('autofill_eligible')]
+    merged.warnings=list(dict.fromkeys(warnings));merged.technical_notes=notes;merged.site_profile=primary.site_profile
+    merged.fetch={'method':'multi_source','source_class':(primary.fetch or {}).get('source_class'),'validated_sources':len(ordered),'manufacturer_sources':sum(1 for r in ordered if (r.fetch or {}).get('source_class')=='manufacturer')}
+    return merged
+
+def scrape_item(item:BatchItem, out_dir:str, log=lambda m:None)->ProductRecord|None:
+    pipe=ProductPipeline();candidates=[type('C',(),{'url':item.source_url,'likely_official':True,'score':1.0})()] if item.source_url else search_web(item.identity,limit=12)
+    errors=[];accepted=[]
+    for cand in candidates:
+        try:
+            host=(urlparse(cand.url).hostname or '').removeprefix('www.');official_domain=host if getattr(cand,'likely_official',False) else None
+            log(f'  probando: {cand.url}')
+            rec=pipe.process_url(item.identity,cand.url,official_domain=official_domain,include_pdfs=True,include_images=True,browser_fallback=True)
+            if rec.identity.identifiers_conflicting:raise ValueError('identificadores en conflicto')
+            accepted.append(rec);log(f"  fuente validada: {(rec.fetch or {}).get('source_class','?')} / {rec.identity.match_level}")
+            has_manufacturer=any((r.fetch or {}).get('source_class')=='manufacturer' for r in accepted)
+            if len(accepted)>=3 or (has_manufacturer and len(accepted)>=2):break
+        except Exception as e:errors.append(f'{cand.url}: {type(e).__name__}: {e}')
+    if not accepted:
+        log('  SIN FUENTE VALIDADA: '+(errors[-1] if errors else 'no hubo candidatos'));return None
+    rec=_merge_valid_records(accepted);Path(out_dir).mkdir(parents=True,exist_ok=True)
+    stem=re.sub(r'[^A-Za-z0-9._-]+','_',item.identity.mpn or item.identity.ean or item.identity.model or f'row_{item.row}')
+    (Path(out_dir)/f'{stem}.json').write_text(rec.model_dump_json(indent=2),encoding='utf-8');return rec

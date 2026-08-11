@@ -28,6 +28,7 @@ jobs:
           pip install -e ".[browser]"
           python -m playwright install --with-deps chromium
 
+      # Real network smoke test for the three headphone part numbers used by the reference template.
       - name: Run real scraping smoke test
         env:
           PYTHONUNBUFFERED: '1'

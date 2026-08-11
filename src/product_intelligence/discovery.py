@@ -12,7 +12,11 @@ from .models import ProductIdentity
 from .normalize import key_norm
 
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36"
-BLOCKED_HOSTS={"google.com","www.google.com","bing.com","www.bing.com","duckduckgo.com","html.duckduckgo.com"}
+BLOCKED_HOSTS={
+    "google.com","www.google.com","bing.com","www.bing.com",
+    "duckduckgo.com","html.duckduckgo.com","lite.duckduckgo.com",
+    "search.brave.com","www.mojeek.com","search.yahoo.com",
+}
 MARKETPLACE_HINTS={"amazon.","ebay.","mercadolibre.","falabella.","ripley.","walmart.","bestbuy."}
 
 @dataclass
@@ -37,6 +41,14 @@ def _unwrap_ddg(href:str)->str:
     if "uddg=" in href:
         qs=parse_qs(urlparse(href).query)
         if qs.get("uddg"): return unquote(qs["uddg"][0])
+    return href
+
+
+def _unwrap_yahoo(href:str)->str:
+    """Yahoo may wrap outbound URLs in /RU=<encoded>/RK=... links."""
+    m=re.search(r"/RU=([^/]+)/RK=",href)
+    if m:
+        return unquote(m.group(1))
     return href
 
 
@@ -66,7 +78,6 @@ def _search_ddg(q:str,timeout:int)->list[tuple[str,str,str]]:
 
 
 def _search_bing(q:str,timeout:int)->list[tuple[str,str,str]]:
-    """Normal Bing HTML discovery. Every candidate is identity-validated later."""
     rows=[]
     try:
         r=requests.get(
@@ -91,11 +102,6 @@ def _search_bing(q:str,timeout:int)->list[tuple[str,str,str]]:
 
 
 def _search_bing_rss(q:str,timeout:int)->list[tuple[str,str,str]]:
-    """RSS fallback for cloud/CI IPs where search-engine HTML is often empty or challenged.
-
-    This only discovers URLs. It never establishes product identity; the normal pipeline
-    must still validate MPN/EAN/UPC/GTIN/model before any evidence can be accepted.
-    """
     rows=[]
     try:
         r=requests.get(
@@ -112,24 +118,86 @@ def _search_bing_rss(q:str,timeout:int)->list[tuple[str,str,str]]:
         root=ET.fromstring(r.content)
         for item in root.findall(".//item"):
             u=(item.findtext("link") or "").strip()
-            if not u.startswith("http"):
-                continue
+            if not u.startswith("http"): continue
             title=(item.findtext("title") or "").strip()
             raw_desc=(item.findtext("description") or "").strip()
             snippet=BeautifulSoup(raw_desc,"html.parser").get_text(" ",strip=True)
             rows.append((u,title,snippet))
-    except (requests.RequestException, ET.ParseError):
+    except (requests.RequestException,ET.ParseError):
         pass
     return rows
+
+
+def _generic_search(url:str,param:str,q:str,timeout:int,selectors:list[str],unwrap=lambda x:x)->list[tuple[str,str,str]]:
+    """Small resilient HTML parser used only for URL discovery.
+
+    Search engines change markup frequently, so selectors are hints. Identity filtering
+    below prevents unrelated links from being sent to the extraction pipeline.
+    """
+    rows=[]
+    try:
+        r=requests.get(
+            url,
+            params={param:q},
+            headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},
+            timeout=timeout,
+        )
+        if not r.ok:return rows
+        soup=BeautifulSoup(r.text,"lxml")
+        anchors=[]
+        for sel in selectors:
+            anchors.extend(soup.select(sel))
+        if not anchors:
+            anchors=soup.select("a[href]")
+        seen=set()
+        for a in anchors:
+            href=unwrap(a.get("href") or "")
+            if not href.startswith("http") or href in seen:continue
+            seen.add(href)
+            parent=a.find_parent(["article","li","div"])
+            title=a.get_text(" ",strip=True)
+            snippet=parent.get_text(" ",strip=True)[:1200] if parent else title
+            rows.append((href,title,snippet))
+    except requests.RequestException:
+        pass
+    return rows
+
+
+def _search_brave(q:str,timeout:int):
+    return _generic_search(
+        "https://search.brave.com/search","q",q,timeout,
+        ["a[href][data-testid='result-title-a']","div.snippet a[href]","a.result-header[href]"],
+    )
+
+
+def _search_mojeek(q:str,timeout:int):
+    return _generic_search(
+        "https://www.mojeek.com/search","q",q,timeout,
+        ["ul.results-standard h2 a[href]","li.result h2 a[href]","a.ob[href]"],
+    )
+
+
+def _search_yahoo(q:str,timeout:int):
+    return _generic_search(
+        "https://search.yahoo.com/search","p",q,timeout,
+        ["div.algo-sr h3 a[href]","div.algo h3 a[href]","h3.title a[href]"],
+        _unwrap_yahoo,
+    )
+
+
+def _compact(value:str)->str:
+    return re.sub(r"[^a-z0-9]","",key_norm(value))
+
+
+def _contains_strong_identifier(text:str,strong:list[str])->bool:
+    compact=_compact(text)
+    return any(_compact(x) and _compact(x) in compact for x in strong)
 
 
 def search_web(identity:ProductIdentity, limit:int=12, timeout:int=20)->list[SearchCandidate]:
     q=build_query(identity)
     if not q:return []
 
-    # Query both quoted and plain strong identifiers. Search-engine HTML endpoints can
-    # behave differently depending on the network/IP, so RSS is a third normal public
-    # discovery path rather than an identity shortcut.
     queries=[q]
     strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x),None)
     if strong_raw:
@@ -141,23 +209,32 @@ def search_web(identity:ProductIdentity, limit:int=12, timeout:int=20)->list[Sea
         urls.extend(_search_ddg(query,timeout))
         urls.extend(_search_bing(query,timeout))
         urls.extend(_search_bing_rss(query,timeout))
+        urls.extend(_search_brave(query,timeout))
+        urls.extend(_search_mojeek(query,timeout))
+        urls.extend(_search_yahoo(query,timeout))
 
     seen=set();out=[]
     brand=key_norm(identity.brand or "").replace(" ","")
-    strong=[key_norm(x) for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
+    strong=[str(x) for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
     model=key_norm(identity.model or identity.product_name or "")
     for u,t,sn in urls:
         if u in seen:continue
         seen.add(u)
         host=(urlparse(u).hostname or "").lower()
         if not host or host in BLOCKED_HOSTS:continue
-        hay=key_norm(f"{u} {t} {sn}")
-        compact_hay=re.sub(r"[^a-z0-9]","",hay)
+        combined=f"{u} {t} {sn}"
+        hay=key_norm(combined)
+
+        # A strong identifier in the request is our discovery anchor. Do not waste time
+        # crawling generic search noise that does not even mention that identifier.
+        if strong and not _contains_strong_identifier(combined,strong):
+            continue
+
         hcompact=re.sub(r"[^a-z0-9]","",host)
         likely_official=bool(brand and brand in hcompact and not any(m in host for m in MARKETPLACE_HINTS))
         score=0.0
         if likely_official:score+=.45
-        if strong and any(re.sub(r"[^a-z0-9]","",x) in compact_hay for x in strong):score+=.38
+        if strong and _contains_strong_identifier(combined,strong):score+=.38
         if model and fuzz_contains(model,hay):score+=.18
         if any(m in host for m in MARKETPLACE_HINTS):score-=.18
         out.append(SearchCandidate(u,t,sn,score,likely_official))

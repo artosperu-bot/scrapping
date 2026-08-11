@@ -1,10 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Product Intelligence V9 - Construir EXE
+title Product Intelligence V10 - Construir EXE
 
 echo =====================================================
-echo   PRODUCT INTELLIGENCE V9 - BUILD WINDOWS
+echo   PRODUCT INTELLIGENCE V10 - BUILD WINDOWS LIMPIO
 echo =====================================================
 echo.
 
@@ -20,7 +20,7 @@ set PYVER=
 py -3.12 -c "import sys" >nul 2>&1 && set PYVER=-3.12
 if not defined PYVER py -3.11 -c "import sys" >nul 2>&1 && set PYVER=-3.11
 if not defined PYVER (
-  echo ERROR: Instala Python 3.12 o 3.11. Evita compilar este proyecto con Python 3.14 por compatibilidad de dependencias.
+  echo ERROR: Instala Python 3.12 o 3.11.
   pause
   exit /b 1
 )
@@ -30,7 +30,10 @@ if not exist .venv-build (
 )
 call .venv-build\Scripts\activate.bat
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e ".[browser]" pyinstaller
+python -m pip install -e ".[desktop,dev]"
+if errorlevel 1 goto :error
+
+python -m pytest -q
 if errorlevel 1 goto :error
 
 if not exist vendor\ms-playwright mkdir vendor\ms-playwright
@@ -40,6 +43,8 @@ if errorlevel 1 goto :error
 
 pyinstaller --noconfirm --clean ProductIntelligence.spec
 if errorlevel 1 goto :error
+
+if not exist dist\ProductIntelligence\ProductIntelligence.exe goto :error
 
 echo.
 echo =====================================================
@@ -52,6 +57,6 @@ exit /b 0
 
 :error
 echo.
-echo ERROR DURANTE LA COMPILACION. Revisa el texto anterior.
+echo ERROR DURANTE TEST O COMPILACION. Revisa el texto anterior.
 pause
 exit /b 1

@@ -19,8 +19,6 @@ class FieldContract:
         return asdict(self)
 
 
-# SI-like dimensions used for general sanity checks. This does not try to fully parse units;
-# it only blocks obvious cross-attribute contamination.
 UNIT_DIMENSIONS = {
     "length": [r"\bmm\b", r"\bcm\b", r"\bm\b", r"\bin\b", r"inch", r"pulg"],
     "mass": [r"\bmg\b", r"\bg\b", r"\bkg\b", r"\blb\b", r"lbs", r"ounce", r"\boz\b"],
@@ -57,7 +55,6 @@ def infer_contract(label: str, description: str | None = None, canonical: str | 
     raw = f"{label} {description or ''}"
     n = key_norm(raw)
     c = key_norm(canonical or "")
-    # The template itself is authoritative about controlled vocabularies.
     syntax_controlled = bool(re.search(r"syntax\s*:\s*(?:one|multiple)\s+value(?:s)?\s+from\s+the\s+list|sintaxis\s*:\s*(?:uno|varios|m[uú]ltiples?)", raw, re.I))
 
     if field_class == "SELLER_DATA":
@@ -65,8 +62,6 @@ def infer_contract(label: str, description: str | None = None, canonical: str | 
     if field_class == "IMAGE":
         return FieldContract("product_image_url", "product", "url", confidence=.99)
 
-    # Context first: the FIELD LABEL is authoritative. Descriptions may say
-    # "product outside its packaging", which must remain product context.
     label_n = key_norm(label)
     explicit_package_label = any(x in label_n for x in ["paquete", "package", "packed", "shipping", "peso embalado", "ancho embalado", "largo embalado", "alto embalado"])
     explicit_package_desc = any(x in n for x in ["producto embalado", "packed product", "shipping weight", "gross weight", "peso bruto"])
@@ -76,73 +71,72 @@ def infer_contract(label: str, description: str | None = None, canonical: str | 
 
     semantic = canonical
     value_type = "controlled" if syntax_controlled else "text"
+
+    # Descriptions are part of the marketplace schema contract. If a machine header is
+    # opaque or changes over time, the bilingual instruction still tells us what the
+    # field means and which kind of value it expects.
+    if not semantic:
+        if "bluetooth" in n and any(x in n for x in ["selecciona si", "select whether", "cuenta con", "has bluetooth"]):
+            semantic = "bluetooth"; value_type = "controlled"
+        elif any(x in n for x in ["resistente al agua", "resistencia al agua", "water resistant", "water resistance"]):
+            semantic = "water resistance"; value_type = "controlled"
+        elif any(x in n for x in ["tipo de auricular", "type of headphones", "type of headphone"]):
+            semantic = "headphone type"; value_type = "controlled"
+        elif any(x in n for x in ["autonomia", "autonomía", "battery life", "duracion de la bateria", "duración de la batería"]):
+            semantic = "battery_life"; value_type = "duration"
+        elif any(x in n for x in ["conectividad", "connectivity"]):
+            semantic = "connectivity"; value_type = "controlled"
+        elif any(x in n for x in ["numero de serie", "número de serie", "serial number"]):
+            semantic = "requires_serial_number"; value_type = "controlled"
+
     dims: tuple[str, ...] = ()
     forbidden: list[str] = []
 
-    # Canonical meaning wins over incidental words in verbose marketplace descriptions.
-    if c == "power source":
-        return FieldContract(canonical, context, "controlled", (), (), .98)
-    if c in {"water resistance", "bluetooth", "headphone type", "output type", "features"}:
-        return FieldContract(canonical, context, "controlled" if syntax_controlled or c != "features" else "text", (), (), .98)
+    # Canonical or description-inferred meaning wins over incidental words.
+    sem = key_norm(semantic or "")
+    if c == "power source" or sem == "power source":
+        return FieldContract(semantic, context, "controlled", (), (), .98)
+    if sem in {"water resistance", "bluetooth", "headphone type", "output type", "features", "connectivity", "requires_serial_number"}:
+        return FieldContract(semantic, context, "controlled" if syntax_controlled or sem != "features" else "text", (), (), .98)
     if c in {"package width", "package length", "package height"}:
         return FieldContract(canonical, "package", "dimension", ("length",), (), .99)
     if c == "package weight":
         return FieldContract(canonical, "package", "number", ("mass",), (), .99)
 
-    # Generic physical / engineering semantics.
     if c in {"height", "width", "length", "thickness", "dimensions"} or any(x in n for x in [" alto ", " ancho ", " largo ", " altura ", " width ", " height ", " length ", "dimensiones", "dimensions"]):
-        value_type = "dimension"
-        dims = ("length",)
+        value_type = "dimension"; dims = ("length",)
         if not package:
             forbidden += ["cable", "cord", "almohadilla", "ear cushion", "earcup", "ear cup", "diadema", "headband", "package", "paquete", "embalado"]
     elif c == "weight" or "peso" in n or "weight" in n:
-        value_type = "number"
-        dims = ("mass",)
+        value_type = "number"; dims = ("mass",)
         if not package:
             forbidden += ["package", "paquete", "embalado", "shipping", "gross"]
     elif any(x in n for x in ["potencia", "power", "watts", "watt"]):
-        semantic = semantic or "power"
-        value_type = "number"
-        dims = ("power",)
-    elif any(x in n for x in ["autonomia", "autonomía", "battery life", "duracion de bateria", "duración de batería"]):
-        semantic = semantic or "battery_life"
-        value_type = "duration"
-        dims = ("time",)
-        forbidden += ["mah", "wh"]
+        semantic = semantic or "power"; value_type = "number"; dims = ("power",)
+    elif sem == "battery_life" or any(x in n for x in ["autonomia", "autonomía", "battery life", "duracion de bateria", "duración de batería"]):
+        semantic = semantic or "battery_life"; value_type = "duration"; dims = ("time",); forbidden += ["mah", "wh"]
     elif any(x in n for x in ["frecuencia", "frequency"]):
-        value_type = "number"
-        dims = ("frequency",)
+        value_type = "number"; dims = ("frequency",)
     elif any(x in n for x in ["impedancia", "impedance"]):
-        semantic = semantic or "impedance"
-        value_type = "number"
-        dims = ("resistance",)
+        semantic = semantic or "impedance"; value_type = "number"; dims = ("resistance",)
     elif any(x in n for x in ["sensibilidad", "sensitivity"]):
-        semantic = semantic or "sensitivity"
-        value_type = "number"
-        dims = ("level",)
+        semantic = semantic or "sensitivity"; value_type = "number"; dims = ("level",)
     elif any(x in n for x in ["capacidad de almacenamiento", "storage capacity"]):
-        semantic = "capacity"
-        value_type = "controlled"
-        dims = ("data",)
+        semantic = "capacity"; value_type = "controlled"; dims = ("data",)
     elif any(x in n for x in ["pais de produccion", "país de producción", "country of production", "country of origin"]):
-        semantic = "country_of_origin"
-        value_type = "controlled"
+        semantic = "country_of_origin"; value_type = "controlled"
     elif any(x in n for x in ["codigo de barras", "código de barras", "barcode", "ean", "gtin", "upc"]):
-        semantic = semantic or "ean"
-        value_type = "number"
+        semantic = semantic or "ean"; value_type = "number"
     elif any(x in n for x in ["serial number", "numero de serie", "número de serie"]):
-        semantic = semantic or "requires_serial_number"
-        value_type = "controlled"
+        semantic = semantic or "requires_serial_number"; value_type = "controlled"
     elif any(x in n for x in ["bluetooth", "resistente al agua", "resistencia al agua", "water resistant", "water resistance"]):
         value_type = "controlled"
     elif any(x in n for x in ["conectividad", "connectivity", "tipo de auricular", "segmento", "tipo de salida", "alimentacion", "alimentación"]):
         value_type = "controlled"
     elif any(x in n for x in ["nameen", "nombre en ingles", "english name"]):
-        semantic = "name_en"
-        context = "logistics"
+        semantic = "name_en"; context = "logistics"
     elif any(x in n for x in ["namecn", "nombre en chino", "chinese name"]):
-        semantic = "name_cn"
-        context = "logistics"
+        semantic = "name_cn"; context = "logistics"
 
     return FieldContract(semantic, context, value_type, dims, tuple(forbidden), .92 if semantic else .72)
 
@@ -182,17 +176,14 @@ def validate_value(value: Any, contract: FieldContract, *, evidence_attribute: s
 
     detected = detect_unit_dimensions(value)
     if contract.allowed_dimensions:
-        # No unit at all can be acceptable for controlled/text fields, but engineering numeric fields require one.
         if not detected and contract.value_type in {"dimension", "duration"}:
             return False, "EXPECTED_UNIT_MISSING", .0
         if detected and not (detected & set(contract.allowed_dimensions)):
             return False, "UNIT_DIMENSION_MISMATCH", .0
-        # Explicitly reject common cross dimensions even when another allowed token is present.
         disallowed = detected - set(contract.allowed_dimensions)
         if disallowed and contract.value_type in {"dimension", "duration"}:
             return False, "MIXED_OR_WRONG_UNIT_DIMENSION", .0
 
-    # Basic numeric sanity for fields that should not be prose/labels.
     if contract.value_type in {"number", "dimension", "duration"} and not re.search(r"\d", text):
         return False, "NUMERIC_VALUE_MISSING", .0
 

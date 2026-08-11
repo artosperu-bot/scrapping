@@ -1,0 +1,62 @@
+name: Integration Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      part_numbers:
+        description: 'Part numbers separados por coma'
+        required: false
+        default: 'JBLQ350WLBLKAM,JBLENDURRUN3BTBAM,JBLT530CBLKAM'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install browser profile
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[browser,dev]"
+          python -m playwright install --with-deps chromium
+      - name: Run regressions first
+        run: python -m pytest -q
+      - name: Run real scraping smoke test
+        env:
+          INPUT_PART_NUMBERS: ${{ inputs.part_numbers }}
+        run: |
+          python - <<'PY'
+          import os
+          from product_intelligence.batch import run_batch
+
+          raw=os.environ.get('INPUT_PART_NUMBERS','')
+          pns=[x.strip() for x in raw.replace(';',',').split(',') if x.strip()]
+          if not pns:
+              raise SystemExit('No part numbers supplied')
+
+          summary=run_batch(
+              'examples/ProductCreationTemplate_reference.xlsx',
+              'integration_output',
+              overwrite=True,
+              log=print,
+              manual_part_numbers=pns,
+          )
+          print(summary)
+          if summary['products_detected'] != len(pns):
+              raise SystemExit('Product detection count mismatch')
+          if summary['products_scraped'] < 1:
+              raise SystemExit('No product could be validated in the real-world smoke run')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-smoke-output
+          path: integration_output/
+          if-no-files-found: warn

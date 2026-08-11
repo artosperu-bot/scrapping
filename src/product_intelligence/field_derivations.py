@@ -57,7 +57,6 @@ def derive_description(rec: ProductRecord) -> Derived:
         if 8 <= len(v) <= 2500:
             base=v.strip();base_ev=ev;base_q=q;break
 
-    # Generic technical attributes that are useful in catalog prose across product classes.
     technical_pat=re.compile(
         r"driver|frequency|frecuencia|impedance|impedancia|sensitivity|sensibilidad|"
         r"battery|bater[ií]a|charging|carga|play time|autonom|weight|peso|dimension|"
@@ -70,7 +69,7 @@ def derive_description(rec: ProductRecord) -> Derived:
     facts=[];seen=set()
     for ev,q in iter_clean_evidence(rec):
         if len(facts)>=10:break
-        a=str(ev.attribute or '').strip();
+        a=str(ev.attribute or '').strip()
         if not a or deny.search(a) or not technical_pat.search(a):continue
         v=ev.normalized_value if ev.normalized_value not in (None,'') else ev.raw_value
         if v in (None,''):continue
@@ -81,7 +80,6 @@ def derive_description(rec: ProductRecord) -> Derived:
         seen.add(k);facts.append((a,sv,q,ev))
 
     if base:
-        # Do not bloat already-complete official descriptions.
         if len(base)>=420 or not facts:
             return Derived(base,min(.99,base_q+.05),"official_description",base_ev.source_url,base_ev.attribute,base_ev.raw_value)
         suffix='; '.join(f"{a}: {v}" for a,v,_,_ in facts[:7])
@@ -108,7 +106,6 @@ def derive_boolean(rec: ProductRecord, concept: str) -> Derived:
             return Derived("Sí",min(.99,q+.04),"explicit_yes",ev.source_url,ev.attribute,ev.raw_value)
         if n in {"no","false"} or n.startswith("no "):
             return Derived("No",min(.99,q+.04),"explicit_no",ev.source_url,ev.attribute,ev.raw_value)
-        # Version/profile/IP evidence proves presence for these concepts.
         if concept=="bluetooth" and (re.search(r"\d",v) or "profile" in key_norm(ev.attribute) or "perfil" in key_norm(ev.attribute)):
             return Derived("Sí",min(.98,q+.03),"technology_presence",ev.source_url,ev.attribute,ev.raw_value)
         if concept=="water_resistance" and re.search(r"\bIP\s*\d{2}\b",v,re.I):
@@ -147,7 +144,6 @@ def derive_connectivity(rec: ProductRecord, options: list[Any]) -> Derived:
             if nk in option_map and option_map[nk] not in wanted:
                 wanted.append(option_map[nk]); return True
         return False
-    # Direct technologies first.
     if "usb c" in text or "usbc" in text: add_option(["USB-C","USB C"])
     elif re.search(r"\busb\b",text): add_option(["USB"])
     if "bluetooth" in text: add_option(["Bluetooth"])
@@ -157,7 +153,6 @@ def derive_connectivity(rec: ProductRecord, options: list[Any]) -> Derived:
     if "hdmi" in text: add_option(["HDMI"])
     if "thunderbolt" in text: add_option(["Thunderbolt"])
     if "3 5mm" in text or "3.5mm" in _all_text(rec).lower(): add_option(["Auxiliar 3.5mm"])
-    # Wired/wireless is taken from product positioning or connection-specific evidence, not from any cable mention.
     identity_text=key_norm(" ".join(x for x in [rec.identity.product_name,rec.identity.model] if x))
     descriptions=" ".join(str(ev.raw_value or "") for ev,_ in iter_clean_evidence(rec) if key_norm(ev.attribute) in {"description","connectivity","connection","interface","connector","audio connection"})
     conn_text=key_norm(identity_text+" "+descriptions)
@@ -165,7 +160,6 @@ def derive_connectivity(rec: ProductRecord, options: list[Any]) -> Derived:
     if re.search(r"wireless|inal[aá]mbric|2 4g wireless|2 4 ghz",conn_text): add_option(["Inalámbrico","WF wireless"])
     if wanted:
         return Derived(", ".join(wanted),.93,"technologies_mapped_to_allowed_options")
-    # If a real interface exists but marketplace has no matching option, 'Otro' is safer than inventing a technology.
     has_interface=any(re.search(r"interface|interfaz|pci[e ]|nvme|m 2",key_norm(f"{ev.attribute} {ev.raw_value}"),re.I) for ev,_ in iter_clean_evidence(rec))
     if has_interface and "otro" in option_map:
         return Derived(option_map["otro"],.88,"real_interface_not_represented_in_marketplace_options")
@@ -200,7 +194,6 @@ def derive_controlled_color(rec: ProductRecord, options:list[Any]) -> Derived:
     opts={key_norm(str(o)):str(o) for o in options}
     n=key_norm(rec.identity.color)
     if n in opts: return Derived(opts[n],.98,"identity_color_exact_option")
-    # very conservative aliases for common marketplace color vocabulary
     aliases={"black":"negro","blue":"azul","white":"blanco","red":"rojo","green":"verde","gray":"gris","grey":"gris","beige":"beige"}
     if n in aliases and key_norm(aliases[n]) in opts:
         return Derived(opts[key_norm(aliases[n])],.96,"identity_color_translated_option")
@@ -222,7 +215,6 @@ def derive_water_resistance(rec: ProductRecord, options:list[Any]) -> Derived:
                 q,ev=src
                 return Derived(o,min(.99,q+.03),'exact_ip_rating_to_allowed_option',ev.source_url,ev.attribute,ev.raw_value)
         return Derived(reason=f'ip_rating_{rating}_not_in_allowed_options')
-    # Only use yes/no when the marketplace actually offers yes/no.
     yes=next((o for n,o in opts.items() if n in {'si','yes'}),None)
     if yes:
         b=derive_boolean(rec,'water_resistance')
@@ -232,26 +224,70 @@ def derive_water_resistance(rec: ProductRecord, options:list[Any]) -> Derived:
 
 def derive_features(rec: ProductRecord, options:list[Any]) -> Derived:
     opts={key_norm(str(o)):str(o) for o in options}
-    text=key_norm(_all_text(rec))
     chosen=[]
-    # Evidence-driven generic features. Each rule requires a concrete signal.
-    signals=[
-        (['cuenta con bluetooth'], r'bluetooth'),
-        (['cuenta con micrófono','cuenta con microfono'], r'microphone|micr[oó]fono'),
-        (['carga rápida','carga rapida'], r'speed charge|fast charge|carga r[aá]pida'),
-        (['cancelación de ruido activa','cancelacion de ruido activa'], r'active noise cancellation|\banc\b|cancelaci[oó]n de ruido activa'),
-        (['entrada de audio auxiliar (3.5mm)','entrada de audio auxiliar 3 5mm'], r'3[., ]5\s*mm|auxiliary|auxiliar'),
-        (['control por aplicación móvil','control por aplicacion movil'], r'headphone app|mobile app|aplicaci[oó]n m[oó]vil'),
-        (['cuenta con control de volumen'], r'volume control|control de volumen'),
-    ]
-    for names,pat in signals:
-        if not re.search(pat,text,re.I): continue
+
+    def add_option(names:list[str]):
         for name in names:
             n=key_norm(name)
             if n in opts and opts[n] not in chosen:
-                chosen.append(opts[n]);break
-    if chosen:return Derived(', '.join(chosen),.94,'features_from_explicit_evidence')
-    return Derived(reason='no_allowed_features_proven')
+                chosen.append(opts[n])
+                return True
+        return False
+
+    def is_explicit_no(value:Any)->bool:
+        n=key_norm(str(value or ""))
+        return n in {"no","false","0","none","not supported","unsupported"} or n.startswith("no ")
+
+    def is_explicit_yes(value:Any)->bool:
+        n=key_norm(str(value or ""))
+        return n in {"si","yes","true","1","supported","included"} or n.startswith("yes ")
+
+    b=derive_boolean(rec,"bluetooth")
+    if b.value=="Sí":
+        add_option(["Cuenta con Bluetooth"])
+
+    mic_rows=_find_evidence(rec,[r"^microphone$",r"^mic$",r"microphone type",r"micr[oó]fono"])
+    for q,ev,v in mic_rows:
+        if is_explicit_no(v):
+            continue
+        if is_explicit_yes(v) or str(v).strip():
+            add_option(["Cuenta con micrófono","Cuenta con microfono"])
+            break
+
+    anc_rows=_find_evidence(rec,[r"^active noise cancellation$",r"^anc$",r"cancelaci[oó]n de ruido activa"])
+    anc_positive=False
+    for q,ev,v in anc_rows:
+        if is_explicit_no(v):
+            continue
+        nv=key_norm(v)
+        if is_explicit_yes(v) or re.search(r"\benabled\b|\bsupported\b|\bincluded\b",nv,re.I):
+            anc_positive=True
+            break
+    if not anc_positive:
+        desc_rows=_find_evidence(rec,[r"^description$",r"descripcion",r"descripci[oó]n"])
+        for q,ev,v in desc_rows:
+            nv=key_norm(v)
+            if re.search(r"active noise cancellation|\banc\b|cancelaci[oó]n de ruido activa",nv,re.I):
+                if not re.search(r"\b(no|without|sin|does not|doesn't|not)\b.{0,25}(active noise cancellation|anc|cancelaci)",nv,re.I):
+                    anc_positive=True
+                    break
+    if anc_positive:
+        add_option(["Cancelación de ruido activa","Cancelacion de ruido activa"])
+
+    text=key_norm(_all_text(rec))
+    generic_signals=[
+        (["Carga rápida","Carga rapida"], r"speed charge|fast charge|carga r[aá]pida"),
+        (["Entrada de audio auxiliar (3.5mm)","Entrada de audio auxiliar 3 5mm"], r"3[., ]5\s*mm|auxiliary|auxiliar"),
+        (["Control por aplicación móvil","Control por aplicacion movil"], r"headphone app|mobile app|aplicaci[oó]n m[oó]vil"),
+        (["Cuenta con control de volumen"], r"volume control|control de volumen"),
+    ]
+    for names,pat in generic_signals:
+        if re.search(pat,text,re.I):
+            add_option(names)
+
+    if chosen:
+        return Derived(", ".join(chosen),.94,"features_from_positive_evidence")
+    return Derived(reason="no_allowed_features_proven")
 
 
 def derive_power_source(rec: ProductRecord, options:list[Any]) -> Derived:

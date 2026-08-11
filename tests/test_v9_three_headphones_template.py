@@ -46,10 +46,14 @@ def test_three_headphones_fill_consecutive_template_rows(tmp_path):
     wb = load_workbook(output, data_only=False)
     ws = wb["Subir plantilla"]
 
-    # Rows must stay independent: no model/variant may bleed into another row.
-    assert ws["C5"].value == PART_NUMBERS[0]
-    assert ws["C6"].value == PART_NUMBERS[1]
-    assert ws["C7"].value == PART_NUMBERS[2]
+    # Rows must stay independent: each assigned record must produce the matching product
+    # name on its own row. Part Number is an input identity in V9 and is deliberately not
+    # copied into Seller SKU / Model columns unless the template actually asks for MPN.
+    names = [str(ws[f"A{row}"].value or "") for row in (5, 6, 7)]
+    assert "Quantum 350" in names[0]
+    assert "Endurance Run 3" in names[1]
+    assert "Tune 530C" in names[2]
+    assert len(set(names)) == 3
 
     # Template-only seller price examples must not survive the recalculation.
     assert ws["M5"].value != "999.999,99"

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import html as htmlmod
 import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -43,7 +43,12 @@ def _unwrap_ddg(href:str)->str:
 def _search_ddg(q:str,timeout:int)->list[tuple[str,str,str]]:
     rows=[]
     try:
-        r=requests.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"User-Agent":UA},timeout=timeout)
+        r=requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q":q},
+            headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},
+            timeout=timeout,
+        )
         if r.ok:
             soup=BeautifulSoup(r.text,"lxml")
             for a in soup.select("a.result__a"):
@@ -55,16 +60,21 @@ def _search_ddg(q:str,timeout:int)->list[tuple[str,str,str]]:
                     node=parent.select_one(".result__snippet")
                     sn=node.get_text(" ",strip=True) if node else ""
                 rows.append((u,a.get_text(" ",strip=True),sn))
-    except Exception:
+    except requests.RequestException:
         pass
     return rows
 
 
 def _search_bing(q:str,timeout:int)->list[tuple[str,str,str]]:
-    """Second discovery backend; candidates are still identity-validated later."""
+    """Normal Bing HTML discovery. Every candidate is identity-validated later."""
     rows=[]
     try:
-        r=requests.get("https://www.bing.com/search",params={"q":q,"count":20},headers={"User-Agent":UA},timeout=timeout)
+        r=requests.get(
+            "https://www.bing.com/search",
+            params={"q":q,"count":20},
+            headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},
+            timeout=timeout,
+        )
         if r.ok:
             soup=BeautifulSoup(r.text,"lxml")
             for li in soup.select("li.b_algo"):
@@ -75,7 +85,40 @@ def _search_bing(q:str,timeout:int)->list[tuple[str,str,str]]:
                 node=li.select_one(".b_caption p")
                 sn=node.get_text(" ",strip=True) if node else ""
                 rows.append((u,a.get_text(" ",strip=True),sn))
-    except Exception:
+    except requests.RequestException:
+        pass
+    return rows
+
+
+def _search_bing_rss(q:str,timeout:int)->list[tuple[str,str,str]]:
+    """RSS fallback for cloud/CI IPs where search-engine HTML is often empty or challenged.
+
+    This only discovers URLs. It never establishes product identity; the normal pipeline
+    must still validate MPN/EAN/UPC/GTIN/model before any evidence can be accepted.
+    """
+    rows=[]
+    try:
+        r=requests.get(
+            "https://www.bing.com/search",
+            params={"q":q,"format":"rss","count":20},
+            headers={
+                "User-Agent":UA,
+                "Accept":"application/rss+xml,application/xml;q=0.9,text/xml;q=0.8,*/*;q=0.5",
+            },
+            timeout=timeout,
+        )
+        if not r.ok or not r.content:
+            return rows
+        root=ET.fromstring(r.content)
+        for item in root.findall(".//item"):
+            u=(item.findtext("link") or "").strip()
+            if not u.startswith("http"):
+                continue
+            title=(item.findtext("title") or "").strip()
+            raw_desc=(item.findtext("description") or "").strip()
+            snippet=BeautifulSoup(raw_desc,"html.parser").get_text(" ",strip=True)
+            rows.append((u,title,snippet))
+    except (requests.RequestException, ET.ParseError):
         pass
     return rows
 
@@ -83,16 +126,22 @@ def _search_bing(q:str,timeout:int)->list[tuple[str,str,str]]:
 def search_web(identity:ProductIdentity, limit:int=12, timeout:int=20)->list[SearchCandidate]:
     q=build_query(identity)
     if not q:return []
-    # Use more than one normal public search backend because any single HTML endpoint can fail.
+
+    # Query both quoted and plain strong identifiers. Search-engine HTML endpoints can
+    # behave differently depending on the network/IP, so RSS is a third normal public
+    # discovery path rather than an identity shortcut.
     queries=[q]
     strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x),None)
     if strong_raw:
         plain=str(strong_raw).strip()
         if plain and plain not in queries:queries.append(plain)
+
     urls=[]
     for query in queries:
         urls.extend(_search_ddg(query,timeout))
         urls.extend(_search_bing(query,timeout))
+        urls.extend(_search_bing_rss(query,timeout))
+
     seen=set();out=[]
     brand=key_norm(identity.brand or "").replace(" ","")
     strong=[key_norm(x) for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
@@ -101,7 +150,7 @@ def search_web(identity:ProductIdentity, limit:int=12, timeout:int=20)->list[Sea
         if u in seen:continue
         seen.add(u)
         host=(urlparse(u).hostname or "").lower()
-        if host in BLOCKED_HOSTS:continue
+        if not host or host in BLOCKED_HOSTS:continue
         hay=key_norm(f"{u} {t} {sn}")
         compact_hay=re.sub(r"[^a-z0-9]","",hay)
         hcompact=re.sub(r"[^a-z0-9]","",host)

@@ -12,6 +12,7 @@ from .source_policy import classify_source
 from .web_fetch import fetch_page
 from .note_extract import extract_technical_notes
 from .text_extract import extract_text_evidence
+from .source_extract import source_evidence
 from .media_discovery import discover_media, build_site_profile
 from .evidence_graph import build_evidence_graph
 
@@ -67,6 +68,18 @@ class ProductPipeline:
         evidence = table_evidence(fetch.html, fetch.final_url, candidate.match_level, base, source_type=html_type)
         evidence += structured_evidence(page, fetch.final_url, candidate.match_level, min(.99, base + .02), html_type)
         evidence += extract_text_evidence(page.get("text", ""), fetch.final_url, html_type, candidate.match_level, max(.60, base-.08), expected_capacity=candidate.capacity or expected.capacity)
+
+        # Raw source / "view-source + Ctrl+F" layer. This runs only AFTER identity validation,
+        # so hidden JSON/config/data-* values can enrich specs without letting a search redirect,
+        # query-string echo or unrelated page establish product identity.
+        if source_class == "manufacturer":
+            evidence += source_evidence(
+                fetch.html,
+                fetch.final_url,
+                candidate,
+                candidate.match_level,
+                min(.94, base - .015),
+            )
 
         from .media_discovery import validate_resource_identity
         for response in fetch.json_responses[:30]:
@@ -136,6 +149,7 @@ class ProductPipeline:
             "source_class": source_class,
             "json_responses_captured": len(fetch.json_responses),
             "network_resources_captured": len(fetch.network_resources),
+            "raw_source_evidence": sum(1 for e in rec.evidence if e.source_type == "official_source_html"),
         }
         rec.warnings.extend(fetch.warnings)
         unverified = sum(1 for m in media if m.get("scope") == "UNVERIFIED")

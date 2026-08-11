@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlparse
@@ -115,8 +116,6 @@ def _generic_search(url:str,param:str,q:str,timeout:int,selectors:list[str],unwr
             if not href.startswith("http") or href in seen:continue
             seen.add(href)
             host=(urlparse(href).hostname or "").lower()
-            # Generic fallback parsers can see navigation/login/search links. Never emit
-            # any link that still belongs to a search provider, including subdomains.
             if _is_search_provider_host(host):continue
             parent=a.find_parent(["article","li","div"])
             title=a.get_text(" ",strip=True)
@@ -144,19 +143,14 @@ def _contains_strong_identifier(text:str,strong:list[str])->bool:
     return any(_compact(x) and _compact(x) in compact for x in strong)
 
 
-def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[SearchCandidate]:
-    q=build_query(identity)
-    if not q:return []
-    queries=[q]
-    strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x),None)
-    if strong_raw:
-        plain=str(strong_raw).strip()
-        if plain and plain not in queries:queries.append(plain)
-    urls=[]
-    for query in queries:
-        urls.extend(_search_ddg(query,timeout));urls.extend(_search_bing(query,timeout));urls.extend(_search_bing_rss(query,timeout))
-        urls.extend(_search_brave(query,timeout));urls.extend(_search_mojeek(query,timeout));urls.extend(_search_yahoo(query,timeout))
+def _provider_search(query:str,timeout:int)->list[tuple[str,str,str]]:
+    rows=[]
+    rows.extend(_search_ddg(query,timeout));rows.extend(_search_bing(query,timeout));rows.extend(_search_bing_rss(query,timeout))
+    rows.extend(_search_brave(query,timeout));rows.extend(_search_mojeek(query,timeout));rows.extend(_search_yahoo(query,timeout))
+    return rows
 
+
+def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, limit:int)->list[SearchCandidate]:
     seen=set();out=[]
     brand=key_norm(identity.brand or "").replace(" ","")
     strong=[str(x) for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
@@ -168,6 +162,8 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
         if not host or _is_search_provider_host(host):continue
         combined=f"{u} {t} {sn}"
         hay=key_norm(combined)
+        # Discovery may be broad, but the shortlist remains strict: when a strong
+        # identifier exists it must be visible in the result URL/title/snippet.
         if strong and not _contains_strong_identifier(combined,strong):continue
         hcompact=re.sub(r"[^a-z0-9]","",host)
         likely_official=bool(brand and brand in hcompact and not any(m in host for m in MARKETPLACE_HINTS))
@@ -179,6 +175,38 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
         out.append(SearchCandidate(u,t,sn,score,likely_official))
     out.sort(key=lambda x:x.score,reverse=True)
     return out[:limit]
+
+
+def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[SearchCandidate]:
+    q=build_query(identity)
+    if not q:return []
+    strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x),None)
+    queries=[]
+    for candidate in [q, str(strong_raw or '').strip()]:
+        if candidate and candidate not in queries:queries.append(candidate)
+
+    urls=[]
+    for query in queries:
+        urls.extend(_provider_search(query,timeout))
+    ranked=_rank_candidates(urls,identity,limit)
+    if ranked:return ranked
+
+    # Search engines occasionally return an empty/blocked HTML page to cloud runners.
+    # Retry only after a genuine zero-result pass, using semantically equivalent query
+    # forms. Identity filtering remains unchanged, so this improves availability rather
+    # than lowering correctness requirements.
+    if strong_raw:
+        strong=str(strong_raw).strip()
+        retry_queries=[]
+        for candidate in [f'"{strong}" product', f'{strong} specifications', f'{strong} specs', f'{strong} datasheet']:
+            if candidate and candidate not in queries and candidate not in retry_queries:
+                retry_queries.append(candidate)
+        for attempt,query in enumerate(retry_queries[:4]):
+            if attempt:time.sleep(.35)
+            urls.extend(_provider_search(query,max(8,min(timeout,15))))
+            ranked=_rank_candidates(urls,identity,limit)
+            if ranked:return ranked
+    return []
 
 
 def fuzz_contains(needle:str,hay:str)->bool:

@@ -1,0 +1,32 @@
+name: Apply mapper description intent
+on:
+  push:
+    branches: [ main ]
+    paths: ['.github/workflows/apply-mapper-description-intent.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply mapper patch
+        run: python tools/apply_mapper_description_intent.py
+      - name: Test
+        run: |
+          python -m pip install -e . pytest
+          pytest -q
+      - name: Commit if green
+        run: |
+          git config user.name "artosperu-bot"
+          git config user.email "artosperu@gmail.com"
+          git add src/product_intelligence/excel_mapper_v8.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "feat: use field descriptions as mapper intent"
+          git push origin main

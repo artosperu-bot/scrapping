@@ -12,11 +12,7 @@ from .models import ProductIdentity
 from .normalize import key_norm
 
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36"
-BLOCKED_HOSTS={
-    "google.com","www.google.com","bing.com","www.bing.com",
-    "duckduckgo.com","html.duckduckgo.com","lite.duckduckgo.com",
-    "search.brave.com","www.mojeek.com","search.yahoo.com",
-}
+SEARCH_PROVIDER_DOMAINS={"google.com","bing.com","duckduckgo.com","brave.com","mojeek.com","yahoo.com"}
 MARKETPLACE_HINTS={"amazon.","ebay.","mercadolibre.","falabella.","ripley.","walmart.","bestbuy."}
 
 @dataclass
@@ -37,6 +33,11 @@ def build_query(i:ProductIdentity)->str:
     return " ".join(parts[:6])
 
 
+def _is_search_provider_host(host:str)->bool:
+    host=(host or "").lower().split(":",1)[0]
+    return any(host==d or host.endswith("."+d) for d in SEARCH_PROVIDER_DOMAINS)
+
+
 def _unwrap_ddg(href:str)->str:
     if "uddg=" in href:
         qs=parse_qs(urlparse(href).query)
@@ -45,173 +46,116 @@ def _unwrap_ddg(href:str)->str:
 
 
 def _unwrap_yahoo(href:str)->str:
-    """Yahoo may wrap outbound URLs in /RU=<encoded>/RK=... links."""
     m=re.search(r"/RU=([^/]+)/RK=",href)
-    if m:
-        return unquote(m.group(1))
+    if m:return unquote(m.group(1))
     return href
 
 
 def _search_ddg(q:str,timeout:int)->list[tuple[str,str,str]]:
     rows=[]
     try:
-        r=requests.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q":q},
-            headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},
-            timeout=timeout,
-        )
+        r=requests.get("https://html.duckduckgo.com/html/",params={"q":q},headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},timeout=timeout)
         if r.ok:
             soup=BeautifulSoup(r.text,"lxml")
             for a in soup.select("a.result__a"):
                 u=_unwrap_ddg(a.get("href") or "")
-                if not u.startswith("http"): continue
+                if not u.startswith("http"):continue
                 parent=a.find_parent(class_="result")
-                sn=""
-                if parent:
-                    node=parent.select_one(".result__snippet")
-                    sn=node.get_text(" ",strip=True) if node else ""
-                rows.append((u,a.get_text(" ",strip=True),sn))
-    except requests.RequestException:
-        pass
+                node=parent.select_one(".result__snippet") if parent else None
+                rows.append((u,a.get_text(" ",strip=True),node.get_text(" ",strip=True) if node else ""))
+    except requests.RequestException:pass
     return rows
 
 
 def _search_bing(q:str,timeout:int)->list[tuple[str,str,str]]:
     rows=[]
     try:
-        r=requests.get(
-            "https://www.bing.com/search",
-            params={"q":q,"count":20},
-            headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},
-            timeout=timeout,
-        )
+        r=requests.get("https://www.bing.com/search",params={"q":q,"count":20},headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},timeout=timeout)
         if r.ok:
             soup=BeautifulSoup(r.text,"lxml")
             for li in soup.select("li.b_algo"):
                 a=li.select_one("h2 a")
-                if not a: continue
+                if not a:continue
                 u=a.get("href") or ""
-                if not u.startswith("http"): continue
+                if not u.startswith("http"):continue
                 node=li.select_one(".b_caption p")
-                sn=node.get_text(" ",strip=True) if node else ""
-                rows.append((u,a.get_text(" ",strip=True),sn))
-    except requests.RequestException:
-        pass
+                rows.append((u,a.get_text(" ",strip=True),node.get_text(" ",strip=True) if node else ""))
+    except requests.RequestException:pass
     return rows
 
 
 def _search_bing_rss(q:str,timeout:int)->list[tuple[str,str,str]]:
     rows=[]
     try:
-        r=requests.get(
-            "https://www.bing.com/search",
-            params={"q":q,"format":"rss","count":20},
-            headers={
-                "User-Agent":UA,
-                "Accept":"application/rss+xml,application/xml;q=0.9,text/xml;q=0.8,*/*;q=0.5",
-            },
-            timeout=timeout,
-        )
-        if not r.ok or not r.content:
-            return rows
+        r=requests.get("https://www.bing.com/search",params={"q":q,"format":"rss","count":20},headers={"User-Agent":UA,"Accept":"application/rss+xml,application/xml;q=0.9,text/xml;q=0.8,*/*;q=0.5"},timeout=timeout)
+        if not r.ok or not r.content:return rows
         root=ET.fromstring(r.content)
         for item in root.findall(".//item"):
             u=(item.findtext("link") or "").strip()
-            if not u.startswith("http"): continue
+            if not u.startswith("http"):continue
             title=(item.findtext("title") or "").strip()
-            raw_desc=(item.findtext("description") or "").strip()
-            snippet=BeautifulSoup(raw_desc,"html.parser").get_text(" ",strip=True)
-            rows.append((u,title,snippet))
-    except (requests.RequestException,ET.ParseError):
-        pass
+            raw=(item.findtext("description") or "").strip()
+            rows.append((u,title,BeautifulSoup(raw,"html.parser").get_text(" ",strip=True)))
+    except (requests.RequestException,ET.ParseError):pass
     return rows
 
 
 def _generic_search(url:str,param:str,q:str,timeout:int,selectors:list[str],unwrap=lambda x:x)->list[tuple[str,str,str]]:
-    """Small resilient HTML parser used only for URL discovery.
-
-    Search engines change markup frequently, so selectors are hints. Identity filtering
-    below prevents unrelated links from being sent to the extraction pipeline.
-    """
     rows=[]
     try:
-        r=requests.get(
-            url,
-            params={param:q},
-            headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},
-            timeout=timeout,
-        )
+        r=requests.get(url,params={param:q},headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},timeout=timeout)
         if not r.ok:return rows
         soup=BeautifulSoup(r.text,"lxml")
         anchors=[]
-        for sel in selectors:
-            anchors.extend(soup.select(sel))
-        if not anchors:
-            anchors=soup.select("a[href]")
+        for sel in selectors:anchors.extend(soup.select(sel))
+        if not anchors:anchors=soup.select("a[href]")
         seen=set()
         for a in anchors:
             href=unwrap(a.get("href") or "")
             if not href.startswith("http") or href in seen:continue
             seen.add(href)
+            host=(urlparse(href).hostname or "").lower()
+            # Generic fallback parsers can see navigation/login/search links. Never emit
+            # any link that still belongs to a search provider, including subdomains.
+            if _is_search_provider_host(host):continue
             parent=a.find_parent(["article","li","div"])
             title=a.get_text(" ",strip=True)
             snippet=parent.get_text(" ",strip=True)[:1200] if parent else title
             rows.append((href,title,snippet))
-    except requests.RequestException:
-        pass
+    except requests.RequestException:pass
     return rows
 
 
 def _search_brave(q:str,timeout:int):
-    return _generic_search(
-        "https://search.brave.com/search","q",q,timeout,
-        ["a[href][data-testid='result-title-a']","div.snippet a[href]","a.result-header[href]"],
-    )
-
+    return _generic_search("https://search.brave.com/search","q",q,timeout,["a[href][data-testid='result-title-a']","div.snippet a[href]","a.result-header[href]"])
 
 def _search_mojeek(q:str,timeout:int):
-    return _generic_search(
-        "https://www.mojeek.com/search","q",q,timeout,
-        ["ul.results-standard h2 a[href]","li.result h2 a[href]","a.ob[href]"],
-    )
-
+    return _generic_search("https://www.mojeek.com/search","q",q,timeout,["ul.results-standard h2 a[href]","li.result h2 a[href]","a.ob[href]"])
 
 def _search_yahoo(q:str,timeout:int):
-    return _generic_search(
-        "https://search.yahoo.com/search","p",q,timeout,
-        ["div.algo-sr h3 a[href]","div.algo h3 a[href]","h3.title a[href]"],
-        _unwrap_yahoo,
-    )
+    return _generic_search("https://search.yahoo.com/search","p",q,timeout,["div.algo-sr h3 a[href]","div.algo h3 a[href]","h3.title a[href]"],_unwrap_yahoo)
 
 
 def _compact(value:str)->str:
     return re.sub(r"[^a-z0-9]","",key_norm(value))
-
 
 def _contains_strong_identifier(text:str,strong:list[str])->bool:
     compact=_compact(text)
     return any(_compact(x) and _compact(x) in compact for x in strong)
 
 
-def search_web(identity:ProductIdentity, limit:int=12, timeout:int=20)->list[SearchCandidate]:
+def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[SearchCandidate]:
     q=build_query(identity)
     if not q:return []
-
     queries=[q]
     strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x),None)
     if strong_raw:
         plain=str(strong_raw).strip()
         if plain and plain not in queries:queries.append(plain)
-
     urls=[]
     for query in queries:
-        urls.extend(_search_ddg(query,timeout))
-        urls.extend(_search_bing(query,timeout))
-        urls.extend(_search_bing_rss(query,timeout))
-        urls.extend(_search_brave(query,timeout))
-        urls.extend(_search_mojeek(query,timeout))
-        urls.extend(_search_yahoo(query,timeout))
+        urls.extend(_search_ddg(query,timeout));urls.extend(_search_bing(query,timeout));urls.extend(_search_bing_rss(query,timeout))
+        urls.extend(_search_brave(query,timeout));urls.extend(_search_mojeek(query,timeout));urls.extend(_search_yahoo(query,timeout))
 
     seen=set();out=[]
     brand=key_norm(identity.brand or "").replace(" ","")
@@ -221,15 +165,10 @@ def search_web(identity:ProductIdentity, limit:int=12, timeout:int=20)->list[Sea
         if u in seen:continue
         seen.add(u)
         host=(urlparse(u).hostname or "").lower()
-        if not host or host in BLOCKED_HOSTS:continue
+        if not host or _is_search_provider_host(host):continue
         combined=f"{u} {t} {sn}"
         hay=key_norm(combined)
-
-        # A strong identifier in the request is our discovery anchor. Do not waste time
-        # crawling generic search noise that does not even mention that identifier.
-        if strong and not _contains_strong_identifier(combined,strong):
-            continue
-
+        if strong and not _contains_strong_identifier(combined,strong):continue
         hcompact=re.sub(r"[^a-z0-9]","",host)
         likely_official=bool(brand and brand in hcompact and not any(m in host for m in MARKETPLACE_HINTS))
         score=0.0

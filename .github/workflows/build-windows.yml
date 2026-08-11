@@ -1,31 +1,52 @@
 name: Build Windows EXE
+
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-intelligence-windows-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
+
       - name: Install dependencies
         shell: cmd
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[browser]" pyinstaller
+          pip install -e ".[browser]" pyinstaller pytest
+
+      - name: Run regression tests
+        shell: cmd
+        run: pytest -q
+
       - name: Install bundled Chromium
         shell: cmd
         run: |
-          mkdir vendor\ms-playwright
+          if not exist vendor\ms-playwright mkdir vendor\ms-playwright
           set PLAYWRIGHT_BROWSERS_PATH=%CD%\vendor\ms-playwright
           python -m playwright install chromium
+
       - name: Build
         shell: cmd
         run: pyinstaller --noconfirm --clean ProductIntelligence.spec
+
       - uses: actions/upload-artifact@v4
         with:
           name: ProductIntelligence-Windows
           path: dist/ProductIntelligence/
+          if-no-files-found: error

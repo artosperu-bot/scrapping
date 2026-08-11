@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'run_desktop.py'
+      - 'pyproject.toml'
+      - 'ProductIntelligence.spec'
+      - 'vendor/**'
+      - '.github/workflows/build-windows.yml'
 
 permissions:
   contents: read
@@ -24,15 +31,15 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install desktop profile
         shell: cmd
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[browser]" pyinstaller pytest
+          pip install -e ".[desktop,dev]"
 
       - name: Run regression tests
         shell: cmd
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Install bundled Chromium
         shell: cmd
@@ -41,9 +48,14 @@ jobs:
           set PLAYWRIGHT_BROWSERS_PATH=%CD%\vendor\ms-playwright
           python -m playwright install chromium
 
-      - name: Build
+      - name: Build clean desktop bundle
         shell: cmd
         run: pyinstaller --noconfirm --clean ProductIntelligence.spec
+
+      - name: Verify executable exists
+        shell: cmd
+        run: |
+          if not exist dist\ProductIntelligence\ProductIntelligence.exe exit /b 1
 
       - uses: actions/upload-artifact@v4
         with:

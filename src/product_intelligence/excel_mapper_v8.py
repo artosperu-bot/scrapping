@@ -173,8 +173,9 @@ def _identity_value(rec,key):
     return v,conf,"identity"
 
 
-def _derived_for_field(rec,header,canonical,contract,options,ext_id):
+def _derived_for_field(rec,header,description,canonical,contract,options,ext_id):
     n=key_norm(_strip_field_id(header))
+    intent=key_norm(f"{header} {description or ''} {getattr(contract, 'semantic', None) or ''}")
     # Existing V5 safe derivations.
     d=derive_template_value(rec,header,ext_id)
     if d.value not in (None,''):
@@ -183,15 +184,15 @@ def _derived_for_field(rec,header,canonical,contract,options,ext_id):
         x=derive_description(rec);return x.value,x.confidence,x.reason,x.evidence_attribute,x.evidence_raw
     if ext_id in {'277497','277523'} or 'color' in n:
         x=derive_controlled_color(rec,options);return x.value,x.confidence,x.reason,None,None
-    if ext_id=='1568' or 'bluetooth' in n:
+    if ext_id=='1568' or 'bluetooth' in intent:
         x=derive_boolean(rec,'bluetooth');return x.value,x.confidence,x.reason,x.evidence_attribute,x.evidence_raw
-    if ext_id=='36083' or 'resistentealagua' in n or 'waterresistance' in n:
+    if ext_id=='36083' or any(x in intent for x in ['resistentealagua','resistente al agua','waterresistance','water resistance']):
         x=derive_water_resistance(rec,options);return x.value,x.confidence,x.reason,x.evidence_attribute,x.evidence_raw
-    if ext_id=='1651' or 'conectividad' in n or 'connectivity' in n:
+    if ext_id=='1651' or 'conectividad' in intent or 'connectivity' in intent:
         x=derive_connectivity(rec,options);return x.value,x.confidence,x.reason,None,None
-    if ext_id=='1661' or 'tipodeauricular' in n:
+    if ext_id=='1661' or 'tipodeauricular' in intent or 'tipo de auricular' in intent or 'type of headphones' in intent:
         x=derive_headphone_type(rec,options);return x.value,x.confidence,x.reason,None,None
-    if ext_id=='1672' or 'autonomia' in n:
+    if ext_id=='1672' or 'autonomia' in intent or 'battery life' in intent:
         x=derive_autonomy(rec);return x.value,x.confidence,x.reason,x.evidence_attribute,x.evidence_raw
     if ext_id=='1657' or 'caracteristicas' in n or 'features' in n:
         x=derive_features(rec,options);return x.value,x.confidence,x.reason,None,None
@@ -280,7 +281,7 @@ def fill_excel_v8(template:str,output:str,records:list[ProductRecord],overwrite:
                         rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":greason,"layer":"ai_description"})
 
                 # Safe derivations first.
-                value,vconf,reason,ev_attr,ev_raw=_derived_for_field(rec,header,key,contracts[c],options,ext)
+                value,vconf,reason,ev_attr,ev_raw=_derived_for_field(rec,header,str(desc) if desc else None,key,contracts[c],options,ext)
                 source=None
                 if value not in (None,'') and vconf>=.85:
                     if contracts[c].value_type=='controlled':

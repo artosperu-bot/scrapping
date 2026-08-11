@@ -9,6 +9,7 @@ on:
       - 'src/product_intelligence/discovery.py'
       - 'src/product_intelligence/batch.py'
       - 'src/product_intelligence/pipeline.py'
+      - 'src/product_intelligence/html_extract.py'
       - 'src/product_intelligence/excel_mapper_v8.py'
       - 'src/product_intelligence/field_derivations.py'
       - 'src/product_intelligence/attribute_resolver.py'

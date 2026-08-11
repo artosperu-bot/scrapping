@@ -1,0 +1,1230 @@
+{
+  "identity": {
+    "brand": "JBL",
+    "manufacturer": null,
+    "product_name": "JBL Tune 530C",
+    "model": "Tune 530C",
+    "mpn": "JBLT530CBLKAM",
+    "sku": "JBLT530CBEGAM",
+    "ean": "1200130032509",
+    "upc": null,
+    "gtin": null,
+    "variant": null,
+    "capacity": null,
+    "color": "Black",
+    "region": null,
+    "confidence": 0.51,
+    "match_level": "CONFLICT",
+    "identifiers_confirmed": [
+      "brand",
+      "model",
+      "mpn",
+      "ean"
+    ],
+    "identifiers_conflicting": [
+      "mpn_vs_manufacturer_sku"
+    ]
+  },
+  "specifications": {
+    "brand": {
+      "value": "JBL",
+      "raw_value": "JBL",
+      "unit": null,
+      "source": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+      "source_type": "official_html",
+      "selector": "embedded:microdata.brand",
+      "confidence": 0.846,
+      "original_confidence": 0.9400000000000001
+    }
+  },
+  "additional_attributes": {
+    "sku": [
+      {
+        "attribute": "sku",
+        "raw_value": "JBLT530CBEGAM",
+        "normalized_value": "JBLT530CBEGAM",
+        "unit": null,
+        "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+        "source_type": "official_html",
+        "source_title": null,
+        "page": null,
+        "selector": "embedded:microdata.sku",
+        "match_level": "HIGH",
+        "confidence": 0.9400000000000001
+      }
+    ],
+    "name": [
+      {
+        "attribute": "name",
+        "raw_value": "JBL Tune 530C",
+        "normalized_value": "JBL Tune 530C",
+        "unit": null,
+        "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+        "source_type": "official_html",
+        "source_title": null,
+        "page": null,
+        "selector": "embedded:microdata.name",
+        "match_level": "HIGH",
+        "confidence": 0.9400000000000001
+      },
+      {
+        "attribute": "name",
+        "raw_value": "JBL",
+        "normalized_value": "JBL",
+        "unit": null,
+        "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+        "source_type": "official_html",
+        "source_title": null,
+        "page": null,
+        "selector": "embedded:json-ld.name",
+        "match_level": "HIGH",
+        "confidence": 0.9400000000000001
+      }
+    ],
+    "description": [
+      {
+        "attribute": "description",
+        "raw_value": "Hi-res USB-C wired on-ear headphones and JBL Pure Bass Sound",
+        "normalized_value": "Hi-res USB-C wired on-ear headphones and JBL Pure Bass Sound",
+        "unit": null,
+        "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+        "source_type": "official_html",
+        "source_title": null,
+        "page": null,
+        "selector": "embedded:microdata.description",
+        "match_level": "HIGH",
+        "confidence": 0.9400000000000001
+      }
+    ],
+    "Frequency response": [
+      {
+        "attribute": "Frequency response",
+        "raw_value": "20 Hz - 40 kHz",
+        "normalized_value": "20 Hz - 40 kHz",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Impedance": [
+      {
+        "attribute": "Impedance",
+        "raw_value": "30 ohm",
+        "normalized_value": "30 ohm",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Sensitivity": [
+      {
+        "attribute": "Sensitivity",
+        "raw_value": "102 dB SPL@1 kHz",
+        "normalized_value": "102 dB SPL@1 kHz",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Maximum SPL": [
+      {
+        "attribute": "Maximum SPL",
+        "raw_value": "94 dB",
+        "normalized_value": "94 dB",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Weight (g)": [
+      {
+        "attribute": "Weight (g)",
+        "raw_value": "143 g/ 0.32 lbs",
+        "normalized_value": "143 g/ 0.32 lbs",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Ear cushion outer length": [
+      {
+        "attribute": "Ear cushion outer length",
+        "raw_value": "71mm",
+        "normalized_value": "71mm",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Ear cushion outer width": [
+      {
+        "attribute": "Ear cushion outer width",
+        "raw_value": "71mm",
+        "normalized_value": "71mm",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Ear cushion height": [
+      {
+        "attribute": "Ear cushion height",
+        "raw_value": "18mm",
+        "normalized_value": "18mm",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Ear cushion inner length": [
+      {
+        "attribute": "Ear cushion inner length",
+        "raw_value": "30mm",
+        "normalized_value": "30mm",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ],
+    "Ear cushion inner width": [
+      {
+        "attribute": "Ear cushion inner width",
+        "raw_value": "30mm",
+        "normalized_value": "30mm",
+        "unit": null,
+        "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+        "source_type": "official_pdf",
+        "source_title": null,
+        "page": 2,
+        "selector": null,
+        "match_level": "HIGH",
+        "confidence": 0.9
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "attribute": "brand",
+      "raw_value": "JBL",
+      "normalized_value": "JBL",
+      "unit": null,
+      "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+      "source_type": "official_html",
+      "source_title": null,
+      "page": null,
+      "selector": "embedded:microdata.brand",
+      "match_level": "HIGH",
+      "confidence": 0.9400000000000001
+    },
+    {
+      "attribute": "sku",
+      "raw_value": "JBLT530CBEGAM",
+      "normalized_value": "JBLT530CBEGAM",
+      "unit": null,
+      "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+      "source_type": "official_html",
+      "source_title": null,
+      "page": null,
+      "selector": "embedded:microdata.sku",
+      "match_level": "HIGH",
+      "confidence": 0.9400000000000001
+    },
+    {
+      "attribute": "name",
+      "raw_value": "JBL Tune 530C",
+      "normalized_value": "JBL Tune 530C",
+      "unit": null,
+      "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+      "source_type": "official_html",
+      "source_title": null,
+      "page": null,
+      "selector": "embedded:microdata.name",
+      "match_level": "HIGH",
+      "confidence": 0.9400000000000001
+    },
+    {
+      "attribute": "description",
+      "raw_value": "Hi-res USB-C wired on-ear headphones and JBL Pure Bass Sound",
+      "normalized_value": "Hi-res USB-C wired on-ear headphones and JBL Pure Bass Sound",
+      "unit": null,
+      "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+      "source_type": "official_html",
+      "source_title": null,
+      "page": null,
+      "selector": "embedded:microdata.description",
+      "match_level": "HIGH",
+      "confidence": 0.9400000000000001
+    },
+    {
+      "attribute": "name",
+      "raw_value": "JBL",
+      "normalized_value": "JBL",
+      "unit": null,
+      "source_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+      "source_type": "official_html",
+      "source_title": null,
+      "page": null,
+      "selector": "embedded:json-ld.name",
+      "match_level": "HIGH",
+      "confidence": 0.9400000000000001
+    },
+    {
+      "attribute": "Frequency response",
+      "raw_value": "20 Hz - 40 kHz",
+      "normalized_value": "20 Hz - 40 kHz",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Impedance",
+      "raw_value": "30 ohm",
+      "normalized_value": "30 ohm",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Sensitivity",
+      "raw_value": "102 dB SPL@1 kHz",
+      "normalized_value": "102 dB SPL@1 kHz",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Maximum SPL",
+      "raw_value": "94 dB",
+      "normalized_value": "94 dB",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Weight (g)",
+      "raw_value": "143 g/ 0.32 lbs",
+      "normalized_value": "143 g/ 0.32 lbs",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Ear cushion outer length",
+      "raw_value": "71mm",
+      "normalized_value": "71mm",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Ear cushion outer width",
+      "raw_value": "71mm",
+      "normalized_value": "71mm",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Ear cushion height",
+      "raw_value": "18mm",
+      "normalized_value": "18mm",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Ear cushion inner length",
+      "raw_value": "30mm",
+      "normalized_value": "30mm",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    },
+    {
+      "attribute": "Ear cushion inner width",
+      "raw_value": "30mm",
+      "normalized_value": "30mm",
+      "unit": null,
+      "source_url": "https://support.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw97f07cf1/pdfs/JBL_TUNE_530C_USB-C_Specsheet_EN.pdf",
+      "source_type": "official_pdf",
+      "source_title": null,
+      "page": 2,
+      "selector": null,
+      "match_level": "HIGH",
+      "confidence": 0.9
+    }
+  ],
+  "sources": [
+    "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html"
+  ],
+  "conflicts": [],
+  "missing_fields": [],
+  "warnings": [
+    "evidence_rejected:2",
+    "manufacturer_sku_conflicts_with_target_mpn",
+    "media_unverified_not_autofilled:10",
+    "family_media_not_autofilled:36"
+  ],
+  "images": [],
+  "videos": [],
+  "media": [
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dw0d3cd3be/images/flags/ca.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dwb6b95af2/images/flags/br.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dw8a3a0fdb/images/flags/cn.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dwbb46bf76/images/flags/dk.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dw12ddd041/images/flags/de.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dw55a2f549/images/flags/fr.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dw15f678e1/images/flags/in.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dwfd06f08d/images/flags/nl.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dwe105574a/images/flags/se.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dwf7b4d25a/images/flags/gb.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Library-Sites-Library-Shared/default/dw0bcbc4c8/images/flags/us.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "ca",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dwfee361f3/nav-images/flip5-category.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Portable Bluetooth Speakers",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/en_CA/R0lGODlhAQABAIAAAAAAAP/yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+      "media_type": "image",
+      "source": "dom:srcset",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Portable Bluetooth Speakers",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dw5dc50131/nav-images/JBL_Bar-2.1-Deep-Bass_Hero-120x120px.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Home Speakers",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dwf2331b73/nav-images/partybox-series-category.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Party Speakers",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dwf9c69762/nav-images/carthumb.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Car Audio",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dw8ce24478/nav-images/JBlMarine9520_001-1_dv120x120.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Marine Speakers",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dw522ed170/nav-images/JBL_ReflecFlow_120x120.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "True Wireless Headphones",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dwf790d435/nav-images/SALE_HP_CategoryThumnbail.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "In Ear Headphones",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dwf1a9e1fe/nav-images/JBL_Live400BT_120x120.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Over-Ear & On-Ear Headphones",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dwc12f7664/nav-images/JBL_EndurancePK_120x120.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Sport Headphones",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dw1015f399/nav-images/JBL_Live650TNC_120x120.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Noise Cancelling Headphones",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dw66a329a4/nav-images/JBL_JR300BT_120x120.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Kids' Headphones",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dw208a96a8/nav-images/02.LS_JBL_SENSE_PRO_Product_Image_OpenSound_Black.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Open Earbuds",
+      "evidence": [
+        "color_match",
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dwc0bffc85/nav-images/JBL_QUANTUM-ONE_Product-Image_Angle.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Gaming Headsets",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-siteCatalog_JB_CA/default/dwb4a2e5d3/nav-images/JBL_Headphones_BrowseAll_thumbnail_324x324.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Browse All",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "unknown_image",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dwea24806d/footer/security-logo.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": null,
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dw2d5e49b8/footer/chatbutton.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "chat now",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dwbac4bb3e/footer/footer-logo-akg.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "AKG",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dw6f4de969/footer/footer-logo-hk.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Harman Kardon",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dw934f7301/footer/footer-logo-infinity.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Infinity",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dw1b134010/footer/footer-logo-jbl.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dw68bf6077/footer/footer-logo-lexicon.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Lexicon",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dw02eeb92e/footer/footer-logo-levinson.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Mark Levinson",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/-/Sites-JB-CA-Library/default/dw0ce35658/footer/footer-logo-revel.png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "Revel",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/on/demandware.static/Sites-JB-CA-Site/-/default/dwfe86bd5c/images/footer-logo.png",
+      "media_type": "image",
+      "source": "dom:data-src",
+      "scope": "PRODUCT_FAMILY",
+      "confidence": 0.84,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "harman logo",
+      "evidence": [
+        "embedded_or_requested_by_validated_product_page"
+      ],
+      "conflict_reasons": [],
+      "role": "page_asset",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dwa2dd4b04/01.LS_JBL_Tune_530C_USBC_Product_Image_Hero_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Hero",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw94582aa7/02.LS_JBL_Tune_530C_USB_C_Product_Image_Front_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Front",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw9fa8c532/03.LS_JBL_Tune_530C_USBC_Product_Image_Folded_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Back",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw89f52d42/04.LS_JBL_Tune_530C_USBC_Product_Image_Cushions_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Left",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dwd071a608/05.LS_JBL_Tune_530C-USBC_Product_Image_Button_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Right",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dwa8ee41a9/LS_JBL_Tune_530C_USB_C_Product_Image_Back_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Top",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw12012a95/LS_JBL_Tune_530C_USB_C_Product_Image_Detail_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Bottom",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw06466b7d/LS_JBL_Tune_530C_USBC_Product_Image_Left_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Detailshot 1",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw07d252cd/LS_JBL_Tune_530C_USB_C_Product_Image_Right_Beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Detailshot 2",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    },
+    {
+      "url": "https://ca.jbl.com/dw/image/v2/AAUJ_PRD/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw81a2fcc5/JBL_Tune_530C-USB-C-boxside-beige.png?sw=537&sfrm=png",
+      "media_type": "image",
+      "source": "dom:src",
+      "scope": "UNVERIFIED",
+      "confidence": 0.0,
+      "provider": null,
+      "variant_hint": null,
+      "alt": "JBL Tune 530C - Beige - Wired on-ear headphones - Detailshot 15",
+      "evidence": [],
+      "conflict_reasons": [
+        "color_conflict"
+      ],
+      "role": "product_gallery",
+      "autofill_eligible": false
+    }
+  ],
+  "site_profile": {
+    "origin_domain": "ca.jbl.com",
+    "observed_asset_hosts": [],
+    "video_providers": [],
+    "note": "Observed from this validated page; not a hardcoded trust list."
+  },
+  "evidence_graph": {
+    "rejected_evidence": [
+      {
+        "attribute": "technical_support",
+        "value": "Why Buy Direct",
+        "reason": "VALUE_NOISE_OR_EMPTY",
+        "source": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html"
+      },
+      {
+        "attribute": "technical_support",
+        "value": "Buy Authentic",
+        "reason": "VALUE_NOISE_OR_EMPTY",
+        "source": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html"
+      }
+    ]
+  },
+  "technical_notes": [],
+  "fetch": {
+    "method": "requests",
+    "status_code": 200,
+    "final_url": "https://ca.jbl.com/en_CA/TUNE530C-USB-C.html",
+    "source_class": "manufacturer",
+    "json_responses_captured": 0,
+    "network_resources_captured": 0
+  }
+}

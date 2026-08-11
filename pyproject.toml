@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "product-intelligence"
+version = "0.9.0"
+description = "Identificacion fuerte de productos, scraping adaptable, PDF/OCR, imagenes y completado de plantillas con trazabilidad."
+requires-python = ">=3.10"
+authors = [{ name = "S&T Store" }]
+dependencies = [
+  "requests>=2.31",
+  "beautifulsoup4>=4.12",
+  "lxml>=5.0",
+  "pydantic>=2.7",
+  "rapidfuzz>=3.9",
+  "PyMuPDF>=1.24",
+  "openpyxl>=3.1",
+  "Pillow>=10.0",
+  "typer>=0.12",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "python-multipart>=0.0.9",
+  "extruct>=0.18",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.55"]
+docling = ["docling>=2.0"]
+ocr = ["paddleocr>=2.8", "paddlepaddle>=2.6"]
+all = ["playwright>=1.55", "docling>=2.0", "paddleocr>=2.8", "paddlepaddle>=2.6"]
+desktop = ["playwright>=1.55", "pyinstaller>=6.10"]
+
+[project.scripts]
+product-intel = "product_intelligence.cli:app"
+product-intel-desktop = "product_intelligence.desktop:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

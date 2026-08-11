@@ -1,0 +1,32 @@
+{
+  "identity": {
+    "brand": "Kingston",
+    "manufacturer": "Kingston Technology",
+    "product_name": "A400 SSD 960GB",
+    "model": "A400",
+    "mpn": "SA400S37/960G",
+    "sku": null,
+    "ean": null,
+    "upc": null,
+    "gtin": null,
+    "variant": "960GB",
+    "capacity": "960GB",
+    "color": null,
+    "region": null,
+    "confidence": 0.99,
+    "match_level": "EXACT",
+    "identifiers_confirmed": ["mpn"],
+    "identifiers_conflicting": []
+  },
+  "specifications": {
+    "capacity": {"value":"960GB","raw_value":"960GB","unit":"GB","source":"https://manufacturer.example/product","source_type":"official_html","confidence":0.99},
+    "interface": {"value":"SATA Rev. 3.0","raw_value":"SATA Rev. 3.0","unit":null,"source":"https://manufacturer.example/product","source_type":"official_html","confidence":0.99},
+    "weight": {"value":"41 g","raw_value":"41 g","unit":"g","source":"https://manufacturer.example/datasheet.pdf","source_type":"official_pdf","confidence":0.98}
+  },
+  "additional_attributes": {},
+  "evidence": [],
+  "sources": ["https://manufacturer.example/product"],
+  "conflicts": [],
+  "missing_fields": [],
+  "warnings": []
+}

@@ -1,0 +1,276 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from .attribute_resolver import iter_clean_evidence
+from .models import ProductRecord
+from .normalize import key_norm
+
+
+@dataclass
+class Derived:
+    value: Any = None
+    confidence: float = 0.0
+    reason: str = ""
+    source: str | None = None
+    evidence_attribute: str | None = None
+    evidence_raw: Any = None
+
+
+def _all_text(rec: ProductRecord) -> str:
+    parts=[]
+    i=rec.identity
+    for v in [i.product_name,i.model,i.brand,i.color,i.capacity,i.variant]:
+        if v: parts.append(str(v))
+    for ev,_ in iter_clean_evidence(rec):
+        if ev.attribute: parts.append(str(ev.attribute))
+        if ev.raw_value not in (None,""): parts.append(str(ev.raw_value))
+    return " \n ".join(parts)
+
+
+def _find_evidence(rec: ProductRecord, attr_patterns: list[str], value_pattern: str | None = None):
+    rows=[]
+    for ev,q in iter_clean_evidence(rec):
+        a=key_norm(ev.attribute)
+        v=str(ev.normalized_value if ev.normalized_value not in (None,"") else ev.raw_value)
+        if not any(re.search(p,a,re.I) for p in attr_patterns):
+            continue
+        if value_pattern and not re.search(value_pattern,v,re.I):
+            continue
+        rows.append((max(q,float(ev.confidence or 0)),ev,v))
+    rows.sort(key=lambda x:x[0],reverse=True)
+    return rows
+
+
+def derive_description(rec: ProductRecord) -> Derived:
+    """Build a fuller evidence-grounded description without category-specific rules.
+
+    The official description remains the base. When it is short, append a compact set of
+    high-quality technical facts. This mirrors the human workflow used during regression
+    tests while remaining deterministic and auditable.
+    """
+    rows=_find_evidence(rec,[r"^description$",r"descripcion",r"descripci[oó]n"])
+    base=None; base_ev=None; base_q=0.0
+    for q,ev,v in rows:
+        if 8 <= len(v) <= 2500:
+            base=v.strip();base_ev=ev;base_q=q;break
+
+    # Generic technical attributes that are useful in catalog prose across product classes.
+    technical_pat=re.compile(
+        r"driver|frequency|frecuencia|impedance|impedancia|sensitivity|sensibilidad|"
+        r"battery|bater[ií]a|charging|carga|play time|autonom|weight|peso|dimension|"
+        r"interface|interfaz|connect|conect|bluetooth|wifi|usb|hdmi|processor|procesador|"
+        r"memory|memoria|storage|almacenamiento|capacity|capacidad|resolution|resoluci[oó]n|"
+        r"water|agua|ip rating|certificaci[oó]n ip|mtbf|warranty|garant[ií]a|nand|tbw|"
+        r"microphone|micr[oó]fono|screen|pantalla|refresh|audio|power supply|alimentaci[oó]n",re.I)
+    deny=re.compile(r"support|why buy|subscription|newsletter|price|precio|review|rese[ñn]a|"
+                    r"legal|declaration|article|signed|software update period",re.I)
+    facts=[];seen=set()
+    for ev,q in iter_clean_evidence(rec):
+        if len(facts)>=10:break
+        a=str(ev.attribute or '').strip();
+        if not a or deny.search(a) or not technical_pat.search(a):continue
+        v=ev.normalized_value if ev.normalized_value not in (None,'') else ev.raw_value
+        if v in (None,''):continue
+        sv=str(v).strip()
+        if not sv or len(sv)>180 or deny.search(sv):continue
+        k=key_norm(a+" "+sv)
+        if k in seen:continue
+        seen.add(k);facts.append((a,sv,q,ev))
+
+    if base:
+        # Do not bloat already-complete official descriptions.
+        if len(base)>=420 or not facts:
+            return Derived(base,min(.99,base_q+.05),"official_description",base_ev.source_url,base_ev.attribute,base_ev.raw_value)
+        suffix='; '.join(f"{a}: {v}" for a,v,_,_ in facts[:7])
+        text=base.rstrip('. ') + ". Especificaciones verificadas: " + suffix + "."
+        return Derived(text[:2400],min(.98,base_q+.04),"official_description_plus_verified_specs",base_ev.source_url,base_ev.attribute,base_ev.raw_value)
+    if facts:
+        name=rec.identity.product_name or rec.identity.model or rec.identity.brand or "Producto"
+        suffix='; '.join(f"{a}: {v}" for a,v,_,_ in facts[:9])
+        return Derived(f"{name}. Especificaciones verificadas: {suffix}.",.90,"verified_specs_description")
+    return Derived(reason="description_not_found")
+
+
+def derive_boolean(rec: ProductRecord, concept: str) -> Derived:
+    pats={
+        "bluetooth":[r"bluetooth",r"perfiles bluetooth",r"versi[oó]n bluetooth"],
+        "water_resistance":[r"water resistance",r"water resistant",r"resistente al agua",r"ip\d{2}"],
+        "serial_number":[r"serial number",r"n[uú]mero de serie"],
+    }.get(concept,[])
+    if not pats: return Derived(reason="unknown_boolean")
+    rows=_find_evidence(rec,pats)
+    for q,ev,v in rows:
+        n=key_norm(v)
+        if n in {"si","yes","true"}:
+            return Derived("Sí",min(.99,q+.04),"explicit_yes",ev.source_url,ev.attribute,ev.raw_value)
+        if n in {"no","false"} or n.startswith("no "):
+            return Derived("No",min(.99,q+.04),"explicit_no",ev.source_url,ev.attribute,ev.raw_value)
+        # Version/profile/IP evidence proves presence for these concepts.
+        if concept=="bluetooth" and (re.search(r"\d",v) or "profile" in key_norm(ev.attribute) or "perfil" in key_norm(ev.attribute)):
+            return Derived("Sí",min(.98,q+.03),"technology_presence",ev.source_url,ev.attribute,ev.raw_value)
+        if concept=="water_resistance" and re.search(r"\bIP\s*\d{2}\b",v,re.I):
+            return Derived("Sí",min(.98,q+.03),"ip_rating_presence",ev.source_url,ev.attribute,ev.raw_value)
+    return Derived(reason="boolean_not_proven")
+
+
+def derive_autonomy(rec: ProductRecord) -> Derived:
+    rows=_find_evidence(rec,[r"battery life",r"play time",r"music play",r"tiempo de juego",r"reproducci[oó]n",r"autonom",r"duraci[oó]n de bater"],r"\d")
+    best=None
+    for q,ev,v in rows:
+        m=re.search(r"(\d+(?:[.,]\d+)?)\s*(h|hr|hrs|hours?|horas?)\b",v,re.I)
+        if m:
+            hours=float(m.group(1).replace(",","."))
+        elif re.search(r"hour|hours|hora|horas", key_norm(ev.attribute), re.I) and re.fullmatch(r"\s*\d+(?:[.,]\d+)?\s*",v):
+            hours=float(v.strip().replace(",","."))
+        else:
+            continue
+        score=q
+        if re.search(r"max|maximum|m[aá]ximo|play|music|reprodu",key_norm(ev.attribute),re.I): score+=.05
+        if best is None or score>best[0]: best=(score,ev,hours)
+    if best:
+        score,ev,h=best
+        val=f"{int(h) if h.is_integer() else h:g} h"
+        return Derived(val,min(.99,score),"verified_playtime",ev.source_url,ev.attribute,ev.raw_value)
+    return Derived(reason="autonomy_not_found")
+
+
+def derive_connectivity(rec: ProductRecord, options: list[Any]) -> Derived:
+    text=key_norm(_all_text(rec))
+    option_map={key_norm(str(o)):str(o) for o in options}
+    wanted=[]
+    def add_option(keys:list[str]):
+        for k in keys:
+            nk=key_norm(k)
+            if nk in option_map and option_map[nk] not in wanted:
+                wanted.append(option_map[nk]); return True
+        return False
+    # Direct technologies first.
+    if "usb c" in text or "usbc" in text: add_option(["USB-C","USB C"])
+    elif re.search(r"\busb\b",text): add_option(["USB"])
+    if "bluetooth" in text: add_option(["Bluetooth"])
+    if "wifi 6" in text: add_option(["Wifi 6","Wifi"])
+    elif "wifi" in text or "wi fi" in text: add_option(["Wifi"])
+    if "ethernet" in text or "rj 45" in text: add_option(["Ethernet"])
+    if "hdmi" in text: add_option(["HDMI"])
+    if "thunderbolt" in text: add_option(["Thunderbolt"])
+    if "3 5mm" in text or "3.5mm" in _all_text(rec).lower(): add_option(["Auxiliar 3.5mm"])
+    # Wired/wireless is taken from product positioning or connection-specific evidence, not from any cable mention.
+    identity_text=key_norm(" ".join(x for x in [rec.identity.product_name,rec.identity.model] if x))
+    descriptions=" ".join(str(ev.raw_value or "") for ev,_ in iter_clean_evidence(rec) if key_norm(ev.attribute) in {"description","connectivity","connection","interface","connector","audio connection"})
+    conn_text=key_norm(identity_text+" "+descriptions)
+    if re.search(r"\bwired\b|(?<!in)al[aá]mbric|cableado",conn_text): add_option(["Alámbrico","Cableado"])
+    if re.search(r"wireless|inal[aá]mbric|2 4g wireless|2 4 ghz",conn_text): add_option(["Inalámbrico","WF wireless"])
+    if wanted:
+        return Derived(", ".join(wanted),.93,"technologies_mapped_to_allowed_options")
+    # If a real interface exists but marketplace has no matching option, 'Otro' is safer than inventing a technology.
+    has_interface=any(re.search(r"interface|interfaz|pci[e ]|nvme|m 2",key_norm(f"{ev.attribute} {ev.raw_value}"),re.I) for ev,_ in iter_clean_evidence(rec))
+    if has_interface and "otro" in option_map:
+        return Derived(option_map["otro"],.88,"real_interface_not_represented_in_marketplace_options")
+    return Derived(reason="connectivity_not_proven_or_not_mappable")
+
+
+def derive_headphone_type(rec: ProductRecord, options: list[Any]) -> Derived:
+    text=key_norm(_all_text(rec))
+    opts={key_norm(str(o)):str(o) for o in options}
+    concepts=[]
+    if re.search(r"gaming headset|gaming headphone|gamer",text): concepts += ["Gamer"]
+    if re.search(r"over ear|circumaural",text): concepts += ["Auriculares Over-Ear","Over-Ear","Over Ear","Circumaural"]
+    if re.search(r"on ear|supraaural",text): concepts += ["Auriculares On-ear","On-Ear","On Ear","Supraaural"]
+    if re.search(r"in ear|earbud|intraaural",text): concepts += ["Auriculares In-ear","In-Ear","In Ear","Intraaural"]
+    if "headset" in text: concepts += ["Headset"]
+    for c in concepts:
+        if key_norm(c) in opts:
+            return Derived(opts[key_norm(c)],.92,"explicit_form_factor_to_allowed_option")
+    return Derived(reason="headphone_type_not_proven")
+
+
+def derive_package_contents(rec: ProductRecord) -> Derived:
+    rows=_find_evidence(rec,[r"package contents",r"what.?s in the box",r"contenido del paquete",r"contenido de la caja"])
+    for q,ev,v in rows:
+        if 2 <= len(v.split()) <= 80 and not re.search(r"get even more|personalization|control and",v,re.I):
+            return Derived(v,min(.98,q+.04),"explicit_package_contents",ev.source_url,ev.attribute,ev.raw_value)
+    return Derived(reason="package_contents_not_found")
+
+
+def derive_controlled_color(rec: ProductRecord, options:list[Any]) -> Derived:
+    if not rec.identity.color: return Derived(reason="color_unknown")
+    opts={key_norm(str(o)):str(o) for o in options}
+    n=key_norm(rec.identity.color)
+    if n in opts: return Derived(opts[n],.98,"identity_color_exact_option")
+    # very conservative aliases for common marketplace color vocabulary
+    aliases={"black":"negro","blue":"azul","white":"blanco","red":"rojo","green":"verde","gray":"gris","grey":"gris","beige":"beige"}
+    if n in aliases and key_norm(aliases[n]) in opts:
+        return Derived(opts[key_norm(aliases[n])],.96,"identity_color_translated_option")
+    return Derived(reason="color_not_in_allowed_options")
+
+
+def derive_water_resistance(rec: ProductRecord, options:list[Any]) -> Derived:
+    opts={key_norm(str(o)):str(o) for o in options}
+    rows=_find_evidence(rec,[r"ip rating",r"certificacion ip",r"certificaci[oó]n ip",r"water resistance",r"resistente al agua",r"^ip$"])
+    rating=None; src=None
+    for q,ev,v in rows:
+        m=re.search(r"\bIP\s*([0-9]{2}|X[0-9])\b",v,re.I)
+        if m:
+            rating='IP'+m.group(1).upper();src=(q,ev);break
+    if rating:
+        nr=key_norm(rating)
+        for no,o in opts.items():
+            if no==nr or no.startswith(nr+' '):
+                q,ev=src
+                return Derived(o,min(.99,q+.03),'exact_ip_rating_to_allowed_option',ev.source_url,ev.attribute,ev.raw_value)
+        return Derived(reason=f'ip_rating_{rating}_not_in_allowed_options')
+    # Only use yes/no when the marketplace actually offers yes/no.
+    yes=next((o for n,o in opts.items() if n in {'si','yes'}),None)
+    if yes:
+        b=derive_boolean(rec,'water_resistance')
+        if b.value=='Sí': return Derived(yes,b.confidence,b.reason,b.source,b.evidence_attribute,b.evidence_raw)
+    return Derived(reason='water_resistance_not_mappable')
+
+
+def derive_features(rec: ProductRecord, options:list[Any]) -> Derived:
+    opts={key_norm(str(o)):str(o) for o in options}
+    text=key_norm(_all_text(rec))
+    chosen=[]
+    # Evidence-driven generic features. Each rule requires a concrete signal.
+    signals=[
+        (['cuenta con bluetooth'], r'bluetooth'),
+        (['cuenta con micrófono','cuenta con microfono'], r'microphone|micr[oó]fono'),
+        (['carga rápida','carga rapida'], r'speed charge|fast charge|carga r[aá]pida'),
+        (['cancelación de ruido activa','cancelacion de ruido activa'], r'active noise cancellation|\banc\b|cancelaci[oó]n de ruido activa'),
+        (['entrada de audio auxiliar (3.5mm)','entrada de audio auxiliar 3 5mm'], r'3[., ]5\s*mm|auxiliary|auxiliar'),
+        (['control por aplicación móvil','control por aplicacion movil'], r'headphone app|mobile app|aplicaci[oó]n m[oó]vil'),
+        (['cuenta con control de volumen'], r'volume control|control de volumen'),
+    ]
+    for names,pat in signals:
+        if not re.search(pat,text,re.I): continue
+        for name in names:
+            n=key_norm(name)
+            if n in opts and opts[n] not in chosen:
+                chosen.append(opts[n]);break
+    if chosen:return Derived(', '.join(chosen),.94,'features_from_explicit_evidence')
+    return Derived(reason='no_allowed_features_proven')
+
+
+def derive_power_source(rec: ProductRecord, options:list[Any]) -> Derived:
+    opts={key_norm(str(o)):str(o) for o in options}
+    text=key_norm(_all_text(rec))
+    rechargeable=bool(re.search(r'charging time|charge time|tiempo de carga|recharge|recargable',text,re.I))
+    battery=bool(re.search(r'battery type|bater[ií]a|lithium ion|li ion',text,re.I))
+    usb=bool(re.search(r'power supply[^\n]{0,40}5v|alimentaci[oó]n[^\n]{0,40}usb',text,re.I))
+    prefs=[]
+    if rechargeable and battery:prefs += ['Batería recargable','Bateria recargable']
+    elif battery:prefs += ['Batería','Bateria']
+    if usb:prefs += ['USB']
+    for p in prefs:
+        if key_norm(p) in opts:return Derived(opts[key_norm(p)],.90,'power_source_from_explicit_power_battery_evidence')
+    return Derived(reason='power_source_not_mappable')
+
+
+def derive_segment(rec: ProductRecord, options:list[Any]) -> Derived:
+    opts={key_norm(str(o)):str(o) for o in options}; text=key_norm(_all_text(rec))
+    if re.search(r'gaming|gamer',text,re.I) and 'gamer' in opts:
+        return Derived(opts['gamer'],.94,'explicit_gaming_positioning')
+    return Derived(reason='segment_not_proven')

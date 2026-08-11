@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+env/
+
+# Build / packaging
+build/
+dist/
+*.spec.bak
+*.egg-info/
+*.whl
+
+# PyInstaller / Windows build cache
+vendor/ms-playwright/
+
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+config.local.json
+
+# User inputs and generated product data
+excel/*.xlsx
+excel/*.xls
+output/
+output_*/
+output_batch/
+json/
+logs/
+*.log
+
+# Generated/demo run artifacts
+*_completado.xlsx
+*_reprocesado_*.xlsx
+trazabilidad*.json
+resumen.json
+
+# Keep intended placeholders
+!output/.gitkeep
+!excel/.gitkeep
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary Office files
+~$*.xlsx
+~$*.xls
+# Demo Excel outputs (JSON regression fixtures may remain tracked)
+demo_output/*.xlsx
+demo_output/*trace*.json

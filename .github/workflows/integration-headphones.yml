@@ -10,6 +10,7 @@ on:
       - 'src/product_intelligence/batch.py'
       - 'src/product_intelligence/pipeline.py'
       - 'src/product_intelligence/html_extract.py'
+      - 'src/product_intelligence/source_extract.py'
       - 'src/product_intelligence/excel_mapper_v8.py'
       - 'src/product_intelligence/field_derivations.py'
       - 'src/product_intelligence/attribute_resolver.py'
@@ -39,6 +40,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[browser]"
           python -m playwright install --with-deps chromium
+
+      - name: Run unit and regression tests
+        run: pytest -q
+
+      - name: Validate raw source method on official JBL page
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          python - <<'PY'
+          from product_intelligence.models import ProductIdentity
+          from product_intelligence.pipeline import ProductPipeline
+
+          url = 'https://ca.jbl.com/en_CA/QUANTUM350WIRELESS-.html'
+          expected = ProductIdentity(brand='JBL', mpn='JBLQ350WLBLKAM', model='Quantum 350 Wireless')
+          record = ProductPipeline().process_official_url(expected, url, include_pdfs=False)
+          raw = [e for e in record.evidence if e.source_type == 'official_source_html']
+          print('official_url=', record.fetch.get('final_url'))
+          print('identity=', record.identity.match_level, record.identity.identifiers_confirmed)
+          print('raw_source_evidence=', len(raw))
+          for e in raw[:30]:
+              print('SOURCE', e.attribute, '=>', e.normalized_value, '|', e.selector)
+          if record.identity.match_level != 'EXACT':
+              raise SystemExit('Official JBL page did not validate exact identity')
+          if not raw:
+              raise SystemExit('Raw source layer extracted no evidence from official JBL page')
+          PY
 
       - name: Run real scraping smoke test
         env:

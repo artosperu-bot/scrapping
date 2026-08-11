@@ -18,6 +18,7 @@ if marker not in s:
             (r'\bOn-Ear USB-C Headphones\b','auriculares on-ear USB-C'),
             (r'\bOn-Ear Headphones\b','auriculares on-ear'),
             (r'\bWireless Headphones?\b','auriculares inalámbricos'),
+            (r'\bWireless Headset\b','auricular inalámbrico'),
             (r'\bHeadphones?\b','auriculares'),
             (r'\bWireless\b','Inalámbrico'),
             (r'\bWired\b','Cableado'),
@@ -43,8 +44,6 @@ if marker not in s:
             if concept=='bluetooth' and 'bluetooth' in key_norm(ev.attribute) and str(v).strip():return Derived('Sí',max(.90,min(.98,q+.14)),'bluetooth_specific_evidence',ev.source_url,ev.attribute,ev.raw_value)
             if concept=='water_resistance' and re.search(r'\bIP\s*(?:[0-9]{2}|X[0-9])\b',v,re.I):return Derived('Sí',max(.90,min(.98,q+.08)),'ip_rating_presence',ev.source_url,ev.attribute,ev.raw_value)
         if concept=='bluetooth':
-            # A connectivity field whose VALUE explicitly says Bluetooth is stronger than
-            # generic textual mention and is safe to promote above the Excel write threshold.
             for ev,q in iter_clean_evidence(rec):
                 a=key_norm(str(ev.attribute or '')); v=str(ev.normalized_value if ev.normalized_value not in (None,'') else ev.raw_value or '')
                 nv=key_norm(v)
@@ -82,10 +81,11 @@ if marker not in s:
         if base and not _smart_looks_english(base):
             if suffix:return Derived((base.rstrip('. ')+'. Especificaciones verificadas: '+suffix+'.')[:2400],min(.98,max(.91,base_q+.04)),'spanish_description_plus_verified_specs',base_ev.source_url,base_ev.attribute,base_ev.raw_value)
             return Derived(base,min(.95,max(.88,base_q)),'spanish_description',base_ev.source_url,base_ev.attribute,base_ev.raw_value)
-        # For an English source do not create word-by-word Spanglish. Build the Spanish
-        # marketplace description from the validated product name plus translated facts.
-        if suffix:return Derived(f'{name}. Especificaciones verificadas: {suffix}.',.91,'spanish_verified_specs_description',base_ev.source_url if base_ev else None,base_ev.attribute if base_ev else None,base_ev.raw_value if base_ev else None)
-        if base:return Derived(_smart_translate_value(base),min(.90,base_q),'translated_description_fallback',base_ev.source_url,base_ev.attribute,base_ev.raw_value)
+        if base:
+            base_es=_smart_translate_value(base)
+            if suffix:return Derived((base_es.rstrip('. ')+'. Especificaciones verificadas: '+suffix+'.')[:2400],.91,'translated_source_plus_verified_specs',base_ev.source_url,base_ev.attribute,base_ev.raw_value)
+            return Derived(base_es,min(.90,base_q),'translated_description_fallback',base_ev.source_url,base_ev.attribute,base_ev.raw_value)
+        if suffix:return Derived(f'{name}. Especificaciones verificadas: {suffix}.',.91,'spanish_verified_specs_description')
         return Derived(reason='description_not_found')
     ''')
     p.write_text(s,encoding='utf-8')

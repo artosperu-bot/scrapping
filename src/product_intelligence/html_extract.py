@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, unquote
 from bs4 import BeautifulSoup
 
 from .models import Evidence, ProductIdentity
@@ -54,7 +54,6 @@ def _walk_dicts(x):
 
 def identity_from_page(page: dict, expected: ProductIdentity | None = None, source_url: str | None = None) -> ProductIdentity:
     objs = list(_walk_dicts(page.get("jsonld", [])))
-    # Include extruct's normalized JSON-LD/microdata output.
     objs += list(_walk_dicts(page.get("embedded", {})))
     prod = next((x for x in objs if str(x.get("@type", x.get("type", ""))).lower().endswith("product")), {})
     brand = prod.get("brand")
@@ -71,16 +70,23 @@ def identity_from_page(page: dict, expected: ProductIdentity | None = None, sour
         ean=str(prod.get("gtin13")) if prod.get("gtin13") else None,
         upc=str(prod.get("gtin12")) if prod.get("gtin12") else None,
     )
-    # Strong reinforcement: if an expected identifier appears literally on the rendered
-    # product page or URL, record it. This is safer than guessing from a similar title.
+    # Reinforce expected identifiers only from rendered page content or the URL PATH.
+    # Query strings/fragments are explicitly excluded because search/auth redirects can
+    # echo the user's MPN (e.g. ?q=PARTNUMBER) without proving anything about the page.
     if expected:
-        haystack = f"{source_url or ''}\n{page.get('text') or ''}".lower()
+        clean_path=""
+        if source_url:
+            try:
+                clean_path=unquote(urlsplit(source_url).path or "")
+            except Exception:
+                clean_path=""
+        haystack = f"{clean_path}\n{page.get('text') or ''}".lower()
+        compact = re.sub(r"\s+", "", haystack)
         for field in ["mpn", "ean", "upc", "gtin", "model", "brand", "capacity", "variant"]:
             val = getattr(expected, field, None)
             if not val or getattr(cand, field, None):
                 continue
             raw = str(val).strip()
-            compact = re.sub(r"\s+", "", haystack)
             if raw.lower() in haystack or re.sub(r"\s+", "", raw.lower()) in compact:
                 setattr(cand, field, raw)
     return cand
@@ -106,7 +112,6 @@ def table_evidence(html: str, source_url: str, match_level: str, base_confidence
                 match_level=match_level, confidence=base_confidence,
             ))
 
-    # Common product-spec layouts: label/value siblings and simple two-column blocks.
     label_classes = re.compile(r"(spec|attribute|feature|label|name|key)", re.I)
     value_classes = re.compile(r"(value|detail|data|content)", re.I)
     for label in soup.find_all(class_=label_classes):

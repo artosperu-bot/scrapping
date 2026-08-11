@@ -2,7 +2,10 @@ name: Apply final product intelligence hardening
 on:
   push:
     branches: [ main ]
-    paths: ['.github/workflows/apply-final-product-intelligence.yml']
+    paths:
+      - '.github/workflows/apply-final-product-intelligence.yml'
+      - 'tools/finalize_bluetooth_translation.py'
+      - 'tools/finalize_multisource_consistency.py'
 permissions:
   contents: write
 jobs:

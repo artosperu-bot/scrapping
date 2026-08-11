@@ -63,16 +63,18 @@ jobs:
           print(summary)
           if summary['products_detected'] != 3:
               raise SystemExit(f"Expected 3 products, got {summary['products_detected']}")
-          if summary['products_scraped'] == 0:
-              raise SystemExit('No product could be scraped from public sources')
+          if summary['products_scraped'] != 3:
+              raise SystemExit(f"Expected all 3 products to scrape, got {summary['products_scraped']}")
           if not Path(summary['output_excel']).exists():
               raise SystemExit('Completed Excel was not generated')
           PY
 
-      - name: Upload integration result
+      - name: Upload integration diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: headphones-integration-output
-          path: integration_output/
-          if-no-files-found: warn
+          path: |
+            integration_output/
+            src/product_intelligence/
+          if-no-files-found: error

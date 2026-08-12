@@ -191,6 +191,12 @@ class App(BaseApp):
             messagebox.showerror("Multimedia", "No hay productos con identidad válida para procesar.")
             return
 
+        # Snapshot every Tk-backed value before starting the worker. Tkinter variables/widgets
+        # are only accessed on the UI thread; the worker receives plain Python values.
+        output_root = self.out.get()
+        auto_search = bool(self.media_auto_search.get())
+        manual_urls_by_index = {index: list(self.media_manual_urls.get(index, [])) for index, _ in valid}
+
         self._media_running = True
         self.media_selected_btn.configure(state="disabled")
         self.media_all_btn.configure(state="disabled")
@@ -208,9 +214,9 @@ class App(BaseApp):
 
                     run_media_product(
                         identity,
-                        self.out.get(),
-                        manual_urls=list(self.media_manual_urls.get(index, [])),
-                        auto_search=bool(self.media_auto_search.get()),
+                        output_root,
+                        manual_urls=manual_urls_by_index[index],
+                        auto_search=auto_search,
                         max_pages=10,
                         on_event=on_event,
                     )

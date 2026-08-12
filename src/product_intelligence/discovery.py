@@ -160,13 +160,19 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
         if not host or _is_search_provider_host(host):continue
         combined=f"{u} {t} {sn}"
         hay=key_norm(combined)
-        if strong and not _contains_strong_identifier(combined,strong):continue
         hcompact=re.sub(r"[^a-z0-9]","",host)
         likely_official=bool(brand and brand in hcompact and not any(m in host for m in MARKETPLACE_HINTS))
+        strong_match=bool(strong and _contains_strong_identifier(combined,strong))
+        model_match=bool(model and fuzz_contains(model,hay))
+        # Search snippets often omit the MPN even for the correct manufacturer page. Keep a
+        # brand-domain + model-matching official page as a candidate; the product pipeline still
+        # performs exact identity validation before its evidence is accepted.
+        if strong and not strong_match and not (likely_official and model_match):
+            continue
         score=0.0
         if likely_official:score+=.45
-        if strong and _contains_strong_identifier(combined,strong):score+=.38
-        if model and fuzz_contains(model,hay):score+=.18
+        if strong_match:score+=.38
+        if model_match:score+=.18
         if any(term in hay for term in technical_terms):score+=.08
         if any(m in host for m in MARKETPLACE_HINTS):score-=.18
         out.append(SearchCandidate(u,t,sn,score,likely_official))
@@ -224,6 +230,20 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
     return []
 
 
+def _field_search_terms(field:str)->list[str]:
+    cleaned=re.sub(r"#\s*[A-Za-z]*\d+","",str(field)).strip()
+    if not cleaned:return []
+    n=key_norm(cleaned)
+    terms=[cleaned]
+    if any(x in n for x in ["anofabricacion","ano fabricacion","año fabricacion","release year","launch year","year of release"]):
+        terms.extend(["release date","release year","launch date","official announcement"])
+    if any(x in n for x in ["package contents","contenido del paquete"]):
+        terms.extend(["what's in the box","box contents"])
+    if any(x in n for x in ["package weight","peso del paquete"]):
+        terms.extend(["package weight","shipping weight"])
+    return list(dict.fromkeys(terms))
+
+
 def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12,timeout:int=15)->list[SearchCandidate]:
     """Free second-pass discovery for unresolved workbook semantics.
 
@@ -234,10 +254,10 @@ def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12
     if not base:return []
     terms=[]
     for field in fields or []:
-        cleaned=re.sub(r"#\s*[A-Za-z]*\d+","",str(field)).strip()
-        if cleaned and cleaned not in terms:terms.append(cleaned)
+        for term in _field_search_terms(str(field)):
+            if term and term not in terms:terms.append(term)
     urls=[]
-    for field in terms[:6]:
+    for field in terms[:12]:
         for query in [f'{base} "{field}"',f'{base} "{field}" specifications',f'{base} "{field}" manual datasheet']:
             urls.extend(_provider_search(query,max(8,min(timeout,15))))
     return _rank_candidates(urls,identity,limit)

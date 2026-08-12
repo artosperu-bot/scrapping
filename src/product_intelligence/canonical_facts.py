@@ -30,10 +30,6 @@ def _gtin_type(value: str | None) -> str | None:
     return {8: "GTIN-8", 12: "GTIN-12", 13: "GTIN-13", 14: "GTIN-14"}.get(len(digits))
 
 
-def _semantic_yes(attr: str, raw: str, *terms: str) -> bool:
-    return any(term in attr for term in terms) and _norm_bool(raw) is True
-
-
 def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
     """Build conservative reusable product facts from filtered/deduplicated evidence.
 
@@ -102,18 +98,16 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
         elif ck == "dimensions" and raw:
             facts["product"]["dimensions"] = raw
 
-        # Bluetooth promotion: the attribute itself is enough context for a bare version.
         if "bluetooth" in attr:
             explicit = _norm_bool(raw)
             if explicit is not None:
                 facts["connectivity"]["bluetooth"]["present"] = explicit
             m = re.search(r"(?:bluetooth\s*)?(\d(?:\.\d)?)", raw, re.I)
-            if m and ("version" in attr or attr == "bluetooth" or "bluetooth" in attr or "bluetooth" in raw.lower()):
+            if m:
                 facts["connectivity"]["bluetooth"]["version"] = m.group(1)
                 facts["connectivity"]["bluetooth"]["present"] = True
 
         joined = f"{attr} {val}"
-        # Connectivity fields can directly prove Bluetooth even when no separate boolean exists.
         if "bluetooth" in val and any(x in attr for x in ["connect", "conexion", "technology", "wireless"]):
             facts["connectivity"]["bluetooth"]["present"] = True
             facts["connectivity"]["wireless"] = True
@@ -135,8 +129,6 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
         if re.search(r"\bwireless\b|inal[aá]mbric", joined, re.I):
             facts["connectivity"]["wireless"] = True
 
-        # A clean host-connectivity field containing only wireless transports can prove
-        # that the device connection is not wired. Do not infer this from microphone cables.
         if any(x in attr for x in ["connectivity", "conectividad", "conexion", "connection type"]):
             host_wireless = bool(re.search(r"bluetooth|wireless|inal[aá]mbric|2[ .]?4\s*ghz|\brf\b", val, re.I))
             host_wired = bool(re.search(r"usb[ -]?c|3[., ]5\s*mm|wired|cableado|al[aá]mbric", val, re.I))
@@ -145,10 +137,10 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
                 if facts["connectivity"]["wired"] is None:
                     facts["connectivity"]["wired"] = False
 
-        # Battery relations.
         if re.search(r"battery|bater[ií]a", attr, re.I):
             explicit = _norm_bool(raw)
-            if re.search(r"no battery|without battery|sin bater[ií]a|battery required\s*[:=]?\s*(?:no|false)", raw, re.I):
+            battery_context = f"{attr} {val}"
+            if explicit is False or re.search(r"no battery|without battery|sin bater[ií]a|battery required\s*(?:no|false)", battery_context, re.I):
                 facts["battery"]["present"] = False
             elif explicit is True or raw:
                 facts["battery"]["present"] = True
@@ -170,7 +162,6 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
                 if facts["battery"]["present"] is None:
                     facts["battery"]["present"] = True
 
-        # IP rating promotion into independent dust/water components.
         m = re.search(r"\bIP\s*([0-6X])([0-9K])\b", raw, re.I)
         if not m:
             m = re.search(r"\bIP\s*([0-6X])([0-9K])\b", ev.attribute, re.I)
@@ -210,7 +201,6 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
             if raw and raw not in facts["features"]:
                 facts["features"].append(raw)
 
-    # Closed-world implications only when facts are explicit enough.
     bt = facts["connectivity"]["bluetooth"]
     if bt["version"] is not None:
         bt["present"] = True

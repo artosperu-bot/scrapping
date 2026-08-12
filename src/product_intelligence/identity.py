@@ -8,6 +8,13 @@ EAN_RE = re.compile(r"^\d{13}$")
 UPC_RE = re.compile(r"^\d{12}$")
 GTIN14_RE = re.compile(r"^\d{14}$")
 
+_CONDITION_PATTERNS = {
+    "refurbished": (r"certified[ -]?refurbished", r"\brefurbished\b", r"reacondicionad[oa]"),
+    "used": (r"\bused\b", r"\busado\b", r"pre[ -]?owned", r"segunda mano"),
+    "open_box": (r"open[ -]?box", r"caja abierta"),
+    "renewed": (r"\brenewed\b", r"renovad[oa]"),
+}
+
 @dataclass
 class IdentityInput:
     value: str
@@ -27,19 +34,42 @@ def _norm(v: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", v.lower())
 
 def _text_supports(value: str | None, *texts: str | None) -> bool:
-    """Conservative lexical support for identity metadata.
-
-    This prevents an Organization/seller extracted from a commerce page from becoming the
-    product brand merely because the page contains the exact MPN. It is deliberately generic:
-    a brand/model is considered corroborated when it is present in title/model/name evidence.
-    """
+    """Conservative lexical support for identity metadata."""
     needle=_norm(value)
     if not needle:
         return False
     haystack=" ".join(_norm(x) for x in texts if x)
     return len(needle) >= 2 and needle in haystack
 
+
+def _condition_set(*texts: str | None) -> set[str]:
+    joined = " ".join(x or "" for x in texts).lower()
+    return {
+        name
+        for name, patterns in _CONDITION_PATTERNS.items()
+        if any(re.search(pattern, joined, re.I) for pattern in patterns)
+    }
+
+
+def sanitize_condition_mismatched_identity(expected: ProductIdentity, candidate: ProductIdentity) -> ProductIdentity:
+    """Prevent a used/refurbished/open-box listing from redefining a standard product identity.
+
+    Exact MPN/GTIN evidence can still validate the technical product, but commercial condition is
+    a separate identity dimension. If the target did not request that condition, condition-bearing
+    product names/variants are not promoted to canonical identity metadata.
+    """
+    expected_conditions = _condition_set(expected.product_name, expected.model, expected.variant)
+    candidate_conditions = _condition_set(candidate.product_name, candidate.model, candidate.variant)
+    if candidate_conditions - expected_conditions:
+        if _condition_set(candidate.product_name) - expected_conditions:
+            candidate.product_name = None
+        if _condition_set(candidate.variant) - expected_conditions:
+            candidate.variant = None
+    return candidate
+
+
 def compare_identity(expected: ProductIdentity, candidate: ProductIdentity) -> ProductIdentity:
+    candidate = sanitize_condition_mismatched_identity(expected, candidate)
     confirmed, conflicts = [], []
     score = 0.0
     weights = {"mpn": 0.32, "ean": 0.30, "upc": 0.30, "gtin": 0.30, "model": 0.18,
@@ -57,10 +87,6 @@ def compare_identity(expected: ProductIdentity, candidate: ProductIdentity) -> P
         elif field == "brand" and expected.brand and candidate.brand:
             conflicts.append(field)
 
-    # A page may contain an exact MPN while JSON-LD Organization names the seller as brand.
-    # When the caller did not already know the brand, do not let an unsupported page-level
-    # organization become canonical identity metadata. The later evidence resolver may recover
-    # the real product brand from explicit Product.brand/specification evidence.
     if not expected.brand and candidate.brand and not _text_supports(
         candidate.brand, candidate.product_name, candidate.model
     ):
@@ -69,8 +95,6 @@ def compare_identity(expected: ProductIdentity, candidate: ProductIdentity) -> P
     if conflicts and any(x in strong for x in conflicts):
         level = "CONFLICT"
     elif strong_match and not conflicts:
-        # EXACT means exact product identifier, but confidence remains proportional to the
-        # corroboration actually available; it is not automatically 0.9+.
         level = "EXACT"
     else:
         sim = max(

@@ -267,6 +267,8 @@ def run_batch(
     log(f"Productos a procesar: {len(items)}" + (" (part numbers manuales)" if manual_mode else " (detectados en Excel)"))
 
     records: list[ProductRecord] = []
+    # Every product is bound to the exact input row that created it. The mapper must not
+    # rematch records against vocabulary/reference sheets such as Marcas/Opciones.
     row_assignments: dict[tuple[str, int], ProductRecord] = {}
     failures: list[dict] = []
     for index, item in enumerate(items, 1):
@@ -275,8 +277,7 @@ def run_batch(
         rec = scrape_item(item, str(out / "json"), template_plan=template_plan, log=log)
         if rec:
             records.append(rec)
-            if manual_mode:
-                row_assignments[(item.sheet, item.row)] = rec
+            row_assignments[(item.sheet, item.row)] = rec
         else:
             failures.append({"part_number": label, "sheet": item.sheet, "row": item.row})
 
@@ -285,7 +286,9 @@ def run_batch(
     report = fill_excel_v8(
         template,
         output_xlsx,
-        records,
+        # Deliberately disable heuristic workbook-wide record matching. All records
+        # already have a deterministic source row, which is safer and simpler.
+        [],
         overwrite=overwrite,
         trace_path=trace,
         ai_config=ai_config,

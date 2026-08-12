@@ -16,22 +16,29 @@ from .normalize import key_norm
 @dataclass
 class AIConfig:
     enabled: bool = False
-    provider: str = "off"  # off | openai_compatible | ollama
+    provider: str = "off"  # off | openai | openrouter | openai_compatible | ollama
     model: str = ""
     base_url: str = ""
     api_key: str = ""
     timeout: int = 45
     max_evidence: int = 70
+    discovery_enabled: bool = False
+    enrichment_enabled: bool = False
+    preferred_country: str = "PE"
 
     @classmethod
     def from_env(cls) -> "AIConfig":
         provider=os.getenv("PRODUCT_INTEL_AI_PROVIDER","off").strip().lower()
+        enabled=provider not in {"","off","none"}
         return cls(
-            enabled=provider not in {"","off","none"},
+            enabled=enabled,
             provider=provider or "off",
             model=os.getenv("PRODUCT_INTEL_AI_MODEL","").strip(),
             base_url=os.getenv("PRODUCT_INTEL_AI_BASE_URL","").strip(),
             api_key=os.getenv("PRODUCT_INTEL_AI_API_KEY","").strip(),
+            discovery_enabled=os.getenv("PRODUCT_INTEL_AI_DISCOVERY","0").strip().lower() in {"1","true","yes","si","sí"},
+            enrichment_enabled=os.getenv("PRODUCT_INTEL_AI_ENRICHMENT","0").strip().lower() in {"1","true","yes","si","sí"},
+            preferred_country=os.getenv("PRODUCT_INTEL_AI_COUNTRY","PE").strip().upper() or "PE",
         )
 
 
@@ -71,24 +78,23 @@ def _evidence_payload(rec:ProductRecord,limit:int=70):
 
 
 class AIEnricher:
-    """Optional reasoning layer. It never receives the open web and is not an authority.
+    """Optional reasoning over already-validated evidence only.
 
-    The model sees only already-validated evidence and allowed marketplace values. Every answer
-    must cite evidence row ids. Returned candidates are validated again by deterministic guards.
+    Web discovery is intentionally separate. This layer cannot browse and cannot become an
+    authority for product facts; deterministic guards still validate every proposed value.
     """
     def __init__(self,config:AIConfig|None=None):
         self.config=config or AIConfig.from_env()
 
     def _call(self,messages:list[dict[str,str]])->dict[str,Any]|None:
         c=self.config
-        if not c.enabled or c.provider in {"off","none",""}:return None
+        if not c.enabled or not c.enrichment_enabled or c.provider in {"off","none",""}:return None
         if c.provider=="ollama":
             base=(c.base_url or "http://127.0.0.1:11434").rstrip('/')
             r=requests.post(base+"/api/chat",json={"model":c.model,"messages":messages,"stream":False,"format":"json"},timeout=c.timeout)
             r.raise_for_status()
             return _json_from_text((r.json().get("message") or {}).get("content",""))
-        # Any OpenAI-compatible chat/completions endpoint.
-        base=(c.base_url or "https://api.openai.com/v1").rstrip('/')
+        base=(c.base_url or ("https://openrouter.ai/api/v1" if c.provider=="openrouter" else "https://api.openai.com/v1")).rstrip('/')
         headers={"Content-Type":"application/json"}
         if c.api_key:headers["Authorization"]="Bearer "+c.api_key
         payload={"model":c.model,"messages":messages,"temperature":0}
@@ -137,7 +143,6 @@ class AIEnricher:
             if 0<=i<len(evidence):good_ids.append(i)
         if not good_ids:return None
         value=str(ans.get("value")).strip()
-        # Controlled output must be composed only of exact allowed options.
         if allowed:
             exact={key_norm(x):x for x in allowed}
             parts=[p.strip() for p in re.split(r"[,;|]",value) if p.strip()]
@@ -146,7 +151,6 @@ class AIEnricher:
                 if key_norm(p) not in exact:return None
                 mapped.append(exact[key_norm(p)])
             value=", ".join(dict.fromkeys(mapped))
-        # Numeric hallucination guard: every number in AI text must appear in cited evidence or identity.
         source_text=" ".join(evidence[i]["value"] for i in good_ids)+" "+json.dumps(identity,ensure_ascii=False)
         if not _numeric_tokens(value).issubset(_numeric_tokens(source_text)):
             return None

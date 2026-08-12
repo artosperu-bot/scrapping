@@ -1,0 +1,74 @@
+name: Apply manual source URLs
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/apply-manual-sources.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch batch and desktop
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # batch.py
+          p=Path('src/product_intelligence/batch.py')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace('    source_url: str | None = None\n', '    source_url: str | None = None\n    source_urls: list[str] | None = None\n', 1)
+          s=s.replace('items.append(BatchItem(row=row, sheet=ws.title, identity=identity, source_url=source_url))', 'items.append(BatchItem(row=row, sheet=ws.title, identity=identity, source_url=source_url, source_urls=[source_url] if source_url else []))', 1)
+          old='''def manual_identity_items(template: str, identities: list[ProductIdentity]) -> list[BatchItem]:\n    \"\"\"Bind generic product identities to product rows. One strong value/name is enough.\"\"\"\n    sheet, header_row = _best_product_sheet(template)\n    return [BatchItem(header_row + i + 1, sheet, ident) for i, ident in enumerate(identities)]\n'''
+          new='''def manual_identity_items(template: str, identities: list[ProductIdentity], source_urls_by_index: list[list[str]] | None = None) -> list[BatchItem]:\n    \"\"\"Bind identities to rows and keep user-supplied URLs as priority candidates.\n\n    Manual URLs are never trusted automatically; they still pass through the same identity\n    validation and evidence gates as discovered URLs.\n    \"\"\"\n    sheet, header_row = _best_product_sheet(template)\n    items=[]\n    for i, ident in enumerate(identities):\n        urls=[]\n        if source_urls_by_index and i < len(source_urls_by_index):\n            urls=list(dict.fromkeys(u for u in (source_urls_by_index[i] or []) if u))\n        items.append(BatchItem(header_row + i + 1, sheet, ident, source_urls=urls))\n    return items\n'''
+          assert old in s
+          s=s.replace(old,new,1)
+          old='''    pipe = ProductPipeline()\n    candidates = [type(\"Candidate\", (), {\"url\": item.source_url, \"likely_official\": True, \"score\": 1.0, \"ai_assisted\": False})()] if item.source_url else search_web(item.identity, limit=16)\n'''
+          new='''    pipe = ProductPipeline()\n    manual_urls=list(dict.fromkeys([u for u in ((item.source_urls or []) + ([item.source_url] if item.source_url else [])) if u]))\n    manual_candidates=[type(\"Candidate\", (), {\"url\": u, \"likely_official\": False, \"score\": 1.0, \"ai_assisted\": False, \"manual_source\": True})() for u in manual_urls]\n    free_candidates=search_web(item.identity, limit=16)\n    known_manual=set(manual_urls)\n    candidates=manual_candidates + [c for c in free_candidates if getattr(c,\"url\",None) not in known_manual]\n    if manual_urls:\n        log(f\"  fuentes manuales prioritarias: {len(manual_urls)}; se validan antes de cualquier resultado descubierto\")\n'''
+          assert old in s
+          s=s.replace(old,new,1)
+          s=s.replace('if getattr(candidate,"ai_assisted",False) and (rec.fetch or {}).get("source_class") != "manufacturer":', 'if (getattr(candidate,"ai_assisted",False) or getattr(candidate,"manual_source",False)) and (rec.fetch or {}).get("source_class") != "manufacturer":', 1)
+          s=s.replace('    manual_identities: list[ProductIdentity] | None = None,\n', '    manual_identities: list[ProductIdentity] | None = None,\n    manual_source_urls: list[list[str]] | None = None,\n', 1)
+          s=s.replace('items=manual_identity_items(template,manual_identities)', 'items=manual_identity_items(template,manual_identities,manual_source_urls)', 1)
+          p.write_text(s,encoding='utf-8')
+
+          # desktop.py: simplify visible UI and parse URL-bearing product entries.
+          p=Path('src/product_intelligence/desktop.py')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace('from .input_identity import parse_product_queries', 'from .input_identity import parse_product_entries', 1)
+          s=s.replace("self.title('Product Intelligence 0.10 — Excel + Scraping + IA opcional')", "self.title('Product Intelligence — Excel + Scraping web')", 1)
+          s=s.replace("ttk.Label(main,text='Product Intelligence 0.10',font=('Segoe UI',16,'bold')).pack(anchor='w')", "ttk.Label(main,text='Product Intelligence',font=('Segoe UI',16,'bold')).pack(anchor='w')", 1)
+          s=s.replace("ttk.Label(main,text='El Excel define qué datos se necesitan. El scraper sigue siendo la autoridad; la IA solo ayuda a descubrir fuentes o interpretar evidencia validada.').pack(anchor='w',pady=(2,10))", "ttk.Label(main,text='El Excel define qué datos se necesitan. Puedes pegar URLs de fichas oficiales; el scraper las valida y completa faltantes con búsqueda web gratuita.').pack(anchor='w',pady=(2,10))", 1)
+          s=s.replace("ttk.Label(pbox,text='Acepta: Part Number/MPN, EAN, UPC/GTIN o nombre. Uno por línea. Hints opcionales: | brand=... | model=... | color=... | variant=...').pack(anchor='w',pady=(4,0))", "ttk.Label(pbox,text='Acepta: MPN, EAN, UPC/GTIN o nombre. Hints opcionales: | brand=... | model=... | color=... | url=https://...  (puedes repetir url=)').pack(anchor='w',pady=(4,0))", 1)
+          s=s.replace("ttk.Label(pbox,text='Ejemplos:  JBLENDURRUN3BTBAM   ·   1234567890123   ·   JBL Tune 530C USB-C | brand=JBL | color=Negro').pack(anchor='w')", "ttk.Label(pbox,text='Ejemplo: JBLENDURRUN3BTBAM | url=https://www.jbl.com.pe/JBLENDURRUN3BTBAM.html').pack(anchor='w')", 1)
+
+          start=s.index("        ai=ttk.LabelFrame(main,text='4. IA opcional")
+          end=s.index("        btns=ttk.Frame(main);", start)
+          replacement='''        # IA removed from the normal desktop path: free web discovery + validated manual URLs\n        # are sufficient for the product scraping workflow and avoid surprise API charges.\n        self.ai_discovery=tk.BooleanVar(value=False);self.ai_enrichment=tk.BooleanVar(value=False)\n        self.ai_provider=tk.StringVar(value='off');self.ai_model=tk.StringVar(value='')\n        self.ai_base=tk.StringVar(value='');self.ai_key=tk.StringVar(value='');self.ai_country=tk.StringVar(value='PE')\n        info=ttk.LabelFrame(main,text='4. Fuentes web',padding=10);info.pack(fill='x',pady=(0,8))\n        ttk.Label(info,text='✓ URLs manuales: prioridad máxima, pero siempre validadas contra la identidad del producto.').pack(anchor='w')\n        ttk.Label(info,text='✓ Búsqueda web gratuita: completa fuentes faltantes sin API key ni llamadas de IA.').pack(anchor='w')\n        ttk.Label(info,text='✓ Prioridad de evidencia: fabricante/ficha técnica/PDF oficial → soporte oficial → fuente secundaria validada.').pack(anchor='w')\n\n'''
+          s=s[:start]+replacement+s[end:]
+
+          old='''    def _manual_identities(self):\n        return parse_product_queries(self.product_queries.get('1.0','end').strip())\n'''
+          new='''    def _manual_entries(self):\n        return parse_product_entries(self.product_queries.get('1.0','end').strip())\n\n    def _manual_identities(self):\n        return [entry.identity for entry in self._manual_entries()]\n'''
+          assert old in s
+          s=s.replace(old,new,1)
+          s=s.replace("        identities=self._manual_identities();cfg=self._ai_config()\n", "        entries=self._manual_entries();identities=[e.identity for e in entries];source_urls=[e.source_urls for e in entries];cfg=None\n", 1)
+          s=s.replace("                res=run_batch(self.excel.get(),self.out.get(),overwrite=self.overwrite.get(),log=self.emit,ai_config=cfg,manual_identities=identities or None)", "                res=run_batch(self.excel.get(),self.out.get(),overwrite=self.overwrite.get(),log=self.emit,ai_config=None,manual_identities=identities or None,manual_source_urls=source_urls or None)", 1)
+          # repair path should not call hidden AI controls.
+          s=s.replace("rep=fill_excel_v8(template,str(dest),recs,overwrite=self.overwrite.get(),trace_path=str(trace),ai_config=self._ai_config())", "rep=fill_excel_v8(template,str(dest),recs,overwrite=self.overwrite.get(),trace_path=str(trace),ai_config=None)", 1)
+          p.write_text(s,encoding='utf-8')
+
+          # discovery.py: make free manufacturer follow-up more technical and general.
+          p=Path('src/product_intelligence/discovery.py')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace("            f'\"{strong}\" \"{brand}\" specifications',\n", "            f'\"{strong}\" \"{brand}\" specifications',\n            f'\"{strong}\" \"{brand}\" datasheet',\n            f'\"{strong}\" \"{brand}\" manual',\n            f'\"{strong}\" \"{brand}\" support',\n", 1)
+          s=s.replace("for candidate in [f'\"{strong}\" product', f'{strong} specifications', f'{strong} specs', f'{strong} datasheet']:", "for candidate in [f'\"{strong}\" product', f'{strong} specifications', f'{strong} datasheet', f'{strong} manual', f'{strong} support']:", 1)
+          p.write_text(s,encoding='utf-8')
+      - name: Commit
+        run: |
+          git config user.name artosperu-bot
+          git config user.email artosperu@gmail.com
+          git add src/product_intelligence/batch.py src/product_intelligence/desktop.py src/product_intelligence/discovery.py
+          git commit -m "feat: prioritize validated manual source URLs with free fallback discovery" || exit 0
+          git push

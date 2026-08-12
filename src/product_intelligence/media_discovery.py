@@ -80,7 +80,6 @@ def _media_type(url: str, tag_hint: str | None = None) -> str:
     return "other"
 
 
-
 def classify_media_role(url: str, alt: str | None, source: str, media_type: str) -> tuple[str, bool]:
     """Separate actual product gallery assets from icons/logos/page chrome."""
     hay=key_norm_media(f"{url} {alt or ''} {source}")
@@ -103,6 +102,30 @@ def key_norm_media(v: str) -> str:
     return re.sub(r"[^a-z0-9._/-]+", " ", (v or "").lower()).strip()
 
 
+_CONDITION_TERMS = {
+    "refurbished": (r"certified[ -]?refurbished", r"refurbished", r"reacondicionad[oa]"),
+    "used": (r"\bused\b", r"\busado\b", r"pre[ -]?owned", r"segunda mano"),
+    "open_box": (r"open[ -]?box", r"caja abierta"),
+    "renewed": (r"\brenewed\b", r"renovad[oa]"),
+}
+
+
+def _condition_set(*texts: str | None) -> set[str]:
+    joined = " ".join(x or "" for x in texts).lower()
+    return {name for name, pats in _CONDITION_TERMS.items() if any(re.search(p, joined, re.I) for p in pats)}
+
+
+def _condition_mismatch(expected: ProductIdentity, *resource_context: str | None) -> bool:
+    target = _condition_set(expected.product_name, expected.model, expected.variant)
+    found = _condition_set(*resource_context)
+    return bool(found - target)
+
+
+def _has_repeated_path_segment(url: str) -> bool:
+    parts = [p.lower() for p in urlparse(url).path.split("/") if p]
+    return any(a == b for a, b in zip(parts, parts[1:]))
+
+
 def validate_resource_identity(
     resource_url: str,
     expected: ProductIdentity,
@@ -111,14 +134,7 @@ def validate_resource_identity(
     triggered_after_variant_selection: bool = False,
     surrounding_text: str | None = None,
 ) -> tuple[MediaScope, float, list[str], list[str]]:
-    """Classify a media/resource URL without assuming same-family means same-variant.
-
-    Rules are deliberately conservative:
-    - a strong identifier conflict always rejects the resource;
-    - a capacity/color/variant conflict rejects exact-variant use;
-    - resources explicitly emitted by a validated page can be family-scoped;
-    - exact-variant requires positive variant evidence, never visual similarity.
-    """
+    """Classify a media/resource URL without assuming same-family means same-variant."""
     hay = " ".join([resource_url, surrounding_text or ""]).lower()
     compact = _norm(hay)
     evidence: list[str] = []
@@ -139,18 +155,13 @@ def validate_resource_identity(
             strong_positive = True
             evidence.append(f"{name}_match")
 
-    # Detect obvious capacity conflicts in filenames/nearby text.
     target_caps = _capacity_aliases(expected.capacity)
-    # URLs/file names frequently use _, -, query params or concatenate tokens.
-    # Parse capacities independent of word boundaries, then compare canonical tokens.
     capacity_tokens = {f"{n}{u}".lower() for n,u in re.findall(r"(?<![a-z])([0-9]+(?:\.[0-9]+)?)[_\-\s]*(tb|gb)", hay, flags=re.I)}
     target_norm = {_norm(x) for x in target_caps}
     norm_caps = {_norm(x) for x in capacity_tokens}
     if target_norm and norm_caps:
         if norm_caps & target_norm:
             evidence.append("capacity_match")
-        # If a resource explicitly names a different capacity and never names the target,
-        # it cannot be treated as the target variant.
         elif norm_caps:
             conflicts.append("capacity_conflict")
 
@@ -159,18 +170,14 @@ def validate_resource_identity(
         if not value:
             continue
         nv = _norm(str(value))
-        # Only consider a positive match when the value is informative enough.
         if len(nv) >= 3 and nv in compact:
             evidence.append(f"{name}_match")
 
-    # Common color tokens let us reject an explicitly different image variant without
-    # hardcoding any brand/product. Unknown colors simply remain unverified.
     if expected.color:
         colors={"black","blue","white","red","green","gray","grey","beige","pink","purple","orange","yellow","brown","silver","gold",
                 "negro","azul","blanco","rojo","verde","gris","rosado","morado","naranjo","amarillo","cafe","plateado","dorado"}
         mentioned={c for c in colors if re.search(rf"(?<![a-z]){re.escape(c)}(?![a-z])",hay,re.I)}
         target=_norm(expected.color)
-        target_words={c for c in colors if _norm(c)==target}
         if mentioned and not any(_norm(c)==target for c in mentioned) and "color_match" not in evidence:
             conflicts.append("color_conflict")
 
@@ -201,7 +208,6 @@ def validate_resource_identity(
             return "EXACT_VARIANT", 0.98, evidence, conflicts
         if model_or_family:
             return "EXACT_PRODUCT", 0.94, evidence, conflicts
-        # Page provenance proves relationship to the product page, but not variant.
         return "PRODUCT_FAMILY", 0.84, evidence, conflicts
 
     if model_or_family and expected.brand and _norm(expected.brand) in compact:
@@ -231,14 +237,20 @@ def discover_media(
         mtype = _media_type(url, tag_hint)
         if mtype == "other":
             return
+        context = " ".join(x for x in [base_url, alt, surrounding_text] if x)
         scope, confidence, ev, conflicts = validate_resource_identity(
             url, expected,
             found_on_validated_product_page=page_is_validated,
             triggered_after_variant_selection=variant_selected,
             surrounding_text=" ".join(x for x in [alt, surrounding_text] if x),
         )
+        if mtype == "image" and _condition_mismatch(expected, context, url):
+            conflicts = list(conflicts) + ["condition_mismatch"]
+        if mtype == "image" and _has_repeated_path_segment(url):
+            conflicts = list(conflicts) + ["malformed_repeated_path_segment"]
         if conflicts:
             confidence = 0.0
+            scope = "UNVERIFIED"
         role, role_ok = classify_media_role(url, alt, source, mtype)
         obj = MediaResource(
             url=url,
@@ -291,7 +303,6 @@ def discover_media(
                 hint = "video" if "video" in meta_name else "image"
                 add(m.get("content"), f"meta:{meta_name}", tag_hint=hint)
 
-    # JSON-LD Product media.
     def walk(obj):
         if isinstance(obj, dict):
             typ = str(obj.get("@type", "")).lower()
@@ -319,8 +330,6 @@ def discover_media(
         except Exception:
             pass
 
-    # Generic embedded application JSON/state. This is common in modern storefronts where the
-    # visible gallery is backed by a JSON array rather than individual <img> tags.
     def walk_media_json(obj, path="root", context=""):
         if isinstance(obj, dict):
             ctx_parts=[]
@@ -349,17 +358,13 @@ def discover_media(
                 walk_media_json(json.loads(raw),f"script:{script.get('id') or typ or 'json'}")
             except Exception:
                 pass
-        # Last-resort public source scan for explicit image URLs inside JS configuration.
-        # Identity validation below prevents unrelated page assets from being auto-filled.
 
-    # Gallery zoom links sometimes carry the highest-resolution asset.
     for link in soup.find_all("a",href=True):
         href=link.get("href")
         ctx=" ".join([str(link.get("class") or ""),str(link.get("id") or ""),link.get_text(" ",strip=True)[:120]])
         if _media_type(urljoin(base_url,href))=="image" and (link.find("img") is not None or re.search(r"gallery|zoom|product|image",ctx,re.I)):
             add(href,f"dom:a:href:{ctx}",tag_hint="image",surrounding_text=ctx)
 
-    # Browser/network discovered public assets. Provenance is the validated product page.
     for item in network_resources or []:
         url = item.get("url")
         rtype = item.get("resource_type")

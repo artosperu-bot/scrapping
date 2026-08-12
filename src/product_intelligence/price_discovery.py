@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -12,21 +12,47 @@ from .price_identity import score_offer_identity
 from .price_models import PriceOffer
 
 
+PERU_PRICE_DOMAINS = (
+    "falabella.com.pe",
+    "ripley.com.pe",
+    "mercadolibre.com.pe",
+    "plazavea.com.pe",
+    "oechsle.pe",
+)
+
+
 def _channel(url: str) -> str:
     host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
     first = host.split(".")[0] if host else "web"
     return first.replace("-", " ").title()
 
 
-def discover_price_sources(identity: ProductIdentity, limit: int = 12) -> list[str]:
+def _priority_rank(url: str, priority_domains: tuple[str, ...]) -> tuple[int, int]:
+    host = (urlparse(url).hostname or "").lower()
+    for index, domain in enumerate(priority_domains):
+        if host == domain or host.endswith("." + domain):
+            return (0, index)
+    return (1, len(priority_domains))
+
+
+def discover_price_sources(
+    identity: ProductIdentity,
+    limit: int = 12,
+    *,
+    priority_domains: tuple[str, ...] = PERU_PRICE_DOMAINS,
+) -> list[str]:
+    # Ask the existing discovery engine for a wider pool, then bias price discovery
+    # toward the target market without dropping valid generic/foreign fallbacks.
+    candidates = search_web(identity, limit=max(limit * 3, 24))
+    urls: list[str] = []
     seen: set[str] = set()
-    out: list[str] = []
-    for candidate in search_web(identity, limit=limit):
+    for candidate in candidates:
         url = str(getattr(candidate, "url", "") or "").strip()
         if url.startswith(("http://", "https://")) and url not in seen:
             seen.add(url)
-            out.append(url)
-    return out[:limit]
+            urls.append(url)
+    urls.sort(key=lambda value: _priority_rank(value, priority_domains))
+    return urls[:limit]
 
 
 def _walk_jsonld(value):
@@ -93,6 +119,7 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                     continue
                 seller = offer.get("seller") or {}
                 seller_name = seller.get("name") if isinstance(seller, dict) else str(seller or "") or None
+                offer_url = str(offer.get("url") or url).strip()
                 rows.append(PriceOffer(
                     part_number=identity.mpn,
                     brand=identity.brand,
@@ -104,7 +131,7 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                     currency=str(offer.get("priceCurrency") or "PEN"),
                     availability=str(offer.get("availability") or "") or None,
                     condition=str(offer.get("itemCondition") or "") or None,
-                    url=str(offer.get("url") or url),
+                    url=urljoin(url, offer_url),
                     confidence=score,
                     identity_match=match,
                     source_type="structured",

@@ -17,6 +17,7 @@ class AIDiscoveryCandidate:
     country: str | None = None
     confidence: float = 0.0
     reason: str = ""
+    source_kind: str = "product_page"  # product_page | specifications | support | datasheet | manual
 
 
 def _search_formulations(data:dict[str,Any],country:str)->list[str]:
@@ -26,32 +27,44 @@ def _search_formulations(data:dict[str,Any],country:str)->list[str]:
     core=strong[0] if strong else name
     queries=[]
     if core:
-        queries += [f'"{core}" official manufacturer', f'"{core}" {brand} official' if brand else f'"{core}" product']
-        queries += [f'"{core}" {brand} {country} official' if brand else f'"{core}" {country} official']
+        queries.extend([
+            f'"{core}" {brand} official specifications' if brand else f'"{core}" official specifications',
+            f'"{core}" {brand} datasheet filetype:pdf' if brand else f'"{core}" datasheet filetype:pdf',
+            f'"{core}" {brand} support manual' if brand else f'"{core}" support manual',
+            f'"{core}" {brand} {country} official' if brand else f'"{core}" {country} official',
+        ])
     if name and strong:
-        queries.append(f'"{strong[0]}" "{name}"')
+        queries.append(f'"{strong[0]}" "{name}" specifications')
     if brand and name:
-        queries.append(f'"{name}" site:{brand.lower().replace(" ","")}.com')
-    return list(dict.fromkeys(q for q in queries if q.strip()))[:6]
+        queries.append(f'"{name}" {brand} official technical specifications')
+    return list(dict.fromkeys(q for q in queries if q.strip()))[:8]
 
 
 def _payload(identity: ProductIdentity, country: str) -> str:
     data={k:v for k,v in identity.model_dump().items() if k in {"mpn","ean","upc","gtin","brand","model","product_name","color","variant"} and v not in (None,"")}
     return json.dumps({
-        "task":"Find official manufacturer product-page URLs for this exact product. Return JSON only.",
+        "task":"Find authoritative OFFICIAL technical sources for this exact product. Return JSON only.",
         "preferred_country":country,
         "identity":data,
         "try_multiple_searches":_search_formulations(data,country),
-        "priority":["manufacturer page in preferred country","manufacturer page in nearby/Latin American region","global manufacturer page"],
+        "priority":[
+            "official manufacturer product page in preferred country with technical specifications",
+            "official manufacturer datasheet/specification PDF for the exact product",
+            "official manufacturer support/manual page for the exact product",
+            "official manufacturer product page in nearby/Latin American region",
+            "official global manufacturer product page"
+        ],
         "rules":[
-            "Use several search formulations when the first result is not the preferred regional manufacturer page.",
-            "Search every available strong identifier (MPN, EAN, UPC, GTIN) and also product name/model when present.",
+            "The goal is technical evidence, not shopping results.",
+            "Prefer pages that visibly contain specifications, downloads, manuals, datasheets or a complete official product gallery.",
+            "Use every available strong identifier (MPN, EAN, UPC, GTIN), plus product name/model when present.",
             "Treat regional domains of the same manufacturer as one manufacturer family, but rank the preferred country first.",
-            "Do not return retailers, marketplaces, comparison sites or social media as official manufacturer pages.",
-            "Return URLs as candidates only; caller validates identity, variant and source independently.",
+            "Do not return retailers, marketplaces, comparison sites, forums, social media, cached mirrors, recommendation widgets or price aggregators.",
+            "Do not infer product facts. Return candidate URLs only; the caller independently validates identity, variant and every extracted value.",
+            "If no official source can be verified, return an empty candidates array instead of substituting a retailer.",
             "Return up to 8 useful official candidates, ordered best first."
         ],
-        "output":{"candidates":[{"url":"https://example.com/product","country":"PE","confidence":0.95,"reason":"exact identifier on manufacturer page"}]}
+        "output":{"candidates":[{"url":"https://manufacturer.example/product","country":"PE","confidence":0.95,"source_kind":"specifications","reason":"exact identifier on official technical page"}]}
     },ensure_ascii=False)
 
 
@@ -66,6 +79,7 @@ def _openai_text(body: dict[str,Any]) -> str:
 
 def _parse(obj: Any) -> list[AIDiscoveryCandidate]:
     rows=(obj or {}).get("candidates",[]) if isinstance(obj,dict) else []
+    allowed_kinds={"product_page","specifications","support","datasheet","manual"}
     out=[];seen=set()
     for row in rows:
         if not isinstance(row,dict): continue
@@ -75,7 +89,15 @@ def _parse(obj: Any) -> list[AIDiscoveryCandidate]:
         seen.add(url)
         try: conf=float(row.get("confidence") or 0)
         except Exception: conf=0
-        out.append(AIDiscoveryCandidate(url=url,country=str(row.get("country") or "").strip() or None,confidence=max(0,min(conf,1)),reason=str(row.get("reason") or "")[:400]))
+        kind=str(row.get("source_kind") or "product_page").strip().lower()
+        if kind not in allowed_kinds: kind="product_page"
+        out.append(AIDiscoveryCandidate(
+            url=url,
+            country=str(row.get("country") or "").strip() or None,
+            confidence=max(0,min(conf,1)),
+            reason=str(row.get("reason") or "")[:400],
+            source_kind=kind,
+        ))
     return out[:12]
 
 
@@ -93,7 +115,7 @@ def discover_official_urls(identity: ProductIdentity, config: AIConfig | None) -
             return _parse(_json_from_text(_openai_text(r.json())))
         if c.provider=="openrouter":
             base=(c.base_url or "https://openrouter.ai/api/v1").rstrip('/')
-            body={"model":c.model,"messages":[{"role":"system","content":"Return JSON only. Find official product URLs conservatively."},{"role":"user","content":prompt}],"tools":[{"type":"openrouter:web_search","max_total_results":12}],"temperature":0}
+            body={"model":c.model,"messages":[{"role":"system","content":"Return JSON only. Find authoritative official technical product sources conservatively."},{"role":"user","content":prompt}],"tools":[{"type":"openrouter:web_search","max_total_results":12}],"temperature":0}
             r=requests.post(base+"/chat/completions",headers=headers,json=body,timeout=max(c.timeout,60))
             r.raise_for_status()
             text=(((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")

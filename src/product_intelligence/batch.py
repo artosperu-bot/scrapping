@@ -9,12 +9,13 @@ from urllib.parse import urlparse
 from openpyxl import load_workbook
 
 from .input_identity import parse_product_query
-from .discovery import search_web
+from .discovery import search_web, search_web_for_fields
 from .excel_mapper_v8 import fill_excel_v8
 from .models import ProductIdentity, ProductRecord
 from .normalize import key_norm
 from .pipeline import ProductPipeline
 from .record_builder import build_record_strict
+from .resolution_engine import analyze_resolution
 from .template_contract import analyze_template_contract
 from .template_intelligence import analyze_matrix
 
@@ -64,7 +65,6 @@ def detect_items(template: str) -> list[BatchItem]:
                 if any(x in label for x in ["source url", "url fuente", "pagina oficial", "official url"]):
                     source_url = str(value).strip()
 
-            # Explicit manufacturer identifiers always win. Seller SKU is deliberately ignored.
             for col in range(1, ws.max_column + 1):
                 header = key_norm(str(ws.cell(header_row, col).value or ""))
                 if any(x == header or x in header for x in ["mpn", "part number", "manufacturer part number", "codigo fabricante"]):
@@ -104,7 +104,6 @@ def manual_identity_items(template: str, identities: list[ProductIdentity], sour
 
 
 def manual_items(template: str, part_numbers: list[str]) -> list[BatchItem]:
-    """Backward-compatible MPN wrapper for CLI/API callers."""
     identities=[]
     for value in part_numbers:
         ident=parse_product_query(str(value))
@@ -196,7 +195,6 @@ def _merge_valid_records(records: list[ProductRecord]) -> ProductRecord:
 
 
 def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, log=lambda m: None) -> ProductRecord | None:
-    """Single product scraping path. The Excel contract decides which capabilities are needed."""
     pipe = ProductPipeline()
     manual_urls=list(dict.fromkeys([u for u in ((item.source_urls or []) + ([item.source_url] if item.source_url else [])) if u]))
     manual_candidates=[type("Candidate", (), {"url": u, "likely_official": False, "score": 1.0, "ai_assisted": False, "manual_source": True})() for u in manual_urls]
@@ -251,9 +249,6 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
             accepted.append(rec)
             log(f"  fuente validada: {(rec.fetch or {}).get('source_class', '?')} / {rec.identity.match_level}")
 
-            # A manual MPN often starts without a brand. Once the first exact source teaches us
-            # the brand/model, do a second discovery pass with that richer identity so official
-            # regional manufacturer pages can outrank retailers. This remains fully generic.
             if not manufacturer_followup_done:
                 learned_brand=rec.identity.brand or item.identity.brand
                 learned_model=rec.identity.model or rec.identity.product_name or item.identity.model
@@ -267,7 +262,6 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
                         model=learned_model,
                     )
                     followups=search_web(enriched,limit=12)
-                    # Likely manufacturer candidates go next, before remaining secondary sources.
                     fresh=[c for c in followups if c.url not in seen_urls]
                     for c in fresh: seen_urls.add(c.url)
                     fresh.sort(key=lambda c:(not bool(getattr(c,"likely_official",False)),-float(getattr(c,"score",0))))
@@ -275,8 +269,6 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
                 manufacturer_followup_done=True
 
             has_manufacturer = any((r.fetch or {}).get("source_class") == "manufacturer" for r in accepted)
-            # Prefer manufacturer evidence whenever discoverable. Do not stop merely because three
-            # retailers were accepted; allow the enriched follow-up queue to be tried first.
             if has_manufacturer and len(accepted) >= 2:
                 break
             if len(accepted) >= 5:
@@ -288,7 +280,57 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
         log("  SIN FUENTE VALIDADA: " + (errors[-1] if errors else "no hubo candidatos"))
         return None
 
+    # PASS 1: merge validated direct evidence.
     rec = _merge_valid_records(accepted)
+
+    # PASS 2: semantic resolution / applicability / contradiction analysis.
+    resolution = analyze_resolution(rec, template_plan)
+    gap_terms = list(resolution.get("research_terms") or [])
+
+    # PASS 3: targeted gap research. It is free discovery only; every URL is still forced
+    # through ProductPipeline identity validation before its facts can join the product record.
+    if gap_terms and not resolution.get("blocked"):
+        log(f"  segunda pasada por huecos: {', '.join(gap_terms[:4])}")
+        extra: list[ProductRecord] = []
+        current_sources = set(rec.sources or [])
+        for candidate in search_web_for_fields(rec.identity, gap_terms[:4], limit=10):
+            if candidate.url in seen_urls or candidate.url in current_sources:
+                continue
+            seen_urls.add(candidate.url)
+            try:
+                host=(urlparse(candidate.url).hostname or "").removeprefix("www.")
+                gap_rec=pipe.process_url(
+                    item.identity,
+                    candidate.url,
+                    official_domain=host if getattr(candidate,"likely_official",False) else None,
+                    include_pdfs=include_pdfs,
+                    include_images=include_images,
+                    browser_fallback=True,
+                    target_semantics=gap_terms,
+                    media_slots=media_slots,
+                )
+                if gap_rec.identity.identifiers_conflicting:
+                    continue
+                if accepted and not _cross_source_consistent(accepted[0], gap_rec, candidate.url):
+                    continue
+                extra.append(gap_rec)
+                log(f"  gap fuente validada: {(gap_rec.fetch or {}).get('source_class','?')} / {gap_rec.identity.match_level}")
+                if len(extra) >= 3:
+                    break
+            except Exception as exc:
+                errors.append(f"gap:{candidate.url}: {type(exc).__name__}: {exc}")
+
+        if extra:
+            accepted.extend(extra)
+            rec = _merge_valid_records(accepted)
+            resolution = analyze_resolution(rec, template_plan)
+
+    rec.evidence_graph = dict(rec.evidence_graph or {})
+    rec.evidence_graph["resolution_audit"] = resolution
+    rec.missing_fields = [row["semantic"] for row in resolution.get("fields", []) if row.get("status") == "INSUFFICIENT_EVIDENCE"]
+    for issue in resolution.get("cross_field_issues", []):
+        rec.warnings.append(f"cross_field:{issue.get('code')}")
+
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", item.identity.mpn or item.identity.ean or item.identity.model or f"row_{item.row}")
     (Path(out_dir) / f"{stem}.json").write_text(rec.model_dump_json(indent=2), encoding="utf-8")
@@ -307,7 +349,6 @@ def run_batch(
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # Contract first: understand exactly what the workbook asks before going to the web.
     template_plan = analyze_template_contract(template)
     (out / "template_contract.json").write_text(json.dumps(template_plan, ensure_ascii=False, indent=2), encoding="utf-8")
     ps = template_plan["summary"]
@@ -327,8 +368,6 @@ def run_batch(
     log(f"Productos a procesar: {len(items)}" + (" (entradas manuales: MPN/EAN/UPC/GTIN/nombre)" if manual_mode else " (detectados en Excel)"))
 
     records: list[ProductRecord] = []
-    # Every product is bound to the exact input row that created it. The mapper must not
-    # rematch records against vocabulary/reference sheets such as Marcas/Opciones.
     row_assignments: dict[tuple[str, int], ProductRecord] = {}
     failures: list[dict] = []
     for index, item in enumerate(items, 1):
@@ -346,13 +385,19 @@ def run_batch(
     report = fill_excel_v8(
         template,
         output_xlsx,
-        # Deliberately disable heuristic workbook-wide record matching. All records
-        # already have a deterministic source row, which is safer and simpler.
         [],
         overwrite=overwrite,
         trace_path=trace,
         row_assignments=row_assignments,
     )
+    resolution_summary = {
+        str(item.identity.mpn or item.identity.ean or item.identity.model or item.identity.product_name):
+        (row_assignments[(item.sheet,item.row)].evidence_graph or {}).get("resolution_audit", {})
+        for item in items if (item.sheet,item.row) in row_assignments
+    }
+    resolution_file = out / "resolucion_campos.json"
+    resolution_file.write_text(json.dumps(resolution_summary,ensure_ascii=False,indent=2),encoding="utf-8")
+
     summary = {
         "mode": "manual_product_identity" if manual_mode else "excel_detected",
         "template_contract": template_plan["summary"],
@@ -363,6 +408,7 @@ def run_batch(
         "failures": failures,
         "output_excel": output_xlsx,
         "trace": trace,
+        "resolution": str(resolution_file),
         "mapping": report.get("summary", {}),
     }
     (out / "resumen.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

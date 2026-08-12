@@ -8,10 +8,9 @@ def test_preflight_exposes_products_and_excel_actions():
     template = root / "examples" / "ProductCreationTemplate_reference.xlsx"
     data = analyze_workbook(str(template))
 
-    # Every Falabella workbook may contain a different number of populated rows and fields.
-    # Preflight must reflect the workbook, not a hardcoded category layout.
+    # Every Falabella workbook may contain a different number of real populated rows.
+    # Template examples/placeholders must not be promoted to fake products.
     assert data["summary"]["products_detected"] == len(data["products"])
-    assert data["summary"]["products_detected"] >= 1
     assert all(p["identifier"] for p in data["products"])
 
     attributes = data["attributes"]

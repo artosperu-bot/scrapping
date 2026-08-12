@@ -1,0 +1,25 @@
+[
+  {
+    "part_number": "JBLQ350WLBLKAM",
+    "seed_urls": [
+      "https://global.jbl.com/gaming-headsets/QUANTUM350WIRELESS-.html",
+      "https://uy.jbl.com/on/demandware.static/-/Sites-masterCatalog_Harman/default/dw877faebf/pdfs/JBL_Quantum_350_Wireless_SpecSheet_Spanish.pdf"
+    ],
+    "preferred_domains": ["jbl.com", "global.jbl.com", "uy.jbl.com", "support.jbl.com"]
+  },
+  {
+    "part_number": "JBLENDURRUN3BTBAM",
+    "seed_urls": [
+      "https://www.jbl.com/ENDURANCE-RUN-3-WIRELESS.html"
+    ],
+    "preferred_domains": ["jbl.com", "support.jbl.com"]
+  },
+  {
+    "part_number": "JBLT530CBLKAM",
+    "seed_urls": [
+      "https://www.jbl.com/TUNE530C-USB-C.html",
+      "https://uy.jbl.com/auriculares/TUNE530C-USB-C.html"
+    ],
+    "preferred_domains": ["jbl.com", "uy.jbl.com", "support.jbl.com"]
+  }
+]

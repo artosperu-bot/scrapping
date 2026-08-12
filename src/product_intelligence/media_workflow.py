@@ -39,6 +39,15 @@ def _page_matches_identity(html: str, url: str, identity: ProductIdentity) -> bo
     return model_ok and brand_ok
 
 
+def _is_official_product_page(url: str, identity: ProductIdentity, discovery_source: str) -> bool:
+    """Identify manufacturer/brand PDPs without a hardcoded domain allowlist."""
+    if discovery_source == "official_search":
+        return True
+    host = _norm(urlparse(url).hostname or "")
+    brand = _norm(identity.brand or identity.manufacturer)
+    return bool(brand and len(brand) >= 2 and brand in host)
+
+
 def _candidate_urls(identity: ProductIdentity, manual_urls: list[str], auto_search: bool, max_pages: int) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -60,18 +69,29 @@ def _candidate_urls(identity: ProductIdentity, manual_urls: list[str], auto_sear
     return out[:max_pages]
 
 
-def _eligible_media(row: dict) -> bool:
-    if str(row.get("media_type") or "").lower() not in {"image", "video"}:
+def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
+    """Apply stricter confidence off-site while preserving validated official galleries."""
+    media_type = str(row.get("media_type") or "").lower()
+    if media_type not in {"image", "video"}:
         return False
     if row.get("conflict_reasons"):
         return False
-    if str(row.get("role") or "") == "page_asset":
+    role = str(row.get("role") or "")
+    if role == "page_asset":
         return False
     scope = str(row.get("scope") or "")
+    if scope not in {"EXACT_VARIANT", "EXACT_PRODUCT", "PRODUCT_FAMILY"}:
+        return False
     confidence = float(row.get("confidence") or 0.0)
-    return bool(row.get("autofill_eligible")) or (
-        scope in {"EXACT_VARIANT", "EXACT_PRODUCT", "PRODUCT_FAMILY"} and confidence >= 0.80
-    )
+
+    if official_page and role in {"product_gallery", "product_video"}:
+        # A validated official PDP is stronger page-level evidence. Keep a floor
+        # so unrelated/unknown assets still cannot bypass identity scoring.
+        return confidence >= 0.84
+
+    # External discovery is intentionally conservative, even if an older
+    # classifier marked the row as autofill-eligible.
+    return confidence >= 0.95
 
 
 def run_media_product(
@@ -109,7 +129,8 @@ def run_media_product(
                 emit("page", url=final_url, source=discovery_source, status="rejected_identity")
                 continue
 
-            emit("page", url=final_url, source=discovery_source, status="validated")
+            official_page = _is_official_product_page(final_url, relaxed_identity, discovery_source)
+            emit("page", url=final_url, source=discovery_source, status="validated", official_page=official_page)
             discovered = discover_media(
                 html,
                 final_url,
@@ -119,18 +140,29 @@ def run_media_product(
             )
             for item in discovered:
                 media_url = str(item.get("url") or "").strip()
-                if not media_url or media_url in seen_media_urls or not _eligible_media(item):
+                if not media_url or media_url in seen_media_urls:
+                    continue
+                if not _eligible_media(item, official_page=official_page):
                     continue
                 seen_media_urls.add(media_url)
                 enriched = {
                     **item,
                     "page_url": final_url,
                     "page_discovery_source": discovery_source,
+                    "official_page": official_page,
                     "fetch_method": getattr(fetched, "method", None),
                 }
                 saved = download_media_item(enriched, identity, output_root)
-                results.append(saved)
-                emit("media", item=saved)
+                if saved.get("downloaded") or saved.get("metadata_only"):
+                    results.append(saved)
+                    emit("media", item=saved)
+                else:
+                    emit(
+                        "media_rejected",
+                        url=media_url,
+                        reason=str(saved.get("reason") or "not_saved"),
+                        item=saved,
+                    )
         except Exception as exc:
             emit("error", url=page_url, error=f"{type(exc).__name__}: {exc}")
 

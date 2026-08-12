@@ -287,10 +287,11 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
     resolution = analyze_resolution(rec, template_plan)
     gap_terms = list(resolution.get("research_terms") or [])
 
-    # PASS 3: targeted gap research. It is free discovery only; every URL is still forced
-    # through ProductPipeline identity validation before its facts can join the product record.
-    if gap_terms and not resolution.get("blocked"):
-        log(f"  segunda pasada por huecos: {', '.join(gap_terms[:4])}")
+    # PASS 3: targeted research for both missing fields and material conflicts. A conflict is
+    # not final until we have tried to resolve it with another identity-validated source.
+    if gap_terms:
+        mode = "conflictos/huecos" if resolution.get("blocked") else "huecos"
+        log(f"  segunda pasada por {mode}: {', '.join(gap_terms[:4])}")
         extra: list[ProductRecord] = []
         current_sources = set(rec.sources or [])
         for candidate in search_web_for_fields(rec.identity, gap_terms[:4], limit=10):
@@ -325,11 +326,15 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
             rec = _merge_valid_records(accepted)
             resolution = analyze_resolution(rec, template_plan)
 
+    # Only the post-research resolution is final. We keep the block in the audit instead of
+    # aborting before research, so unresolved contradictions are visible and never silently written.
     rec.evidence_graph = dict(rec.evidence_graph or {})
     rec.evidence_graph["resolution_audit"] = resolution
     rec.missing_fields = [row["semantic"] for row in resolution.get("fields", []) if row.get("status") == "INSUFFICIENT_EVIDENCE"]
     for issue in resolution.get("cross_field_issues", []):
         rec.warnings.append(f"cross_field:{issue.get('code')}")
+    if resolution.get("blocked"):
+        rec.warnings.append("final_material_conflict_after_targeted_research")
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", item.identity.mpn or item.identity.ean or item.identity.model or f"row_{item.row}")

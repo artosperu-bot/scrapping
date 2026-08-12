@@ -163,9 +163,10 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
         if m:
             rating = f"IP{m.group(1).upper()}{m.group(2).upper()}"
             facts["durability"]["ip_rating"] = rating
-            # Keep components as strings for compatibility with existing mappers/options.
-            facts["durability"]["dust_rating"] = None if m.group(1).upper() == "X" else m.group(1)
-            facts["durability"]["water_rating"] = m.group(2).upper()
+            dust = m.group(1).upper()
+            water = m.group(2).upper()
+            facts["durability"]["dust_rating"] = None if dust == "X" else int(dust)
+            facts["durability"]["water_rating"] = int(water) if water.isdigit() else water
 
         if re.search(r"\bin[ -]?ear\b|intraaural", joined, re.I):
             facts["form_factor"] = "in-ear"
@@ -222,7 +223,7 @@ def canonical_invariant_errors(facts: dict[str, Any]) -> list[str]:
 
     if bt.get("version") is not None and bt.get("present") is not True:
         errors.append("bluetooth_version_without_presence")
-    if durability.get("ip_rating") == "IP65" and str(durability.get("water_rating")) != "5":
+    if durability.get("ip_rating") == "IP65" and durability.get("water_rating") != 5:
         errors.append("ip65_without_water_rating_5")
     if battery.get("runtime_hours") is not None and battery.get("present") is False:
         errors.append("battery_runtime_with_battery_absent")

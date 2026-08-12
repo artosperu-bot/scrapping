@@ -16,6 +16,7 @@ from .normalize import key_norm
 from .pipeline import ProductPipeline
 from .record_builder import build_record_strict
 from .resolution_engine import analyze_resolution
+from .semantic_guard import is_placeholder
 from .template_contract import analyze_template_contract
 from .template_intelligence import analyze_matrix
 
@@ -29,6 +30,15 @@ class BatchItem:
     source_urls: list[str] | None = None
 
 
+_TEMPLATE_IDENTITY_EXAMPLES = {
+    "1234567890",
+    "99999999",
+    "999999999",
+    "abc-1000-202",
+    "abc1000202",
+}
+
+
 def _clean_id(value):
     if value is None:
         return None
@@ -38,8 +48,43 @@ def _clean_id(value):
     return text or None
 
 
+def _identity_placeholder(value) -> bool:
+    text = _clean_id(value)
+    if not text:
+        return True
+    compact = key_norm(text).replace(" ", "")
+    if compact in _TEMPLATE_IDENTITY_EXAMPLES:
+        return True
+    return is_placeholder(text)
+
+
+def _looks_like_part_number(value: str | None) -> bool:
+    """Conservative generic MPN heuristic used only when no stronger identifier exists."""
+    text = str(value or "").strip()
+    if not text or " " in text or len(text) < 6 or len(text) > 48:
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", text):
+        return False
+    # Pure numbers belong to GTIN/EAN/UPC, not MPN inference.
+    if text.isdigit():
+        return False
+    letters = sum(ch.isalpha() for ch in text)
+    digits = sum(ch.isdigit() for ch in text)
+    return letters >= 2 and digits >= 1
+
+
+def _promote_mpn(vals: dict[str, str]) -> None:
+    if vals.get("mpn"):
+        return
+    for key in ("model", "product_name"):
+        value = vals.get(key)
+        if _looks_like_part_number(value):
+            vals["mpn"] = value
+            return
+
+
 def detect_items(template: str) -> list[BatchItem]:
-    """Detect product identities from the workbook without importing seller data into identity."""
+    """Detect product identities while ignoring marketplace/template example values."""
     wb = load_workbook(template, data_only=False, read_only=False)
     items: list[BatchItem] = []
     for ws in wb.worksheets:
@@ -59,17 +104,26 @@ def detect_items(template: str) -> list[BatchItem]:
                 label = key_norm(field["label"])
                 canonical = field.get("canonical")
                 if canonical in {"brand", "model", "ean", "upc", "gtin", "mpn"}:
-                    vals[canonical] = _clean_id(value)
+                    cleaned = _clean_id(value)
+                    if canonical in {"ean", "upc", "gtin", "mpn"} and _identity_placeholder(cleaned):
+                        continue
+                    vals[canonical] = cleaned
                 if field.get("external_id") == "39" or canonical == "product_name":
-                    vals["product_name"] = str(value).strip()
+                    text = str(value).strip()
+                    if not _identity_placeholder(text):
+                        vals["product_name"] = text
                 if any(x in label for x in ["source url", "url fuente", "pagina oficial", "official url"]):
                     source_url = str(value).strip()
 
+            # Some marketplace templates have no explicit MPN column. Scan literal headers too.
             for col in range(1, ws.max_column + 1):
                 header = key_norm(str(ws.cell(header_row, col).value or ""))
                 if any(x == header or x in header for x in ["mpn", "part number", "manufacturer part number", "codigo fabricante"]):
-                    vals["mpn"] = _clean_id(ws.cell(row, col).value)
+                    candidate = _clean_id(ws.cell(row, col).value)
+                    if candidate and not _identity_placeholder(candidate):
+                        vals["mpn"] = candidate
 
+            _promote_mpn(vals)
             if not any(vals.get(k) for k in ["mpn", "ean", "upc", "gtin", "model", "product_name"]):
                 continue
             identity = ProductIdentity(**{k: v for k, v in vals.items() if k in ProductIdentity.model_fields})
@@ -92,23 +146,24 @@ def _best_product_sheet(template: str) -> tuple[str, int]:
 
 
 def manual_identity_items(template: str, identities: list[ProductIdentity], source_urls_by_index: list[list[str]] | None = None) -> list[BatchItem]:
-    """Bind identities to rows; user URLs are priority candidates, never trusted evidence."""
+    """Bind identities to rows; user URLs are priority candidates, never blindly trusted evidence."""
     sheet, header_row = _best_product_sheet(template)
-    items=[]
+    items = []
     for i, ident in enumerate(identities):
-        urls=[]
+        urls = []
         if source_urls_by_index and i < len(source_urls_by_index):
-            urls=list(dict.fromkeys(u for u in (source_urls_by_index[i] or []) if u))
+            urls = list(dict.fromkeys(u for u in (source_urls_by_index[i] or []) if u))
         items.append(BatchItem(header_row + i + 1, sheet, ident, source_urls=urls))
     return items
 
 
 def manual_items(template: str, part_numbers: list[str]) -> list[BatchItem]:
-    identities=[]
+    identities = []
     for value in part_numbers:
-        ident=parse_product_query(str(value))
-        if ident: identities.append(ident)
-    return manual_identity_items(template,identities)
+        ident = parse_product_query(str(value))
+        if ident:
+            identities.append(ident)
+    return manual_identity_items(template, identities)
 
 
 def _meaningful_product_tokens(value: str | None) -> set[str]:
@@ -194,38 +249,110 @@ def _merge_valid_records(records: list[ProductRecord]) -> ProductRecord:
     return merged
 
 
+def _compact(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", key_norm(value or ""))
+
+
+def _candidate_official_domain(candidate, identity: ProductIdentity, accepted: list[ProductRecord]) -> str | None:
+    host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
+    if not host:
+        return None
+    if bool(getattr(candidate, "likely_official", False)):
+        return host
+
+    host_compact = _compact(host)
+    known_brands = [identity.brand] + [r.identity.brand for r in accepted]
+    for brand in known_brands:
+        b = _compact(brand)
+        if b and b in host_compact:
+            return host
+
+    # Manual seed URLs are authoritative candidates, not authoritative facts. When brand is
+    # still unknown, allow a conservative hostname/strong-id prefix hint (e.g. jbl.com + JBL...).
+    if getattr(candidate, "manual_source", False):
+        label = _compact(host.split(".")[0])
+        strong = _compact(identity.mpn or identity.model or identity.product_name)
+        if len(label) >= 3 and strong and strong.startswith(label):
+            return host
+    return None
+
+
+def _manufacturer_domains(records: list[ProductRecord]) -> set[str]:
+    out: set[str] = set()
+    for rec in records:
+        if (rec.fetch or {}).get("source_class") != "manufacturer":
+            continue
+        for url in [rec.fetch.get("final_url") if rec.fetch else None, *(rec.sources or [])]:
+            if not url:
+                continue
+            host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+            if host:
+                out.add(host)
+    return out
+
+
+def _resolution_for(records: list[ProductRecord], template_plan: dict | None) -> tuple[ProductRecord, dict]:
+    merged = _merge_valid_records(records)
+    return merged, analyze_resolution(merged, template_plan)
+
+
+def _coverage_sufficient(resolution: dict, has_manufacturer: bool) -> bool:
+    """Stop because requested fields are resolved, never because N pages were seen."""
+    if not has_manufacturer or resolution.get("blocked"):
+        return False
+    return not list(resolution.get("research_terms") or [])
+
+
+def _enriched_identity(item: BatchItem, rec: ProductRecord) -> ProductIdentity | None:
+    learned_brand = rec.identity.brand or item.identity.brand
+    learned_model = rec.identity.model or rec.identity.product_name or item.identity.model or item.identity.product_name
+    strong = item.identity.mpn or item.identity.ean or item.identity.upc or item.identity.gtin or rec.identity.mpn or rec.identity.gtin
+    if not learned_brand or not strong:
+        return None
+    return ProductIdentity(
+        mpn=item.identity.mpn or rec.identity.mpn,
+        ean=item.identity.ean or rec.identity.ean,
+        upc=item.identity.upc or rec.identity.upc,
+        gtin=item.identity.gtin or rec.identity.gtin,
+        brand=learned_brand,
+        model=learned_model,
+    )
+
+
+def _prioritize(candidates) -> list:
+    return sorted(candidates, key=lambda c: (not bool(getattr(c, "likely_official", False)), -float(getattr(c, "score", 0))))
+
+
 def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, log=lambda m: None) -> ProductRecord | None:
     pipe = ProductPipeline()
-    manual_urls=list(dict.fromkeys([u for u in ((item.source_urls or []) + ([item.source_url] if item.source_url else [])) if u]))
-    manual_candidates=[type("Candidate", (), {"url": u, "likely_official": False, "score": 1.0, "ai_assisted": False, "manual_source": True})() for u in manual_urls]
-    free_candidates=search_web(item.identity, limit=16)
-    known_manual=set(manual_urls)
-    candidates=manual_candidates + [c for c in free_candidates if getattr(c,"url",None) not in known_manual]
+    manual_urls = list(dict.fromkeys([u for u in ((item.source_urls or []) + ([item.source_url] if item.source_url else [])) if u]))
+    manual_candidates = [
+        type("Candidate", (), {"url": u, "likely_official": False, "score": 2.0, "ai_assisted": False, "manual_source": True})()
+        for u in manual_urls
+    ]
+    free_candidates = search_web(item.identity, limit=18)
+    known_manual = set(manual_urls)
+    candidates = manual_candidates + _prioritize([c for c in free_candidates if getattr(c, "url", None) not in known_manual])
     if manual_urls:
-        log(f"  fuentes manuales prioritarias: {len(manual_urls)}; todas pasan por validación de identidad")
+        log(f"  fuentes manuales prioritarias: {len(manual_urls)}; se validan antes de aceptar evidencia")
+
     media_slots = int((template_plan or {}).get("media_slots", 0) or 0)
     target_semantics = list((template_plan or {}).get("scrape_semantics") or [])
     include_images = bool(media_slots)
     include_pdfs = bool((template_plan or {}).get("summary", {}).get("scrape_targets", 1))
     errors: list[str] = []
     accepted: list[ProductRecord] = []
-    queue=list(candidates)
-    seen_urls={getattr(c,"url","") for c in queue}
-    manufacturer_followup_done=False
-    cursor=0
+    queue = list(candidates)
+    seen_urls = {getattr(c, "url", "") for c in queue}
+    manufacturer_followup_done = False
+    cursor = 0
+    max_validated_sources = 10
 
-    while cursor < len(queue):
-        candidate=queue[cursor]
+    while cursor < len(queue) and len(accepted) < max_validated_sources:
+        candidate = queue[cursor]
         cursor += 1
         try:
-            host = (urlparse(candidate.url).hostname or "").removeprefix("www.")
-            official_domain = host if getattr(candidate, "likely_official", False) else None
-            if not official_domain and accepted:
-                brand = re.sub(r"[^a-z0-9]", "", key_norm(accepted[0].identity.brand or ""))
-                host_compact = re.sub(r"[^a-z0-9]", "", key_norm(host))
-                if brand and brand in host_compact:
-                    official_domain = host
-
+            official_domain = _candidate_official_domain(candidate, item.identity, accepted)
             log(f"  probando: {candidate.url}")
             rec = pipe.process_url(
                 item.identity,
@@ -239,40 +366,50 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
             )
             if rec.identity.identifiers_conflicting:
                 raise ValueError("identificadores en conflicto")
-            if getattr(candidate,"manual_source",False) and (rec.fetch or {}).get("source_class") != "manufacturer":
-                learned_brand=re.sub(r"[^a-z0-9]","",key_norm(rec.identity.brand or ""))
-                host_compact=re.sub(r"[^a-z0-9]","",key_norm(host))
-                if learned_brand and learned_brand in host_compact:
-                    rec=pipe.process_url(item.identity,candidate.url,official_domain=host,include_pdfs=include_pdfs,include_images=include_images,browser_fallback=True,target_semantics=target_semantics,media_slots=media_slots)
+
+            # A manual official seed can initially arrive without brand metadata. If the page itself
+            # establishes a brand matching its host, re-process as manufacturer to unlock official PDFs.
+            if getattr(candidate, "manual_source", False) and (rec.fetch or {}).get("source_class") != "manufacturer":
+                learned_brand = _compact(rec.identity.brand)
+                host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
+                if learned_brand and learned_brand in _compact(host):
+                    rec = pipe.process_url(
+                        item.identity,
+                        candidate.url,
+                        official_domain=host,
+                        include_pdfs=include_pdfs,
+                        include_images=include_images,
+                        browser_fallback=True,
+                        target_semantics=target_semantics,
+                        media_slots=media_slots,
+                    )
+
             if accepted and not _cross_source_consistent(accepted[0], rec, candidate.url):
                 raise ValueError("fuente exacta contiene el identificador pero no representa la misma ficha de producto")
             accepted.append(rec)
             log(f"  fuente validada: {(rec.fetch or {}).get('source_class', '?')} / {rec.identity.match_level}")
 
+            # As soon as brand is learned from a validated page, explicitly re-run discovery using
+            # brand + strong identifier and inject official/manufacturer candidates before secondaries.
             if not manufacturer_followup_done:
-                learned_brand=rec.identity.brand or item.identity.brand
-                learned_model=rec.identity.model or rec.identity.product_name or item.identity.model
-                if learned_brand and (item.identity.mpn or item.identity.ean or item.identity.upc or item.identity.gtin):
-                    enriched=ProductIdentity(
-                        mpn=item.identity.mpn or rec.identity.mpn,
-                        ean=item.identity.ean or rec.identity.ean,
-                        upc=item.identity.upc or rec.identity.upc,
-                        gtin=item.identity.gtin or rec.identity.gtin,
-                        brand=learned_brand,
-                        model=learned_model,
-                    )
-                    followups=search_web(enriched,limit=12)
-                    fresh=[c for c in followups if c.url not in seen_urls]
-                    for c in fresh: seen_urls.add(c.url)
-                    fresh.sort(key=lambda c:(not bool(getattr(c,"likely_official",False)),-float(getattr(c,"score",0))))
-                    queue[cursor:cursor]=fresh
-                manufacturer_followup_done=True
+                enriched = _enriched_identity(item, rec)
+                if enriched:
+                    followups = search_web(enriched, limit=20)
+                    fresh = [c for c in followups if c.url not in seen_urls]
+                    for c in fresh:
+                        seen_urls.add(c.url)
+                    queue[cursor:cursor] = _prioritize(fresh)
+                    log(f"  búsqueda fabricante reforzada: {len(fresh)} candidatos nuevos")
+                manufacturer_followup_done = True
 
             has_manufacturer = any((r.fetch or {}).get("source_class") == "manufacturer" for r in accepted)
-            if has_manufacturer and len(accepted) >= 2:
-                break
-            if len(accepted) >= 5:
-                break
+            if has_manufacturer:
+                _merged, partial_resolution = _resolution_for(accepted, template_plan)
+                remaining = list(partial_resolution.get("research_terms") or [])
+                log(f"  cobertura actual: {len(target_semantics) - len(remaining)}/{len(target_semantics)} semánticas; pendientes={len(remaining)}")
+                if _coverage_sufficient(partial_resolution, has_manufacturer=True):
+                    log("  cobertura suficiente con fabricante validado; se detiene PASS 1")
+                    break
         except Exception as exc:
             errors.append(f"{candidate.url}: {type(exc).__name__}: {exc}")
 
@@ -280,54 +417,74 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
         log("  SIN FUENTE VALIDADA: " + (errors[-1] if errors else "no hubo candidatos"))
         return None
 
-    # PASS 1: merge validated direct evidence.
+    # PASS 1: merge all validated evidence. The primary source is ranked manufacturer-first.
     rec = _merge_valid_records(accepted)
 
     # PASS 2: semantic resolution / applicability / contradiction analysis.
     resolution = analyze_resolution(rec, template_plan)
     gap_terms = list(resolution.get("research_terms") or [])
 
-    # PASS 3: targeted research for both missing fields and material conflicts. A conflict is
-    # not final until we have tried to resolve it with another identity-validated source.
+    # PASS 3: targeted gap research for every unresolved semantic returned by the resolver.
+    # Search in small groups so a single generic query does not dilute technical intent.
     if gap_terms:
         mode = "conflictos/huecos" if resolution.get("blocked") else "huecos"
-        log(f"  segunda pasada por {mode}: {', '.join(gap_terms[:4])}")
-        extra: list[ProductRecord] = []
+        log(f"  segunda pasada por {mode}: {len(gap_terms)} campos/grupos pendientes")
         current_sources = set(rec.sources or [])
-        for candidate in search_web_for_fields(rec.identity, gap_terms[:4], limit=10):
-            if candidate.url in seen_urls or candidate.url in current_sources:
-                continue
-            seen_urls.add(candidate.url)
-            try:
-                host=(urlparse(candidate.url).hostname or "").removeprefix("www.")
-                gap_rec=pipe.process_url(
-                    item.identity,
-                    candidate.url,
-                    official_domain=host if getattr(candidate,"likely_official",False) else None,
-                    include_pdfs=include_pdfs,
-                    include_images=include_images,
-                    browser_fallback=True,
-                    target_semantics=gap_terms,
-                    media_slots=media_slots,
-                )
-                if gap_rec.identity.identifiers_conflicting:
-                    continue
-                if accepted and not _cross_source_consistent(accepted[0], gap_rec, candidate.url):
-                    continue
-                extra.append(gap_rec)
-                log(f"  gap fuente validada: {(gap_rec.fetch or {}).get('source_class','?')} / {gap_rec.identity.match_level}")
-                if len(extra) >= 3:
+        total_extra = 0
+        max_extra = 8
+
+        for start in range(0, len(gap_terms), 4):
+            if total_extra >= max_extra:
+                break
+            chunk = gap_terms[start:start + 4]
+            log(f"    buscando específicamente: {', '.join(chunk)}")
+            chunk_candidates = _prioritize(search_web_for_fields(rec.identity, chunk, limit=12))
+            chunk_extra: list[ProductRecord] = []
+
+            for candidate in chunk_candidates:
+                if total_extra >= max_extra:
                     break
-            except Exception as exc:
-                errors.append(f"gap:{candidate.url}: {type(exc).__name__}: {exc}")
+                if candidate.url in seen_urls or candidate.url in current_sources:
+                    continue
+                seen_urls.add(candidate.url)
+                try:
+                    official_domain = _candidate_official_domain(candidate, rec.identity, accepted)
+                    gap_rec = pipe.process_url(
+                        item.identity,
+                        candidate.url,
+                        official_domain=official_domain,
+                        include_pdfs=include_pdfs,
+                        include_images=include_images,
+                        browser_fallback=True,
+                        target_semantics=chunk,
+                        media_slots=media_slots,
+                    )
+                    if gap_rec.identity.identifiers_conflicting:
+                        continue
+                    if accepted and not _cross_source_consistent(accepted[0], gap_rec, candidate.url):
+                        continue
+                    chunk_extra.append(gap_rec)
+                    accepted.append(gap_rec)
+                    total_extra += 1
+                    log(f"    gap fuente validada: {(gap_rec.fetch or {}).get('source_class','?')} / {gap_rec.identity.match_level}")
 
-        if extra:
-            accepted.extend(extra)
-            rec = _merge_valid_records(accepted)
-            resolution = analyze_resolution(rec, template_plan)
+                    # Two validated sources per gap group are normally enough; manufacturer evidence
+                    # gets first priority due to candidate ordering and record ranking.
+                    if len(chunk_extra) >= 2:
+                        break
+                except Exception as exc:
+                    errors.append(f"gap:{candidate.url}: {type(exc).__name__}: {exc}")
 
-    # Only the post-research resolution is final. We keep the block in the audit instead of
-    # aborting before research, so unresolved contradictions are visible and never silently written.
+            if chunk_extra:
+                rec = _merge_valid_records(accepted)
+                resolution = analyze_resolution(rec, template_plan)
+                gap_terms = list(resolution.get("research_terms") or [])
+                if not gap_terms and not resolution.get("blocked"):
+                    log("  PASS 3 completó todos los huecos resolubles")
+                    break
+
+    # Only the post-research resolution is final. Unresolved contradictions stay visible and
+    # are never silently written by the Excel layer.
     rec.evidence_graph = dict(rec.evidence_graph or {})
     rec.evidence_graph["resolution_audit"] = resolution
     rec.missing_fields = [row["semantic"] for row in resolution.get("fields", []) if row.get("status") == "INSUFFICIENT_EVIDENCE"]
@@ -365,11 +522,11 @@ def run_batch(
 
     manual_mode = bool(manual_identities or manual_part_numbers)
     if manual_identities:
-        items=manual_identity_items(template,manual_identities,manual_source_urls)
+        items = manual_identity_items(template, manual_identities, manual_source_urls)
     elif manual_part_numbers:
-        items=manual_items(template,manual_part_numbers)
+        items = manual_items(template, manual_part_numbers)
     else:
-        items=detect_items(template)
+        items = detect_items(template)
     log(f"Productos a procesar: {len(items)}" + (" (entradas manuales: MPN/EAN/UPC/GTIN/nombre)" if manual_mode else " (detectados en Excel)"))
 
     records: list[ProductRecord] = []
@@ -397,11 +554,11 @@ def run_batch(
     )
     resolution_summary = {
         str(item.identity.mpn or item.identity.ean or item.identity.model or item.identity.product_name):
-        (row_assignments[(item.sheet,item.row)].evidence_graph or {}).get("resolution_audit", {})
-        for item in items if (item.sheet,item.row) in row_assignments
+        (row_assignments[(item.sheet, item.row)].evidence_graph or {}).get("resolution_audit", {})
+        for item in items if (item.sheet, item.row) in row_assignments
     }
     resolution_file = out / "resolucion_campos.json"
-    resolution_file.write_text(json.dumps(resolution_summary,ensure_ascii=False,indent=2),encoding="utf-8")
+    resolution_file.write_text(json.dumps(resolution_summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     summary = {
         "mode": "manual_product_identity" if manual_mode else "excel_detected",

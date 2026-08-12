@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import re
 import sys
 import threading
 import traceback
@@ -11,69 +10,85 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-# Frozen build can bundle Playwright browsers under vendor/ms-playwright.
+
 def _configure_frozen_browser():
     base=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parents[2]))
     bundled=base/'vendor'/'ms-playwright'
-    if bundled.exists():
-        os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH',str(bundled))
+    if bundled.exists():os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH',str(bundled))
 _configure_frozen_browser()
 
 from .batch import run_batch
 from .ai_enrichment import AIConfig
+from .input_identity import parse_product_queries
+from .model_catalog import DEFAULT_MODELS, capability, list_models
 from .excel_mapper_v8 import fill_excel_v8
 from .models import ProductRecord
 from .repair import repair_existing_record
 
 
+PROVIDER_DEFAULTS={
+    'openai':('https://api.openai.com/v1','gpt-5-mini-2025-08-07'),
+    'openrouter':('https://openrouter.ai/api/v1','openai/gpt-5-mini'),
+    'mistral':('https://api.mistral.ai/v1','mistral-small-latest'),
+    'ollama':('http://127.0.0.1:11434','mistral'),
+    'openai_compatible':('',''),
+}
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('Product Intelligence V9 — Part Numbers + Scraping + Excel')
-        self.geometry('940x760')
-        self.minsize(820,560)
-        self.q=queue.Queue()
-        self._build()
-        self.after(150,self._drain)
+        self.title('Product Intelligence 0.10 — Excel + Scraping + IA opcional')
+        self.geometry('1040x900');self.minsize(900,700)
+        self.q=queue.Queue();self._build();self.after(150,self._drain)
 
     def _build(self):
         main=ttk.Frame(self,padding=14);main.pack(fill='both',expand=True)
-        ttk.Label(main,text='Product Intelligence V9',font=('Segoe UI',16,'bold')).pack(anchor='w')
-        ttk.Label(main,text='Pega part numbers o deja el cuadro vacío para detectarlos en el Excel. Valida identidad/variante y completa solo datos respaldados.').pack(anchor='w',pady=(2,12))
+        ttk.Label(main,text='Product Intelligence 0.10',font=('Segoe UI',16,'bold')).pack(anchor='w')
+        ttk.Label(main,text='El Excel define qué datos se necesitan. El scraper sigue siendo la autoridad; la IA solo ayuda a descubrir fuentes o interpretar evidencia validada.').pack(anchor='w',pady=(2,10))
 
         f=ttk.LabelFrame(main,text='1. Plantilla Excel',padding=10);f.pack(fill='x')
-        self.excel=tk.StringVar(); ttk.Entry(f,textvariable=self.excel).pack(side='left',fill='x',expand=True)
+        self.excel=tk.StringVar();ttk.Entry(f,textvariable=self.excel).pack(side='left',fill='x',expand=True)
         ttk.Button(f,text='Elegir...',command=self.pick_excel).pack(side='left',padx=(8,0))
 
-        pn=ttk.LabelFrame(main,text='2. Part numbers a buscar (uno por línea, coma o punto y coma)',padding=10);pn.pack(fill='x',pady=8)
-        self.part_numbers=tk.Text(pn,height=4,wrap='word',font=('Consolas',10))
-        self.part_numbers.pack(fill='x',expand=True)
-        ttk.Label(pn,text='Ejemplo: JBLQ350WLBLKAM, JBLENDURRUN3BTBAM, JBLT530CBLKAM. Si lo dejas vacío, se detectan productos desde el Excel.').pack(anchor='w',pady=(4,0))
+        pbox=ttk.LabelFrame(main,text='2. Productos a buscar — basta UN dato principal por producto',padding=10);pbox.pack(fill='x',pady=8)
+        self.product_queries=tk.Text(pbox,height=5,wrap='word',font=('Consolas',10));self.product_queries.pack(fill='x')
+        ttk.Label(pbox,text='Acepta: Part Number/MPN, EAN, UPC/GTIN o nombre. Uno por línea. Hints opcionales: | brand=... | model=... | color=... | variant=...').pack(anchor='w',pady=(4,0))
+        ttk.Label(pbox,text='Ejemplos:  JBLENDURRUN3BTBAM   ·   1234567890123   ·   JBL Tune 530C USB-C | brand=JBL | color=Negro').pack(anchor='w')
+        ttk.Label(pbox,text='Si queda vacío, el programa detecta las identidades presentes en el Excel.').pack(anchor='w')
 
         g=ttk.LabelFrame(main,text='3. Carpeta de salida',padding=10);g.pack(fill='x',pady=8)
-        self.out=tk.StringVar(value=str(Path.home()/'ProductIntelligence_Output')); ttk.Entry(g,textvariable=self.out).pack(side='left',fill='x',expand=True)
+        self.out=tk.StringVar(value=str(Path.home()/'ProductIntelligence_Output'));ttk.Entry(g,textvariable=self.out).pack(side='left',fill='x',expand=True)
         ttk.Button(g,text='Elegir...',command=self.pick_out).pack(side='left',padx=(8,0))
 
-        opts=ttk.Frame(main);opts.pack(fill='x',pady=(2,8))
+        opts=ttk.Frame(main);opts.pack(fill='x',pady=(0,8))
         self.overwrite=tk.BooleanVar(value=False)
-        ttk.Checkbutton(opts,text='Sobrescribir valores existentes (excepto datos del vendedor protegidos)',variable=self.overwrite).pack(side='left')
+        ttk.Checkbutton(opts,text='Sobrescribir datos de producto existentes; proteger precio/SKU/stock y demás datos del vendedor',variable=self.overwrite).pack(side='left')
 
-        ai_box=ttk.LabelFrame(main,text='IA asistida opcional (solo evidencia scrapeada)',padding=8);ai_box.pack(fill='x',pady=(0,8))
-        self.ai_enabled=tk.BooleanVar(value=False)
-        ttk.Checkbutton(ai_box,text='Usar IA para descripción y campos ambiguos',variable=self.ai_enabled).grid(row=0,column=0,columnspan=2,sticky='w')
-        ttk.Label(ai_box,text='Proveedor').grid(row=1,column=0,sticky='w',pady=(5,0))
-        self.ai_provider=tk.StringVar(value='ollama')
-        ttk.Combobox(ai_box,textvariable=self.ai_provider,values=['ollama','openai_compatible'],state='readonly',width=20).grid(row=1,column=1,sticky='w',padx=(6,12),pady=(5,0))
-        ttk.Label(ai_box,text='Modelo').grid(row=1,column=2,sticky='w',pady=(5,0))
-        self.ai_model=tk.StringVar(value='')
-        ttk.Entry(ai_box,textvariable=self.ai_model,width=24).grid(row=1,column=3,sticky='ew',padx=(6,12),pady=(5,0))
-        ttk.Label(ai_box,text='Base URL').grid(row=2,column=0,sticky='w',pady=(5,0))
-        self.ai_base=tk.StringVar(value='http://127.0.0.1:11434')
-        ttk.Entry(ai_box,textvariable=self.ai_base).grid(row=2,column=1,columnspan=3,sticky='ew',padx=(6,12),pady=(5,0))
-        ttk.Label(ai_box,text='API key (si aplica)').grid(row=3,column=0,sticky='w',pady=(5,0))
-        self.ai_key=tk.StringVar(value='')
-        ttk.Entry(ai_box,textvariable=self.ai_key,show='*').grid(row=3,column=1,columnspan=3,sticky='ew',padx=(6,12),pady=(5,0))
-        ai_box.columnconfigure(3,weight=1)
+        ai=ttk.LabelFrame(main,text='4. IA opcional — nunca reemplaza el scraping',padding=10);ai.pack(fill='x',pady=(0,8))
+        self.ai_discovery=tk.BooleanVar(value=True);self.ai_enrichment=tk.BooleanVar(value=False)
+        ttk.Checkbutton(ai,text='IA Web Discovery: ayudar a encontrar mejores URLs oficiales/regionales cuando haga falta',variable=self.ai_discovery,command=self._refresh_capability).grid(row=0,column=0,columnspan=4,sticky='w')
+        ttk.Checkbutton(ai,text='IA sobre evidencia: ayudar con descripción/campos ambiguos SOLO después del scraping validado',variable=self.ai_enrichment,command=self._refresh_capability).grid(row=1,column=0,columnspan=4,sticky='w')
+
+        ttk.Label(ai,text='Proveedor').grid(row=2,column=0,sticky='w',pady=(8,0))
+        self.ai_provider=tk.StringVar(value='openai')
+        self.provider_combo=ttk.Combobox(ai,textvariable=self.ai_provider,values=['openai','openrouter','mistral','ollama','openai_compatible'],state='readonly',width=19)
+        self.provider_combo.grid(row=2,column=1,sticky='w',padx=(6,16),pady=(8,0));self.provider_combo.bind('<<ComboboxSelected>>',self._provider_changed)
+
+        ttk.Label(ai,text='Modelo').grid(row=2,column=2,sticky='w',pady=(8,0))
+        self.ai_model=tk.StringVar(value='gpt-5-mini-2025-08-07')
+        self.model_combo=ttk.Combobox(ai,textvariable=self.ai_model,values=DEFAULT_MODELS['openai'],width=34)
+        self.model_combo.grid(row=2,column=3,sticky='ew',padx=(6,6),pady=(8,0));self.model_combo.bind('<<ComboboxSelected>>',lambda _e:self._refresh_capability())
+        ttk.Button(ai,text='Cargar modelos',command=self.load_models).grid(row=2,column=4,sticky='w',pady=(8,0))
+
+        ttk.Label(ai,text='Base URL').grid(row=3,column=0,sticky='w',pady=(6,0))
+        self.ai_base=tk.StringVar(value='https://api.openai.com/v1');ttk.Entry(ai,textvariable=self.ai_base).grid(row=3,column=1,columnspan=4,sticky='ew',padx=(6,0),pady=(6,0))
+        ttk.Label(ai,text='API key').grid(row=4,column=0,sticky='w',pady=(6,0))
+        self.ai_key=tk.StringVar();ttk.Entry(ai,textvariable=self.ai_key,show='*').grid(row=4,column=1,columnspan=2,sticky='ew',padx=(6,16),pady=(6,0))
+        ttk.Label(ai,text='País preferido').grid(row=4,column=3,sticky='e',pady=(6,0))
+        self.ai_country=tk.StringVar(value='PE');ttk.Entry(ai,textvariable=self.ai_country,width=6).grid(row=4,column=4,sticky='w',padx=(6,0),pady=(6,0))
+        self.ai_status=tk.StringVar();ttk.Label(ai,textvariable=self.ai_status).grid(row=5,column=0,columnspan=5,sticky='w',pady=(7,0))
+        ai.columnconfigure(3,weight=1);self._refresh_capability()
 
         btns=ttk.Frame(main);btns.pack(fill='x')
         self.runbtn=ttk.Button(btns,text='EJECUTAR SCRAPING Y COMPLETAR EXCEL',command=self.run);self.runbtn.pack(side='left')
@@ -81,80 +96,87 @@ class App(tk.Tk):
 
         ttk.Separator(main).pack(fill='x',pady=12)
         ttk.Label(main,text='Actividad / auditoría').pack(anchor='w')
-        self.log=tk.Text(main,height=22,wrap='word',font=('Consolas',9));self.log.pack(fill='both',expand=True,pady=(4,0))
-        self.log.insert('end','Listo. Selecciona una plantilla.\n')
+        self.log=tk.Text(main,height=20,wrap='word',font=('Consolas',9));self.log.pack(fill='both',expand=True,pady=(4,0))
+        self.log.insert('end','Listo. Selecciona una plantilla Excel.\n')
 
     def pick_excel(self):
-        p=filedialog.askopenfilename(filetypes=[('Excel','*.xlsx')]);
+        p=filedialog.askopenfilename(filetypes=[('Excel','*.xlsx')])
         if p:self.excel.set(p);self.out.set(str(Path(p).parent/(Path(p).stem+'_salida')))
     def pick_out(self):
-        p=filedialog.askdirectory();
+        p=filedialog.askdirectory()
         if p:self.out.set(p)
     def emit(self,msg):self.q.put(str(msg))
-    def _ai_config(self):
-        provider=self.ai_provider.get().strip() if self.ai_enabled.get() else 'off'
-        base=self.ai_base.get().strip()
-        if provider=='openai_compatible' and not base:
-            base='https://api.openai.com/v1'
-        if provider=='ollama' and not base:
-            base='http://127.0.0.1:11434'
-        return AIConfig(enabled=self.ai_enabled.get(),provider=provider,model=self.ai_model.get().strip(),base_url=base,api_key=self.ai_key.get().strip())
     def _drain(self):
         try:
             while True:
                 m=self.q.get_nowait();self.log.insert('end',m+'\n');self.log.see('end')
         except queue.Empty:pass
         self.after(150,self._drain)
-    def _manual_part_numbers(self):
-        raw=self.part_numbers.get('1.0','end').strip()
-        if not raw:return []
-        parts=re.split(r'[\s,;]+',raw)
-        out=[];seen=set()
-        for p in parts:
-            p=p.strip()
-            if not p:continue
-            k=p.upper()
-            if k in seen:continue
-            seen.add(k);out.append(p)
-        return out
+
+    def _provider_changed(self,_event=None):
+        provider=self.ai_provider.get();base,model=PROVIDER_DEFAULTS.get(provider,('',''))
+        self.ai_base.set(base);self.ai_model.set(model);self.model_combo.configure(values=DEFAULT_MODELS.get(provider,[]));self._refresh_capability()
+
+    def _refresh_capability(self):
+        cap=capability(self.ai_provider.get(),self.ai_model.get())
+        web='Sí' if cap.web_discovery else 'No'
+        evidence='Sí' if cap.evidence_enrichment else 'No'
+        suffix=''
+        if self.ai_discovery.get() and not cap.web_discovery:
+            suffix=' — Para este proveedor, Web Discovery queda desactivado; usa OpenRouter si quieres este modelo + Internet.'
+        self.ai_status.set(f'Capacidades detectadas → Web Discovery: {web} | Interpretar evidencia: {evidence}.{suffix}')
+
+    def load_models(self):
+        def work():
+            try:
+                cfg=AIConfig(enabled=True,provider=self.ai_provider.get(),model=self.ai_model.get(),base_url=self.ai_base.get().strip(),api_key=self.ai_key.get().strip())
+                models=list_models(cfg)
+                self.after(0,lambda:self.model_combo.configure(values=models))
+                self.emit(f'Modelos disponibles ({self.ai_provider.get()}): {len(models)}')
+            except Exception as e:self.emit(f'No se pudieron cargar modelos: {e}')
+        threading.Thread(target=work,daemon=True).start()
+
+    def _ai_config(self):
+        provider=self.ai_provider.get().strip();model=self.ai_model.get().strip();cap=capability(provider,model)
+        discovery=bool(self.ai_discovery.get() and cap.web_discovery)
+        enrichment=bool(self.ai_enrichment.get() and cap.evidence_enrichment)
+        return AIConfig(enabled=discovery or enrichment,provider=provider if discovery or enrichment else 'off',model=model,base_url=self.ai_base.get().strip(),api_key=self.ai_key.get().strip(),discovery_enabled=discovery,enrichment_enabled=enrichment,preferred_country=(self.ai_country.get().strip().upper() or 'PE'))
+
+    def _manual_identities(self):
+        return parse_product_queries(self.product_queries.get('1.0','end').strip())
+
     def run(self):
-        if not self.excel.get() or not Path(self.excel.get()).exists():
-            messagebox.showerror('Falta archivo','Selecciona una plantilla .xlsx.');return
+        if not self.excel.get() or not Path(self.excel.get()).exists():messagebox.showerror('Falta archivo','Selecciona una plantilla .xlsx.');return
+        identities=self._manual_identities();cfg=self._ai_config()
+        if (cfg.discovery_enabled or cfg.enrichment_enabled) and cfg.provider not in {'ollama'} and not cfg.api_key:
+            self.emit('Aviso: IA activada sin API key. El scraper seguirá funcionando; las llamadas IA pueden fallar y se omitirán.')
         self.runbtn.configure(state='disabled')
         def work():
             try:
                 self.emit('=== INICIO ===')
-                res=run_batch(self.excel.get(),self.out.get(),overwrite=self.overwrite.get(),log=self.emit,ai_config=self._ai_config(),manual_part_numbers=self._manual_part_numbers())
-                self.emit(json.dumps(res,ensure_ascii=False,indent=2))
-                self.emit('=== TERMINADO ===')
-                messagebox.showinfo('Terminado',f"Excel: {res['output_excel']}\nTrazabilidad: {res['trace']}")
+                if identities:
+                    for i,x in enumerate(identities,1):self.emit(f'Entrada {i}: '+json.dumps({k:v for k,v in x.model_dump().items() if v not in (None,'')},ensure_ascii=False))
+                res=run_batch(self.excel.get(),self.out.get(),overwrite=self.overwrite.get(),log=self.emit,ai_config=cfg,manual_identities=identities or None)
+                self.emit(json.dumps(res,ensure_ascii=False,indent=2));self.emit('=== TERMINADO ===')
+                self.after(0,lambda:messagebox.showinfo('Terminado',f"Excel: {res['output_excel']}\nTrazabilidad: {res['trace']}"))
             except Exception as e:
-                self.emit(traceback.format_exc());messagebox.showerror('Error',str(e))
-            finally:self.runbtn.configure(state='normal')
+                self.emit(traceback.format_exc());self.after(0,lambda:messagebox.showerror('Error',str(e)))
+            finally:self.after(0,lambda:self.runbtn.configure(state='normal'))
         threading.Thread(target=work,daemon=True).start()
+
     def repair_jsons(self):
-        files=filedialog.askopenfilenames(filetypes=[('JSON','*.json')]);
+        files=filedialog.askopenfilenames(filetypes=[('JSON','*.json')])
         if not files:return
         template=self.excel.get()
-        if not template or not Path(template).exists():
-            messagebox.showerror('Falta plantilla','Selecciona primero el Excel a completar.');return
+        if not template or not Path(template).exists():messagebox.showerror('Falta plantilla','Selecciona primero el Excel a completar.');return
         out=Path(self.out.get());out.mkdir(parents=True,exist_ok=True)
         try:
-            recs=[]
-            for p in files:
-                rec=ProductRecord.model_validate_json(Path(p).read_text(encoding='utf-8'))
-                recs.append(repair_existing_record(rec))
-            dest=out/(Path(template).stem+'_reprocesado_v8.xlsx')
-            trace=out/'trazabilidad_reprocesado_v8.json'
-            rep=fill_excel_v8(template,str(dest),recs,overwrite=self.overwrite.get(),trace_path=str(trace))
-            self.emit(f'Reprocesado: {dest}')
-            self.emit(json.dumps(rep['summary'],ensure_ascii=False))
-            messagebox.showinfo('Reprocesado',str(dest))
-        except Exception as e:
-            self.emit(traceback.format_exc());messagebox.showerror('Error',str(e))
+            recs=[repair_existing_record(ProductRecord.model_validate_json(Path(p).read_text(encoding='utf-8'))) for p in files]
+            dest=out/(Path(template).stem+'_reprocesado.xlsx');trace=out/'trazabilidad_reprocesado.json'
+            rep=fill_excel_v8(template,str(dest),recs,overwrite=self.overwrite.get(),trace_path=str(trace),ai_config=self._ai_config())
+            self.emit(f'Reprocesado: {dest}');self.emit(json.dumps(rep['summary'],ensure_ascii=False));messagebox.showinfo('Reprocesado',str(dest))
+        except Exception as e:self.emit(traceback.format_exc());messagebox.showerror('Error',str(e))
 
 
-def main():
-    App().mainloop()
-
+def main():App().mainloop()
 if __name__=='__main__':main()

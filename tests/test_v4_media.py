@@ -46,3 +46,24 @@ def test_site_profile_learns_external_media_hosts_without_hardcoding():
     assert "media.brand.test" in hosts
     assert "player.vimeo.com" in hosts
     assert prof["video_providers"]==["vimeo"]
+
+
+def test_validated_product_json_gallery_returns_all_images_not_only_first():
+    expected=ProductIdentity(brand="Acme", model="Studio 900", product_name="Acme Studio 900", mpn="ACM900", match_level="EXACT")
+    html='''
+    <html><head><script type="application/json" id="__PRODUCT_STATE__">
+    {"product":{"productName":"Acme Studio 900","mpn":"ACM900","gallery":{
+      "images":[
+        {"url":"https://cdn.acme.test/gallery/ACM900_hero.jpg"},
+        {"url":"https://cdn.acme.test/gallery/ACM900_front.jpg"},
+        {"url":"https://cdn.acme.test/gallery/ACM900_back.jpg"},
+        {"url":"https://cdn.acme.test/gallery/ACM900_left.jpg"},
+        {"url":"https://cdn.acme.test/gallery/ACM900_right.jpg"}
+      ]}}}
+    </script></head><body></body></html>
+    '''
+    media=discover_media(html,"https://www.acme.test/products/ACM900",expected,page_is_validated=True)
+    images=[m for m in media if m["media_type"]=="image" and m["autofill_eligible"]]
+    assert len(images)==5
+    assert all(m["role"]=="product_gallery" for m in images)
+    assert {m["scope"] for m in images} <= {"EXACT_PRODUCT","EXACT_VARIANT"}

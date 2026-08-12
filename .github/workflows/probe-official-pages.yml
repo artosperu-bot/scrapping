@@ -1,0 +1,58 @@
+name: Probe direct official pages
+on:
+  push:
+    paths:
+      - '.github/workflows/probe-official-pages.yml'
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: |
+          pip install -e '.[browser]'
+          python -m playwright install chromium
+      - name: Probe exact official URLs
+        run: |
+          rm -rf official_probe && mkdir official_probe
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from urllib.parse import urlparse
+          from product_intelligence.pipeline import ProductPipeline
+          from product_intelligence.models import ProductIdentity
+          targets=['product name','brand','model','description','country of origin','color','ean','year','connectivity','bluetooth','headphone type','height','width','length','water resistance','power source','battery_life','features','dimensions','audio power','requires_serial_number','segment','output type','product warranty','package contents','package width','package length','package height','package weight']
+          cases={
+            'JBLQ350WLBLKAM':'https://www.jbl.com.pe/JBLQ350WLBLKAM.html',
+            'JBLENDURRUN3BTBAM':'https://www.jbl.com.gt/audifonos-tws/ENDURANCE-RUN-3-WIRELESS.html',
+            'JBLT530CBLKAM':'https://uy.jbl.com/auriculares/JBLT530CBLKAM.html',
+          }
+          pipe=ProductPipeline(); summary={}
+          for pn,url in cases.items():
+              host=(urlparse(url).hostname or '').removeprefix('www.')
+              print('\n===',pn,url,'===')
+              try:
+                  rec=pipe.process_url(ProductIdentity(mpn=pn),url,official_domain=host,include_pdfs=True,include_images=True,browser_fallback=True,target_semantics=targets,media_slots=8)
+                  data=json.loads(rec.model_dump_json(indent=2))
+                  Path(f'official_probe/{pn}.json').write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
+                  summary[pn]={'ok':True,'identity':data['identity'],'fetch':data.get('fetch'),'sources':data.get('sources'),'evidence_count':len(data.get('evidence') or []),'media_count':len(data.get('media') or []),'image_count':len(data.get('images') or []),'images':(data.get('images') or [])[:12]}
+                  print('identity',data['identity'].get('match_level'),'evidence',summary[pn]['evidence_count'],'images',summary[pn]['image_count'])
+                  for im in summary[pn]['images'][:10]: print('IMAGE',im.get('url'),im.get('scope'),im.get('confidence'),im.get('source'))
+              except Exception as e:
+                  summary[pn]={'ok':False,'error':f'{type(e).__name__}: {e}'}
+                  print('ERROR',summary[pn]['error'])
+          Path('official_probe/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - name: Save diagnostic outputs
+        run: |
+          git config user.name artosperu-bot
+          git config user.email artosperu@gmail.com
+          git add -f official_probe/*.json
+          git commit -m 'test: capture direct official product probe' || exit 0
+          git fetch origin main
+          git rebase origin/main
+          git push

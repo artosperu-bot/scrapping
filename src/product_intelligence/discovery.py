@@ -140,6 +140,19 @@ def _contains_strong_identifier(text:str,strong:list[str])->bool:
     return any(_compact(x) and _compact(x) in compact for x in strong)
 
 
+def _descriptive_model(identity:ProductIdentity)->str:
+    """Choose human model/name text for search-result matching, not an MPN duplicated as model."""
+    strong = {_compact(str(x)) for x in [identity.mpn, identity.ean, identity.upc, identity.gtin] if x}
+    for value in [identity.model, identity.product_name]:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if _compact(text) in strong:
+            continue
+        return key_norm(text)
+    return key_norm(identity.model or identity.product_name or "")
+
+
 def _provider_search(query:str,timeout:int)->list[tuple[str,str,str]]:
     rows=[]
     rows.extend(_search_ddg(query,timeout));rows.extend(_search_bing(query,timeout));rows.extend(_search_bing_rss(query,timeout))
@@ -151,7 +164,7 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
     seen=set();out=[]
     brand=key_norm(identity.brand or "").replace(" ","")
     strong=[str(x) for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
-    model=key_norm(identity.model or identity.product_name or "")
+    model=_descriptive_model(identity)
     technical_terms=("specification","specifications","specs","datasheet","data sheet","manual","support","product page","ficha tecnica","ficha técnica")
     for u,t,sn in urls:
         if u in seen:continue
@@ -164,9 +177,6 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
         likely_official=bool(brand and brand in hcompact and not any(m in host for m in MARKETPLACE_HINTS))
         strong_match=bool(strong and _contains_strong_identifier(combined,strong))
         model_match=bool(model and fuzz_contains(model,hay))
-        # Search snippets often omit the MPN even for the correct manufacturer page. Keep a
-        # brand-domain + model-matching official page as a candidate; the product pipeline still
-        # performs exact identity validation before its evidence is accepted.
         if strong and not strong_match and not (likely_official and model_match):
             continue
         score=0.0
@@ -203,6 +213,13 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
             f'"{strong}" "{brand}" manual',
             f'"{strong}" "{brand}" support',
         ]
+        descriptive = _descriptive_model(identity)
+        if descriptive:
+            official_queries.extend([
+                f'"{descriptive}" "{brand}" official product',
+                f'"{descriptive}" "{brand}" specifications',
+                f'"{descriptive}" "{brand}" manual datasheet',
+            ])
         for oq in official_queries:
             urls.extend(_provider_search(oq,max(8,min(timeout,15))))
             reranked=_rank_candidates(urls,identity,limit)
@@ -245,11 +262,7 @@ def _field_search_terms(field:str)->list[str]:
 
 
 def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12,timeout:int=15)->list[SearchCandidate]:
-    """Free second-pass discovery for unresolved workbook semantics.
-
-    Returned URLs are only candidates. The normal product pipeline still has to validate
-    exact identity/variant before any evidence from them can be used.
-    """
+    """Free second-pass discovery for unresolved workbook semantics."""
     base=build_query(identity)
     if not base:return []
     terms=[]

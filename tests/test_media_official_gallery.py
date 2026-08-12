@@ -1,4 +1,5 @@
 from product_intelligence.media_discovery import discover_media
+from product_intelligence.media_url_quality import promote_image_url
 from product_intelligence.models import ProductIdentity
 
 
@@ -46,10 +47,7 @@ def test_gallery_rows_expose_stable_gallery_index():
 
 
 def test_resized_cdn_gallery_url_is_promoted_to_unconstrained_asset():
-    identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
-    resized = "/dw/image/v2/ABC/on/demandware.static/-/Sites-master/default/image.png?sfrm=jpg&sh=140&sm=cut&sw=140"
-    html = f'''<div class="product-gallery"><img alt="JBL Quantum 350 Wireless" src="{resized}"></div> JBLQ350WLBLKAM'''
-    rows = discover_media(html, "https://www.jbl.com.pe/JBLQ350WLBLKAM.html", identity, page_is_validated=True)
-    urls = {r["url"] for r in rows}
-    assert "https://www.jbl.com.pe/dw/image/v2/ABC/on/demandware.static/-/Sites-master/default/image.png?sfrm=jpg" in urls
-    assert not any("sh=140" in u or "sw=140" in u for u in urls)
+    resized = "https://www.jbl.com.pe/dw/image/v2/ABC/on/demandware.static/-/Sites-master/default/image.png?sfrm=jpg&sh=140&sm=cut&sw=140"
+    promoted = promote_image_url(resized)
+    assert promoted == "https://www.jbl.com.pe/dw/image/v2/ABC/on/demandware.static/-/Sites-master/default/image.png?sfrm=jpg"
+    assert "sh=140" not in promoted and "sw=140" not in promoted

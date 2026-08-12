@@ -127,17 +127,14 @@ def _generic_search(url:str,param:str,q:str,timeout:int,selectors:list[str],unwr
 
 def _search_brave(q:str,timeout:int):
     return _generic_search("https://search.brave.com/search","q",q,timeout,["a[href][data-testid='result-title-a']","div.snippet a[href]","a.result-header[href]"])
-
 def _search_mojeek(q:str,timeout:int):
     return _generic_search("https://www.mojeek.com/search","q",q,timeout,["ul.results-standard h2 a[href]","li.result h2 a[href]","a.ob[href]"])
-
 def _search_yahoo(q:str,timeout:int):
     return _generic_search("https://search.yahoo.com/search","p",q,timeout,["div.algo-sr h3 a[href]","div.algo h3 a[href]","h3.title a[href]"],_unwrap_yahoo)
 
 
 def _compact(value:str)->str:
     return re.sub(r"[^a-z0-9]","",key_norm(value))
-
 def _contains_strong_identifier(text:str,strong:list[str])->bool:
     compact=_compact(text)
     return any(_compact(x) and _compact(x) in compact for x in strong)
@@ -155,6 +152,7 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
     brand=key_norm(identity.brand or "").replace(" ","")
     strong=[str(x) for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
     model=key_norm(identity.model or identity.product_name or "")
+    technical_terms=("specification","specifications","specs","datasheet","data sheet","manual","support","product page","ficha tecnica","ficha técnica")
     for u,t,sn in urls:
         if u in seen:continue
         seen.add(u)
@@ -162,8 +160,6 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
         if not host or _is_search_provider_host(host):continue
         combined=f"{u} {t} {sn}"
         hay=key_norm(combined)
-        # Discovery may be broad, but the shortlist remains strict: when a strong
-        # identifier exists it must be visible in the result URL/title/snippet.
         if strong and not _contains_strong_identifier(combined,strong):continue
         hcompact=re.sub(r"[^a-z0-9]","",host)
         likely_official=bool(brand and brand in hcompact and not any(m in host for m in MARKETPLACE_HINTS))
@@ -171,6 +167,7 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
         if likely_official:score+=.45
         if strong and _contains_strong_identifier(combined,strong):score+=.38
         if model and fuzz_contains(model,hay):score+=.18
+        if any(term in hay for term in technical_terms):score+=.08
         if any(m in host for m in MARKETPLACE_HINTS):score-=.18
         out.append(SearchCandidate(u,t,sn,score,likely_official))
     out.sort(key=lambda x:x.score,reverse=True)
@@ -190,16 +187,15 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
         urls.extend(_provider_search(query,timeout))
     ranked=_rank_candidates(urls,identity,limit)
 
-    # When brand is known, do not stop at the first retailer results. Product discovery is
-    # evidence gathering, and manufacturer pages deserve an explicit second chance because
-    # search engines often rank stores above regional official sites for exact MPN queries.
     brand=str(identity.brand or '').strip()
     if strong_raw and brand and not any(c.likely_official for c in ranked):
         strong=str(strong_raw).strip()
         official_queries=[
-            f'"{strong}" "{brand}" official',
-            f'"{strong}" "{brand}" product',
+            f'"{strong}" "{brand}" official product',
             f'"{strong}" "{brand}" specifications',
+            f'"{strong}" "{brand}" datasheet',
+            f'"{strong}" "{brand}" manual',
+            f'"{strong}" "{brand}" support',
         ]
         for oq in official_queries:
             urls.extend(_provider_search(oq,max(8,min(timeout,15))))
@@ -211,17 +207,16 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
             ranked=_rank_candidates(urls,identity,limit)
     if ranked:return ranked
 
-    # Search engines occasionally return an empty/blocked HTML page to cloud runners.
-    # Retry only after a genuine zero-result pass, using semantically equivalent query
-    # forms. Identity filtering remains unchanged, so this improves availability rather
-    # than lowering correctness requirements.
     if strong_raw:
         strong=str(strong_raw).strip()
         retry_queries=[]
-        for candidate in [f'"{strong}" product', f'{strong} specifications', f'{strong} specs', f'{strong} datasheet']:
+        for candidate in [
+            f'"{strong}" product', f'{strong} specifications', f'{strong} specs',
+            f'{strong} datasheet', f'{strong} manual pdf', f'{strong} support'
+        ]:
             if candidate and candidate not in queries and candidate not in retry_queries:
                 retry_queries.append(candidate)
-        for attempt,query in enumerate(retry_queries[:4]):
+        for attempt,query in enumerate(retry_queries[:6]):
             if attempt:time.sleep(.35)
             urls.extend(_provider_search(query,max(8,min(timeout,15))))
             ranked=_rank_candidates(urls,identity,limit)

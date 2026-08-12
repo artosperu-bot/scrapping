@@ -11,7 +11,7 @@ from .attribute_resolver import best_candidate
 from .semantic_guard import infer_contract,validate_value,is_placeholder
 from .template_intelligence import classify_field
 from .template_contract import analyze_template_contract
-from .field_derivations import derive_description,derive_connectivity,derive_headphone_type,derive_water_resistance,derive_power_source,derive_autonomy,derive_features,derive_segment,derive_boolean
+from .smart_derivations import derive_description,derive_connectivity,derive_headphone_type,derive_water_resistance,derive_power_source,derive_autonomy,derive_features,derive_segment,derive_boolean
 
 IDENTITY_ALIASES={'brand','model','mpn','ean','upc','gtin','product name'}
 

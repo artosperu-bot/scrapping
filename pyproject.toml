@@ -44,7 +44,7 @@ full = [
 
 [project.scripts]
 product-intel = "product_intelligence.cli:app"
-product-intel-desktop = "product_intelligence.desktop:main"
+product-intel-desktop = "product_intelligence.media_desktop:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

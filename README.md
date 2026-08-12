@@ -86,6 +86,47 @@ Las columnas `Imagen principal`, `Imagen2`…`ImagenN` determinan cuántos slots
 
 La galería se busca en JSON-LD, JSON/JavaScript, `src/srcset`, atributos lazy/zoom, `<picture>`, sliders y endpoints XHR/API. Se eliminan logos, banners, relacionados, otras variantes y duplicados, conservando preferentemente la mayor resolución.
 
+## Fotos y videos — proceso independiente
+
+El escritorio incluye la pestaña **7. Fotos y videos**. Este flujo no modifica la plantilla ni llama al proceso que genera el Excel.
+
+Para cada producto usa esta prioridad:
+
+```text
+URLs manuales del producto
+  ↓
+búsqueda web por Part Number / identificador / modelo
+  ↓
+fabricante y fuentes oficiales primero
+  ↓
+JSON-LD / JSON embebido / Open Graph / HTML / recursos de red
+  ↓
+Playwright y activación de media lazy cuando hace falta
+  ↓
+validación del modelo
+  ↓
+descarga + miniatura en vivo + metadata
+```
+
+En este proceso multimedia el **color no bloquea** una imagen si corresponde al mismo modelo validado. Las diferencias que pueden indicar otro producto, como capacidad o variante materialmente distinta, siguen protegidas.
+
+Las imágenes y los videos directos se guardan físicamente. Videos externos de YouTube/Vimeo y streams HLS se conservan como enlace/metadata cuando no existe un archivo directo descargable.
+
+La salida queda separada por identificador:
+
+```text
+<salida>/multimedia/
+  fotos/<PART_NUMBER_O_ID>/
+    01.jpg
+    02.webp
+    metadata.json
+  videos/<PART_NUMBER_O_ID>/
+    01.mp4
+    metadata.json
+```
+
+Las miniaturas aparecen en la pestaña a medida que se descargan. Un doble clic abre el archivo local; si el video es externo, abre su URL.
+
 ## Salidas
 
 Cada ejecución batch genera:
@@ -95,6 +136,8 @@ Cada ejecución batch genera:
 - `trazabilidad.json` — por qué se escribió/rechazó cada celda;
 - `resumen.json` — estado global;
 - `<plantilla>_completado.xlsx`.
+
+El proceso independiente de multimedia genera además las carpetas `multimedia/fotos/` y `multimedia/videos/` descritas arriba.
 
 ## Arquitectura y reglas
 

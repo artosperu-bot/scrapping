@@ -34,6 +34,27 @@ def _looks_js_shell(html: str) -> bool:
     return any(h in text for h in hints) and len(text) < 6000
 
 
+def _site_key(url_or_host: str) -> str:
+    """Conservative registrable-site approximation for network evidence isolation.
+
+    We intentionally prefer dropping a useful cross-site API over ingesting third-party
+    recommendations/analytics as product facts. Manufacturer/CDN media is discovered by the
+    media layer independently; this gate is only for JSON that may become technical evidence.
+    """
+    host = (urlparse(url_or_host).hostname or url_or_host or "").lower().strip(".").removeprefix("www.")
+    parts = [p for p in host.split(".") if p]
+    if len(parts) <= 2:
+        return host
+    # Common country-code structures such as example.com.pe / example.co.uk.
+    if len(parts[-1]) == 2 and parts[-2] in {"com", "co", "net", "org", "gov", "gob", "edu"}:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _same_site_family(page_url: str, resource_url: str) -> bool:
+    return bool(_site_key(page_url) and _site_key(page_url) == _site_key(resource_url))
+
+
 def fetch_static(url: str, timeout: int = 30) -> FetchResult:
     r = requests.get(
         url,
@@ -59,8 +80,9 @@ def fetch_static(url: str, timeout: int = 30) -> FetchResult:
 def fetch_browser(url: str, timeout: int = 45, capture_json: bool = True, activate_lazy_media: bool = False) -> FetchResult:
     """Render a public page with a normal Chromium browser.
 
-    This is a compatibility fallback for JavaScript-rendered pages. It intentionally
-    does not implement CAPTCHA solving, stealth plugins or access-control bypasses.
+    JSON becomes technical evidence only when it belongs to the same site family as the
+    validated product page. Third-party widgets (Disqus, analytics, recommendations, ads,
+    social embeds, etc.) are deliberately excluded.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -85,10 +107,10 @@ def fetch_browser(url: str, timeout: int = 45, capture_json: bool = True, activa
             def on_response(response):
                 try:
                     ctype = (response.headers.get("content-type") or "").lower()
-                    if "json" not in ctype:
+                    if "json" not in ctype or response.request.method != "GET":
                         return
-                    # Keep only reasonably-sized GET responses from the same site or APIs used by it.
-                    if response.request.method != "GET":
+                    # Never let third-party widgets become catalog evidence.
+                    if not _same_site_family(page.url or url, response.url):
                         return
                     body = response.body()
                     if not body or len(body) > 2_000_000:
@@ -152,12 +174,7 @@ def fetch_browser(url: str, timeout: int = 45, capture_json: bool = True, activa
 
 
 def fetch_page(url: str, timeout: int = 30, browser_fallback: bool = True, prefer_browser: bool = False, activate_lazy_media: bool = False) -> FetchResult:
-    """Fast HTTP first, browser fallback only when it materially helps.
-
-    401/403/429 are not treated as permission to circumvent site controls. We may
-    retry through a normal browser because some public storefronts require JS/cookies;
-    if the browser is also denied, the caller receives the denial and should move on.
-    """
+    """Fast HTTP first, browser fallback only when it materially helps."""
     static = fetch_static(url, timeout=timeout)
     needs_browser = prefer_browser or static.status_code in {401, 403, 429} or _looks_js_shell(static.html)
     if browser_fallback and needs_browser:

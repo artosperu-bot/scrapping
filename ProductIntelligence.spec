@@ -18,6 +18,10 @@ browser_dir=root/'vendor'/'ms-playwright'
 if browser_dir.exists():
     datas.append((str(browser_dir),'vendor/ms-playwright'))
 
+media_assets=root/'src'/'product_intelligence'/'assets'
+if media_assets.exists():
+    datas.append((str(media_assets),'product_intelligence/assets'))
+
 a = Analysis(
     ['run_desktop.py'],
     pathex=[str(root/'src')],

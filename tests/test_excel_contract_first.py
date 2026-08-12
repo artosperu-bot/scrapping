@@ -17,10 +17,12 @@ def all_fields(plan):
 def test_excel_contract_separates_product_media_and_seller_fields():
     plan = analyze_template_contract(str(template_path()))
     summary = plan["summary"]
-    assert summary["fields_total"] >= 40
+    # Only executable product-load sheets count as targets. Guides/options stay reference-only.
+    assert summary["fields_total"] >= 30
     assert summary["scrape_targets"] >= 15
     assert summary["media_slots"] >= 1
     assert summary["seller_inputs"] >= 1
+    assert plan.get("reference_sheets") is not None
 
     fields = all_fields(plan)
     price = next(field for field in fields if "PriceFalabella" in field["label"])

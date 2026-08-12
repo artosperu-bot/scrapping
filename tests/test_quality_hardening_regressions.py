@@ -1,3 +1,4 @@
+from product_intelligence.batch import _sanitize_condition_mismatched_identity
 from product_intelligence.canonical_facts import build_canonical_facts
 from product_intelligence.discovery import _rank_candidates, search_web_for_fields
 from product_intelligence.evidence_quality import strict_semantic_gate
@@ -88,6 +89,35 @@ def test_official_model_page_can_be_candidate_without_mpn_in_search_snippet():
     ranked = _rank_candidates(rows, identity, 10)
     assert len(ranked) == 1
     assert ranked[0].likely_official is True
+
+
+def test_official_model_page_uses_product_name_when_model_is_only_the_mpn():
+    identity = ProductIdentity(
+        mpn="JBLENDURRUN3BTBAM",
+        brand="JBL",
+        model="JBLENDURRUN3BTBAM",
+        product_name="JBL Endurance Run 3 Wireless Blue",
+    )
+    rows = [(
+        "https://www.jbl.com/ENDURANCE-RUN-3-WIRELESS.html",
+        "JBL Endurance Run 3 Wireless",
+        "Sports in-ear headphones with Bluetooth",
+    )]
+    ranked = _rank_candidates(rows, identity, 10)
+    assert len(ranked) == 1
+    assert ranked[0].likely_official is True
+
+
+def test_refurbished_source_does_not_replace_standard_identity_name():
+    expected = ProductIdentity(mpn="JBLQ350WLBLKAM", brand="JBL")
+    rec = record(
+        mpn="JBLQ350WLBLKAM",
+        brand="JBL",
+        product_name="JBL Quantum 350 Wireless Gaming Headset - Certified Refurbished",
+    )
+    _sanitize_condition_mismatched_identity(expected, rec)
+    assert rec.identity.product_name is None
+    assert rec.identity.mpn == "JBLQ350WLBLKAM"
 
 
 def test_release_year_gap_research_uses_release_language(monkeypatch):

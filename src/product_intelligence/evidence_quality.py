@@ -24,10 +24,10 @@ STRICT_ATTRIBUTE_HINTS = {
     "package_contents": (r"package\s+contents", r"what.?s\s+in\s+the\s+box", r"contenido\s+del\s+paquete", r"contenido\s+de\s+la\s+caja"),
 }
 
+# These are invalid *values* when detached from a real label/value pair. Keep ordinary field
+# labels such as Color, Interface or Bluetooth Version valid as attributes.
 LABEL_ONLY_VALUES = {
-    "version", "enabled", "disabled", "bluetooth version", "version bluetooth", "version de bluetooth",
-    "interface", "interfaz", "de audio", "audio", "de pc", "pc", "color", "colour", "del dial",
-    "specification", "especificacion", "caracteristica", "feature",
+    "version", "enabled", "disabled", "de audio", "de pc", "del dial",
 }
 
 
@@ -39,18 +39,24 @@ def _clean(v: Any) -> str:
     return s
 
 
+def _base_noise(text: Any) -> bool:
+    s=_clean(text)
+    if not s or CONTROL_ONLY.match(s):
+        return True
+    low=key_norm(s)
+    if len(s)>500 and not re.search(r"\d",s):
+        return True
+    return any(re.search(p,low,re.I) for p in NOISE_PATTERNS)
+
+
 def is_noise_text(text: Any) -> bool:
-    s = _clean(text)
-    if not s:
+    return _base_noise(text)
+
+
+def is_noise_value(text: Any) -> bool:
+    if _base_noise(text):
         return True
-    if CONTROL_ONLY.match(s):
-        return True
-    low = key_norm(s)
-    if low in LABEL_ONLY_VALUES:
-        return True
-    if len(s) > 500 and not re.search(r"\d", s):
-        return True
-    return any(re.search(p, low, re.I) for p in NOISE_PATTERNS)
+    return key_norm(_clean(text)) in LABEL_ONLY_VALUES
 
 
 def source_quality(ev: Evidence) -> float:
@@ -77,7 +83,7 @@ def generic_evidence_gate(ev: Evidence) -> tuple[bool, str, float]:
     value = _clean(ev.normalized_value if ev.normalized_value is not None else ev.raw_value)
     if not attr or is_noise_text(attr):
         return False, "ATTRIBUTE_NOISE", 0.0
-    if not value or is_noise_text(value):
+    if not value or is_noise_value(value):
         return False, "VALUE_NOISE_OR_EMPTY", 0.0
     if len(attr) > 140:
         return False, "ATTRIBUTE_TOO_LONG", 0.0
@@ -138,8 +144,6 @@ def strict_semantic_gate(canonical: str | None, ev: Evidence) -> tuple[bool, str
         if value in {"manufacturer", "fabricante", "seller", "merchant", "distributor", "distribuidor"}:
             return False, "BRAND_LABEL_NOT_VALUE"
     if canonical == "processor":
-        # Reject fragments created by line-prefix parsing. Allow generic future CPU names when
-        # they at least look like a real chipset/model rather than a preposition fragment.
         if value in {"de pc", "pc", "procesador", "processor", "cpu", "chipset"} or len(value) < 3:
             return False, "PROCESSOR_VALUE_IMPLAUSIBLE"
         if not (re.search(r"\d", raw_value) or re.search(r"intel|amd|ryzen|core|snapdragon|mediatek|apple|exynos|unisoc|celeron|pentium", value, re.I)):

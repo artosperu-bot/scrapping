@@ -50,6 +50,16 @@ def _try_vtex(url: str, identity: ProductIdentity, channel: str, timeout: int = 
     return parse_vtex_payload(data, identity, channel=channel, source_url=url)
 
 
+def _best_by_currency(offers: list[PriceOffer]) -> dict[str, float]:
+    best: dict[str, float] = {}
+    for row in offers:
+        currency = str(row.currency or "").upper() or "UNKNOWN"
+        current = best.get(currency)
+        if current is None or row.selling_price < current:
+            best[currency] = row.selling_price
+    return best
+
+
 def run_price_product(
     identity: ProductIdentity,
     output_root: str | Path,
@@ -107,5 +117,10 @@ def run_price_product(
     save_price_run(output_root, valid)
     for row in valid:
         emit("offer", offer=row.to_dict())
-    emit("done", offers=len(valid), channels=len({r.channel for r in valid}), best_price=min((r.selling_price for r in valid), default=None))
+    emit(
+        "done",
+        offers=len(valid),
+        channels=len({r.channel for r in valid}),
+        best_by_currency=_best_by_currency(valid),
+    )
     return valid

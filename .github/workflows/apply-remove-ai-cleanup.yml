@@ -34,16 +34,23 @@ jobs:
           s=s.replace('        ai_config=ai_config,\n','')
           p.write_text(s,encoding='utf-8')
 
-          # excel_mapper_v8.py
+          # excel_mapper_v8.py — remove both AI fallback layers.
           p=Path('src/product_intelligence/excel_mapper_v8.py')
           s=p.read_text(encoding='utf-8')
           s=s.replace('from .ai_enrichment import AIConfig,AIEnricher\n','')
           s=s.replace('def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_config:AIConfig|None=None,row_assignments:dict[tuple[str,int],ProductRecord]|None=None):\n    ai=AIEnricher(ai_config or AIConfig())\n',
                       'def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,row_assignments:dict[tuple[str,int],ProductRecord]|None=None):\n')
-          ai_start=s.find('                if ai.config.enabled and (ext==\'53\'')
+          # description-only AI block
+          ai_start=s.find("                if ai.config.enabled and (ext=='53'")
           derived=s.find('                value,vconf,reason,ev_attr,ev_raw=_derived_for_field', ai_start)
           if ai_start!=-1 and derived!=-1:
               s=s[:ai_start]+s[derived:]
+          # generic AI fallback block, ending immediately before media ranking
+          ai_start=s.find("                if ai.config.enabled and rec.identity.match_level not in {'CONFLICT','LOW'}:")
+          media_start=s.find('            ranked=sorted(', ai_start)
+          if ai_start!=-1 and media_start!=-1:
+              s=s[:ai_start]+s[media_start:]
+          assert 'ai.config' not in s and 'AIEnricher' not in s and 'AIConfig' not in s
           p.write_text(s,encoding='utf-8')
 
           # desktop.py
@@ -68,6 +75,7 @@ jobs:
           s=s.replace(';cfg=None\n','\n')
           s=s.replace(',ai_config=None,manual_identities=', ',manual_identities=')
           s=s.replace(',trace_path=str(trace),ai_config=None)', ',trace_path=str(trace))')
+          assert 'AIConfig' not in s and 'model_catalog' not in s and '_ai_config' not in s
           p.write_text(s,encoding='utf-8')
 
           # Make regression tests self-contained instead of reading historical demo JSON.

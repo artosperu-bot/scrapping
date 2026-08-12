@@ -18,12 +18,16 @@ def test_price_workflow_survives_adapter_failure_and_emits_done(tmp_path, monkey
     monkeypatch.setattr(price_workflow, "_try_mercadolibre", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("blocked")))
     monkeypatch.setattr(price_workflow, "discover_price_sources", lambda *_a, **_k: ["https://shop.example/q350"])
     monkeypatch.setattr(price_workflow, "fetch_page", lambda *_a, **_k: SimpleNamespace(final_url="https://shop.example/q350", html="<html>ok</html>"))
-    row = PriceOffer(part_number="JBLQ350WLBLKAM", brand="JBL", model="Quantum 350 Wireless", channel="Shop", seller_display_name="Seller", selling_price=299, currency="PEN", url="https://shop.example/q350", confidence=1.0, identity_match="EXACT_MPN", source_type="structured", source_method="jsonld")
-    monkeypatch.setattr(price_workflow, "extract_page_offers", lambda *_a, **_k: [row])
+    rows_from_page = [
+        PriceOffer(part_number="JBLQ350WLBLKAM", brand="JBL", model="Quantum 350 Wireless", channel="Shop", seller_display_name="Seller", selling_price=299, currency="PEN", url="https://shop.example/q350", confidence=1.0, identity_match="EXACT_MPN", source_type="structured", source_method="jsonld"),
+        PriceOffer(part_number="JBLQ350WLBLKAM", brand="JBL", model="Quantum 350 Wireless", channel="Chile", seller_display_name="Seller CL", selling_price=29936, currency="CLP", url="https://cl.example/q350", confidence=1.0, identity_match="EXACT_MPN", source_type="structured", source_method="jsonld"),
+    ]
+    monkeypatch.setattr(price_workflow, "extract_page_offers", lambda *_a, **_k: rows_from_page)
     monkeypatch.setattr(price_workflow, "save_price_run", lambda *_a, **_k: None)
 
     rows = price_workflow.run_price_product(identity, tmp_path, on_event=events.append)
-    assert rows == [row]
+    assert rows == rows_from_page
     assert any(e.get("type") == "source" and e.get("channel") == "MercadoLibre" and e.get("status") == "error" for e in events)
     assert events[-1]["type"] == "done"
-    assert events[-1]["best_price"] == 299
+    assert events[-1]["best_by_currency"] == {"PEN": 299, "CLP": 29936}
+    assert "best_price" not in events[-1]

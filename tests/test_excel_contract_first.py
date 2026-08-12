@@ -92,5 +92,6 @@ def test_unknown_technical_field_is_scrape_target_by_excel_contract(tmp_path):
 
 def test_seller_sku_is_not_product_identity():
     items = detect_items(str(template_path()))
-    assert items
+    # A reference workbook may contain only examples/placeholders. Those rows must not be
+    # promoted to products just to make preflight non-empty.
     assert all(item.identity.sku is None for item in items)

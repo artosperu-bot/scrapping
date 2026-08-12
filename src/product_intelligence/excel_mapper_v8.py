@@ -9,7 +9,6 @@ from .models import ProductRecord
 from .normalize import canonical_key,key_norm
 from .attribute_resolver import best_candidate
 from .semantic_guard import infer_contract,validate_value,is_placeholder
-from .evidence_quality import quality_score
 from .ai_enrichment import AIConfig,AIEnricher
 from .template_intelligence import classify_field
 from .template_contract import analyze_template_contract
@@ -63,7 +62,6 @@ def _is_template_example(value,desc):
     v=key_norm(str(value));d=key_norm(str(desc or ''))
     if is_placeholder(value):return True
     if v in {'esto es un parrafo','1234567890','abc 1000 202','999 999 99'}:return True
-    # Number examples explicitly printed in the column instruction should not be uploaded as real seller/product values.
     nums=re.findall(r'(?<!\d)(\d+(?:[.,]\d+)?)(?!\d)',str(desc or ''))
     if str(value).strip() in nums and ('value' in d or 'example' in d or 'ejemplo' in d):return True
     if 'e.g.' in d or 'ejemplo' in d:
@@ -81,7 +79,6 @@ def _option_keys(label):
 def _build_option_index(wb):
     idx={}
     for ws in wb.worksheets:
-        # Standard option-matrix sheets.
         for r in range(1,min(ws.max_row,8)+1):
             heads=[ws.cell(r,c).value for c in range(1,ws.max_column+1)]
             populated=0
@@ -96,7 +93,6 @@ def _build_option_index(wb):
                 if vals:
                     for k in _option_keys(h):idx[k]=vals
             break
-        # One-column list sheets (brand/category/etc.).
         if ws.max_column==1 and ws.max_row>=2:
             vals=[ws.cell(r,1).value for r in range(1,ws.max_row+1) if ws.cell(r,1).value not in (None,'')]
             if len(vals)>=2:
@@ -120,7 +116,6 @@ def _coerce_controlled(value,header,options):
     for v in vals:
         nv=key_norm(str(v));exact=next((o for o in options if key_norm(str(o))==nv),None)
         if exact is None:
-            # Safe singular/plural/cosmetic equivalence only. Never nearest-neighbor IP codes, capacities, etc.
             exact=next((o for o in options if key_norm(str(o)).rstrip('s')==nv.rstrip('s') and len(nv)>=4),None)
         if exact is None:return None,f'VALUE_NOT_IN_ALLOWED_OPTIONS:{v}'
         if exact not in out:out.append(exact)
@@ -168,7 +163,8 @@ def media_rank(item):
     if 'jsonld product image' in src:s+=15
     if 'zoom' in src or 'large' in src:s+=8
     if 'og image' in src:s+=3
-    return (s,float(item.get('confidence',0)))
+    source_class_rank={'manufacturer':3,'secondary':2,'marketplace':1}.get(str(item.get('source_class') or ''),0)
+    return (s,source_class_rank,float(item.get('confidence',0)))
 
 def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_config:AIConfig|None=None,row_assignments:dict[tuple[str,int],ProductRecord]|None=None):
     ai=AIEnricher(ai_config or AIConfig())
@@ -198,16 +194,11 @@ def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_con
             rowvals={c:ws.cell(row,c).value for c in headers}
             rec=row_assignments.get((ws.title,row)) or _match_record(records,rowvals,mapped)
             if not rec or rec.identity.match_level == "CONFLICT":continue
-            # Seller fields are never populated by scraping, but obvious examples shipped inside the
-            # template are safe to remove so dummy prices/SKUs are not uploaded accidentally.
             for _c,(_k,_mc,_fc) in mapped.items():
                 if _fc == "SELLER_DATA" and _is_template_example(ws.cell(row,_c).value, descs.get(_c)):
                     cleared_examples.append({"sheet":ws.title,"cell":ws.cell(row,_c).coordinate,"value":ws.cell(row,_c).value,"reason":"TEMPLATE_EXAMPLE_SELLER_DATA"})
                     ws.cell(row,_c).value=None
             if overwrite:
-                # Overwrite mode means recompute product-derived cells from evidence. Seller/commercial
-                # fields remain protected, except fields that the Excel contract explicitly reclassifies
-                # as scrape targets (for example manufacturer-or-seller warranty months #614607).
                 for _c,(_k,_mc,_fc) in mapped.items():
                     _plan=target_lookup.get((ws.title,_c),{})
                     if _fc != "SELLER_DATA" or _plan.get("role")=="SCRAPE_TARGET":
@@ -223,7 +214,6 @@ def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_con
                     continue
                 if cell.value not in (None,'') and not overwrite:continue
                 ext=_external_id(header);options=opts[c]
-
                 if ai.config.enabled and (ext=='53' or key_norm(_strip_field_id(header)) in {'descripcion','description'}) and rec.identity.match_level not in {'CONFLICT','LOW'}:
                     suggestion=ai.suggest(rec,header,str(desc) if desc else None,None,language='es')
                     if suggestion and float(suggestion.get('confidence') or 0)>=.84:
@@ -233,7 +223,6 @@ def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_con
                         if ok:
                             cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":"ai_description","value":value,"source":"AI over validated evidence","reason":suggestion.get("reason"),"confidence":round(float(suggestion.get('confidence') or 0),3),"evidence_ids":suggestion.get("evidence_ids")});continue
                         rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":greason,"layer":"ai_description"})
-
                 value,vconf,reason,ev_attr,ev_raw=_derived_for_field(rec,header,str(desc) if desc else None,key,contracts[c],options,ext)
                 source=None
                 if value not in (None,'') and vconf>=.85:
@@ -246,7 +235,6 @@ def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_con
                     if ok:
                         cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key or 'derived',"value":value,"source":source,"reason":reason,"confidence":round(vconf,3)});continue
                     rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":greason})
-
                 if key in IDENTITY_ALIASES:
                     value,vconf,source=_identity_value(rec,key)
                     if value in (None,'') or vconf<.88:continue
@@ -258,11 +246,8 @@ def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_con
                     ok,greason,_=validate_value(value,contracts[c])
                     if ok:
                         cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key,"value":value,"source":"identity","confidence":vconf});continue
-
-                resolver_key=key or plan_field.get("semantic") or plan_field.get("canonical")
-                if not resolver_key and plan_field.get("role")=="SCRAPE_TARGET":resolver_key=_strip_field_id(header)
-                if resolver_key:
-                    cand=best_candidate(rec,header,str(desc) if desc else None,resolver_key,contracts[c])
+                if key:
+                    cand=best_candidate(rec,header,str(desc) if desc else None,key,contracts[c])
                     if cand:
                         value=cand.value
                         if contracts[c].value_type=='controlled':
@@ -270,36 +255,29 @@ def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_con
                             if cv is None:
                                 rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":creason,"attribute":cand.evidence.attribute});continue
                             value=cv
-                        cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":resolver_key,"value":value,"source":cand.evidence.source_url,"evidence_attribute":cand.evidence.attribute,"confidence":round(cand.score,3),"reasons":cand.reasons});continue
-
+                        cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key,"value":value,"source":cand.evidence.source_url,"evidence_attribute":cand.evidence.attribute,"confidence":round(cand.score,3),"reasons":cand.reasons});continue
                 if ai.config.enabled and rec.identity.match_level not in {'CONFLICT','LOW'}:
                     suggestion=ai.suggest(rec,header,str(desc) if desc else None,options if contracts[c].value_type=='controlled' else None,language='es')
                     if suggestion and float(suggestion.get('confidence') or 0)>=.82:
-                        value=suggestion['value']
-                        if contracts[c].value_type=='controlled':
-                            cv,creason=_coerce_controlled(value,header,options)
-                            if cv is None:
-                                rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":creason,"layer":"ai"});continue
-                            value=cv
-                        evs=suggestion.get('evidence') or []
+                        value=suggestion['value'];evs=suggestion.get('evidence') or []
                         ev_attr='; '.join(str(x.get('attribute','')) for x in evs[:4]);ev_raw='; '.join(str(x.get('value','')) for x in evs[:4])
                         ok,greason,_=validate_value(value,contracts[c],evidence_attribute=ev_attr,evidence_raw=ev_raw)
                         if ok:
-                            cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key or 'ai_derived',"value":value,"source":"AI over validated evidence","reason":suggestion.get("reason"),"confidence":round(float(suggestion.get('confidence') or 0),3),"evidence_ids":suggestion.get("evidence_ids")});continue
+                            cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key or 'ai_derived',"value":value,"source":"AI over validated evidence","reason":suggestion.get('reason'),"confidence":round(float(suggestion.get('confidence') or 0),3),"evidence_ids":suggestion.get('evidence_ids')});continue
                         rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":greason,"layer":"ai"})
             ranked=sorted([i for i in rec.images if i.get('autofill_eligible',True) and i.get('role','product_gallery')=='product_gallery' and i.get('scope') in {'EXACT_VARIANT','EXACT_PRODUCT'} and i.get('confidence',0)>=.80],key=media_rank,reverse=True)
             seen=set();dedup=[]
             for i in ranked:
-                if not i.get('url'):continue
-                k=_media_key(i['url'])
+                u=i.get('url')
+                if not u:continue
+                k=_media_key(u)
                 if k in seen:continue
                 seen.add(k);dedup.append(i)
-            ranked=dedup
             for idx,c in enumerate(image_cols):
-                if idx>=len(ranked):break
+                if idx>=len(dedup):break
                 cell=ws.cell(row,c)
                 if cell.value not in (None,'') and not overwrite:continue
-                cell.value=ranked[idx]['url'];written.append({"sheet":ws.title,"cell":cell.coordinate,"header":str(headers[c]),"attribute":"product_image_url","value":ranked[idx]['url'],"source":ranked[idx]['url'],"scope":ranked[idx].get('scope'),"role":ranked[idx].get('role')})
+                cell.value=dedup[idx]['url'];written.append({"sheet":ws.title,"cell":cell.coordinate,"header":str(headers[c]),"attribute":"product_image_url","value":dedup[idx]['url'],"source":dedup[idx].get('source_page') or dedup[idx]['url'],"source_class":dedup[idx].get('source_class'),"scope":dedup[idx].get('scope'),"role":dedup[idx].get('role')})
     Path(output).parent.mkdir(parents=True,exist_ok=True);wb.save(output)
     report={"written":written,"rejected":rejected,"cleared_template_examples":cleared_examples,"summary":{"written_count":len(written),"rejected_count":len(rejected),"cleared_template_examples":len(cleared_examples)}}
     if trace_path:Path(trace_path).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')

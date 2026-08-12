@@ -46,6 +46,16 @@ def _strip_field_id(label: str) -> str:
     return re.sub(r"#\s*[A-Za-z]*\d+", "", str(label)).strip()
 
 
+def _option_keys(label: Any) -> set[str]:
+    text = str(label or "").strip()
+    return {key_norm(text), key_norm(_strip_field_id(text))} - {""}
+
+
+def _index_options(idx: dict[str, list[Any]], label: Any, options: list[Any]) -> None:
+    for key in _option_keys(label):
+        idx[key] = options
+
+
 def _build_option_index(wb) -> dict[str, list[Any]]:
     idx: dict[str, list[Any]] = {}
     for ws in wb.worksheets:
@@ -54,7 +64,7 @@ def _build_option_index(wb) -> dict[str, list[Any]]:
             if len(vals) >= 2:
                 idx[key_norm(ws.title)] = vals
                 if len(str(vals[0])) < 80:
-                    idx.setdefault(key_norm(str(vals[0])), vals[1:])
+                    _index_options(idx, vals[0], vals[1:])
         for r in range(1, min(ws.max_row, 6) + 1):
             headers = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
             usable = [v for v in headers if v not in (None, "") and len(str(v)) < 120]
@@ -74,15 +84,16 @@ def _build_option_index(wb) -> dict[str, list[Any]]:
                     continue
                 opts = [ws.cell(rr, c).value for rr in range(r + 1, ws.max_row + 1) if ws.cell(rr, c).value not in (None, "")]
                 if opts:
-                    idx[key_norm(str(h))] = opts
+                    _index_options(idx, h, opts)
             break
     return idx
 
 
 def _find_options(idx: dict[str, list[Any]], label: str) -> list[Any]:
+    for key in _option_keys(label):
+        if key in idx:
+            return idx[key]
     base = key_norm(_strip_field_id(label))
-    if base in idx:
-        return idx[base]
     aliases: list[str] = []
     if base in {"marca", "brand"}:
         aliases = ["marcas", "brands", "brand"]

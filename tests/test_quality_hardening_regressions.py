@@ -1,7 +1,7 @@
-from product_intelligence.batch import _sanitize_condition_mismatched_identity
 from product_intelligence.canonical_facts import build_canonical_facts
 from product_intelligence.discovery import _rank_candidates, search_web_for_fields
 from product_intelligence.evidence_quality import strict_semantic_gate
+from product_intelligence.identity import sanitize_condition_mismatched_identity
 from product_intelligence.media_discovery import discover_media
 from product_intelligence.models import Evidence, ProductIdentity, ProductRecord
 
@@ -115,7 +115,7 @@ def test_refurbished_source_does_not_replace_standard_identity_name():
         brand="JBL",
         product_name="JBL Quantum 350 Wireless Gaming Headset - Certified Refurbished",
     )
-    _sanitize_condition_mismatched_identity(expected, rec)
+    sanitize_condition_mismatched_identity(expected, rec.identity)
     assert rec.identity.product_name is None
     assert rec.identity.mpn == "JBLQ350WLBLKAM"
 

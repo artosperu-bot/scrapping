@@ -166,6 +166,9 @@ class ProductPipeline:
             network_resources=fetch.network_resources,
             page_is_validated=True,
         )
+        for _m in media:
+            _m["source_class"] = source_class
+            _m["source_page"] = fetch.final_url
         rec.media = media
         # Excel-safe default: only exact product/variant media is auto-fill eligible.
         rec.images = [m for m in media if include_images and m.get("media_type") == "image" and m.get("scope") in ACCEPTABLE_MEDIA_SCOPES and m.get("confidence",0) >= .80 and m.get("autofill_eligible")]

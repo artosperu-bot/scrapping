@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 from openpyxl import load_workbook
 
 from .ai_enrichment import AIConfig
+from .ai_discovery import discover_official_urls
+from .input_identity import parse_product_query
 from .discovery import search_web
 from .excel_mapper_v8 import fill_excel_v8
 from .models import ProductIdentity, ProductRecord
@@ -90,21 +92,19 @@ def _best_product_sheet(template: str) -> tuple[str, int]:
     return best[1], best[2]
 
 
-def manual_items(template: str, part_numbers: list[str]) -> list[BatchItem]:
-    """Assign explicit manufacturer part numbers to product rows; never copy them to seller SKU."""
+def manual_identity_items(template: str, identities: list[ProductIdentity]) -> list[BatchItem]:
+    """Bind generic product identities to product rows. One strong value/name is enough."""
     sheet, header_row = _best_product_sheet(template)
-    clean: list[str] = []
-    seen: set[str] = set()
-    for part_number in part_numbers:
-        value = _clean_id(part_number)
-        if not value:
-            continue
-        key = value.upper()
-        if key in seen:
-            continue
-        seen.add(key)
-        clean.append(value)
-    return [BatchItem(header_row + i + 1, sheet, ProductIdentity(mpn=pn)) for i, pn in enumerate(clean)]
+    return [BatchItem(header_row + i + 1, sheet, ident) for i, ident in enumerate(identities)]
+
+
+def manual_items(template: str, part_numbers: list[str]) -> list[BatchItem]:
+    """Backward-compatible MPN wrapper for CLI/API callers."""
+    identities=[]
+    for value in part_numbers:
+        ident=parse_product_query(str(value))
+        if ident: identities.append(ident)
+    return manual_identity_items(template,identities)
 
 
 def _meaningful_product_tokens(value: str | None) -> set[str]:
@@ -190,10 +190,19 @@ def _merge_valid_records(records: list[ProductRecord]) -> ProductRecord:
     return merged
 
 
-def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, log=lambda m: None) -> ProductRecord | None:
+def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, ai_config: AIConfig | None = None, log=lambda m: None) -> ProductRecord | None:
     """Single product scraping path. The Excel contract decides which capabilities are needed."""
     pipe = ProductPipeline()
-    candidates = [type("Candidate", (), {"url": item.source_url, "likely_official": True, "score": 1.0})()] if item.source_url else search_web(item.identity, limit=12)
+    candidates = [type("Candidate", (), {"url": item.source_url, "likely_official": True, "score": 1.0, "ai_assisted": False})()] if item.source_url else search_web(item.identity, limit=16)
+    if ai_config and ai_config.discovery_enabled and not any(bool(getattr(c,"likely_official",False)) for c in candidates):
+        ai_urls=discover_official_urls(item.identity,ai_config)
+        if ai_urls:
+            log(f"  IA web discovery: {len(ai_urls)} URLs candidatas; todas se validarán con el scraper")
+            known={getattr(c,"url","") for c in candidates}
+            for aic in ai_urls:
+                if aic.url in known: continue
+                candidates.append(type("Candidate",(),{"url":aic.url,"likely_official":False,"score":aic.confidence,"ai_assisted":True})())
+                known.add(aic.url)
     media_slots = int((template_plan or {}).get("media_slots", 0) or 0)
     target_semantics = list((template_plan or {}).get("scrape_semantics") or [])
     include_images = bool(media_slots)
@@ -230,6 +239,11 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
             )
             if rec.identity.identifiers_conflicting:
                 raise ValueError("identificadores en conflicto")
+            if getattr(candidate,"ai_assisted",False) and (rec.fetch or {}).get("source_class") != "manufacturer":
+                learned_brand=re.sub(r"[^a-z0-9]","",key_norm(rec.identity.brand or ""))
+                host_compact=re.sub(r"[^a-z0-9]","",key_norm(host))
+                if learned_brand and learned_brand in host_compact:
+                    rec=pipe.process_url(item.identity,candidate.url,official_domain=host,include_pdfs=include_pdfs,include_images=include_images,browser_fallback=True,target_semantics=target_semantics,media_slots=media_slots)
             if accepted and not _cross_source_consistent(accepted[0], rec, candidate.url):
                 raise ValueError("fuente exacta contiene el identificador pero no representa la misma ficha de producto")
             accepted.append(rec)
@@ -286,6 +300,7 @@ def run_batch(
     log=lambda m: None,
     ai_config: AIConfig | None = None,
     manual_part_numbers: list[str] | None = None,
+    manual_identities: list[ProductIdentity] | None = None,
 ) -> dict:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -300,9 +315,14 @@ def run_batch(
         f"{ps['marketplace_inputs']} datos marketplace"
     )
 
-    manual_mode = bool(manual_part_numbers)
-    items = manual_items(template, manual_part_numbers or []) if manual_mode else detect_items(template)
-    log(f"Productos a procesar: {len(items)}" + (" (part numbers manuales)" if manual_mode else " (detectados en Excel)"))
+    manual_mode = bool(manual_identities or manual_part_numbers)
+    if manual_identities:
+        items=manual_identity_items(template,manual_identities)
+    elif manual_part_numbers:
+        items=manual_items(template,manual_part_numbers)
+    else:
+        items=detect_items(template)
+    log(f"Productos a procesar: {len(items)}" + (" (entradas manuales: MPN/EAN/UPC/GTIN/nombre)" if manual_mode else " (detectados en Excel)"))
 
     records: list[ProductRecord] = []
     # Every product is bound to the exact input row that created it. The mapper must not
@@ -312,7 +332,7 @@ def run_batch(
     for index, item in enumerate(items, 1):
         label = item.identity.mpn or item.identity.ean or item.identity.model or item.identity.product_name
         log(f"[{index}/{len(items)}] {label}")
-        rec = scrape_item(item, str(out / "json"), template_plan=template_plan, log=log)
+        rec = scrape_item(item, str(out / "json"), template_plan=template_plan, ai_config=ai_config, log=log)
         if rec:
             records.append(rec)
             row_assignments[(item.sheet, item.row)] = rec
@@ -333,7 +353,7 @@ def run_batch(
         row_assignments=row_assignments,
     )
     summary = {
-        "mode": "manual_part_numbers" if manual_mode else "excel_detected",
+        "mode": "manual_product_identity" if manual_mode else "excel_detected",
         "template_contract": template_plan["summary"],
         "template_contract_file": str(out / "template_contract.json"),
         "products_detected": len(items),

@@ -12,7 +12,7 @@ from .semantic_guard import infer_contract,validate_value,is_placeholder
 from .ai_enrichment import AIConfig,AIEnricher
 from .template_intelligence import classify_field
 from .template_contract import analyze_template_contract
-from .field_derivations import derive_description,derive_connectivity,derive_headphone_type,derive_water_resistance,derive_power_source,derive_battery_life,derive_features,derive_segment,derive_bluetooth
+from .field_derivations import derive_description,derive_connectivity,derive_headphone_type,derive_water_resistance,derive_power_source,derive_autonomy,derive_features,derive_segment,derive_boolean
 
 IDENTITY_ALIASES={'brand','model','mpn','ean','upc','gtin','product name'}
 
@@ -71,7 +71,7 @@ def _is_template_example(value,desc):
 def _identity_value(rec,key):
     attr={'product name':'product_name'}.get(key,key)
     val=getattr(rec.identity,attr,None)
-    conf=float(rec.identity.confidence or 0)
+    conf=.99 if rec.identity.match_level=='EXACT' else (.90 if rec.identity.match_level=='HIGH' else float(rec.identity.confidence or 0))
     return val,conf,'identity'
 
 def _option_keys(label):
@@ -124,18 +124,18 @@ def _derived_for_field(rec,header,description,canonical,contract,options,ext_id)
     h=key_norm(header);intent=key_norm(f'{header} {description or ""} {getattr(contract,"semantic","") or ""}')
     d=None
     if ext_id=='53' or canonical=='description' or h in {'descripcion','description'}:d=derive_description(rec)
-    elif 'bluetooth' in intent:d=derive_bluetooth(rec,options)
+    elif 'bluetooth' in intent:d=derive_boolean(rec,'bluetooth')
     elif 'resistente al agua' in intent or 'water resistance' in intent:d=derive_water_resistance(rec,options)
     elif canonical=='connectivity' or 'conectividad' in intent or 'connectivity' in intent:d=derive_connectivity(rec,options)
     elif canonical=='headphone type' or 'tipo de auricular' in intent or 'headphone type' in intent:d=derive_headphone_type(rec,options)
     elif canonical=='power source' or 'alimentacion' in intent or 'power source' in intent:d=derive_power_source(rec,options)
-    elif canonical=='battery life' or 'autonomia' in intent or 'battery life' in intent:d=derive_battery_life(rec)
+    elif canonical=='battery life' or 'autonomia' in intent or 'battery life' in intent:d=derive_autonomy(rec)
     elif canonical=='features' or 'caracteristicas' in intent or 'features' in intent:d=derive_features(rec,options)
     elif canonical=='segment' or 'segmento' in intent:d=derive_segment(rec,options)
     if not d:return None,0,'',None,None
     ev_attr=None;ev_raw=None
     if d.evidence_attribute:ev_attr=d.evidence_attribute
-    if d.raw_value is not None:ev_raw=d.raw_value
+    if d.evidence_raw is not None:ev_raw=d.evidence_raw
     return d.value,d.confidence,d.reason,ev_attr,ev_raw
 def _match_record(records,rowvals,mapped):
     best=None

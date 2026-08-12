@@ -151,8 +151,10 @@ def media_rank(item: dict) -> tuple:
     if "triggered_after_variant_selection" in evidence:
         identity_rank += 4
 
+    source_class_rank={"manufacturer":3,"secondary":2,"marketplace":1}.get(str(item.get("source_class") or ""),0)
     return (
         scope_rank.get(str(item.get("scope")), 0),
+        source_class_rank,
         identity_rank,
         float(item.get("confidence") or 0),
         source_rank,

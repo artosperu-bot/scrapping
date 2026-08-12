@@ -7,6 +7,13 @@ def patch(path,old,new,count=1):
     if old not in s: raise SystemExit(f'anchor missing {path}: {old[:90]}')
     p.write_text(s.replace(old,new,count),encoding='utf-8')
 
+# Repair stale mapper names found in current main before applying the feature patch.
+p=ROOT/'src/product_intelligence/excel_mapper_v8.py';s=p.read_text(encoding='utf-8')
+s=s.replace('derive_power_source,derive_battery_life,derive_features,derive_segment,derive_bluetooth','derive_power_source,derive_autonomy,derive_features,derive_segment,derive_boolean')
+s=s.replace("elif 'bluetooth' in intent:d=derive_bluetooth(rec,options)","elif 'bluetooth' in intent:d=derive_boolean(rec,'bluetooth')")
+s=s.replace("elif canonical=='battery life' or 'autonomia' in intent or 'battery life' in intent:d=derive_battery_life(rec)","elif canonical=='battery life' or 'autonomia' in intent or 'battery life' in intent:d=derive_autonomy(rec)")
+p.write_text(s,encoding='utf-8')
+
 # batch imports
 patch('src/product_intelligence/batch.py','from .ai_enrichment import AIConfig\n','from .ai_enrichment import AIConfig\nfrom .ai_discovery import discover_official_urls\nfrom .input_identity import parse_product_query\n')
 

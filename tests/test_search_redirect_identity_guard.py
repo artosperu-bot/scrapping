@@ -16,14 +16,13 @@ def test_search_auth_redirect_query_does_not_confirm_mpn():
         "https://login.yahoo.com/?done="
         "https://search.yahoo.com/search?p=JBLQ350WLBLKAM"
     )
-
     candidate = identity_from_page(page, expected=expected, source_url=url)
     assert candidate.mpn is None
     checked = compare_identity(expected, candidate)
     assert checked.match_level != "EXACT"
 
 
-def test_product_url_path_can_still_reinforce_mpn():
+def test_product_url_path_is_not_identity_evidence_by_itself():
     expected = ProductIdentity(mpn="JBLQ350WLBLKAM")
     page = {
         "jsonld": [],
@@ -32,8 +31,21 @@ def test_product_url_path_can_still_reinforce_mpn():
         "text": "JBL Quantum 350 Wireless gaming headset",
     }
     url = "https://www.jbl.com/JBLQ350WLBLKAM.html?utm_source=test"
-
     candidate = identity_from_page(page, expected=expected, source_url=url)
+    assert candidate.mpn is None
+    checked = compare_identity(expected, candidate)
+    assert checked.match_level != "EXACT"
+
+
+def test_product_page_content_can_confirm_mpn():
+    expected = ProductIdentity(mpn="JBLQ350WLBLKAM")
+    page = {
+        "jsonld": [],
+        "embedded": {},
+        "title": "JBL Quantum 350 Wireless",
+        "text": "JBL Quantum 350 Wireless. Item number JBLQ350WLBLKAM.",
+    }
+    candidate = identity_from_page(page, expected=expected, source_url="https://www.jbl.com/quantum-350.html")
     assert candidate.mpn == "JBLQ350WLBLKAM"
     checked = compare_identity(expected, candidate)
     assert checked.match_level == "EXACT"

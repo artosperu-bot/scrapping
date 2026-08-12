@@ -19,14 +19,38 @@ class AIDiscoveryCandidate:
     reason: str = ""
 
 
+def _search_formulations(data:dict[str,Any],country:str)->list[str]:
+    strong=[str(data[k]) for k in ("mpn","ean","upc","gtin") if data.get(k)]
+    name=str(data.get("product_name") or data.get("model") or "").strip()
+    brand=str(data.get("brand") or "").strip()
+    core=strong[0] if strong else name
+    queries=[]
+    if core:
+        queries += [f'"{core}" official manufacturer', f'"{core}" {brand} official' if brand else f'"{core}" product']
+        queries += [f'"{core}" {brand} {country} official' if brand else f'"{core}" {country} official']
+    if name and strong:
+        queries.append(f'"{strong[0]}" "{name}"')
+    if brand and name:
+        queries.append(f'"{name}" site:{brand.lower().replace(" ","")}.com')
+    return list(dict.fromkeys(q for q in queries if q.strip()))[:6]
+
+
 def _payload(identity: ProductIdentity, country: str) -> str:
     data={k:v for k,v in identity.model_dump().items() if k in {"mpn","ean","upc","gtin","brand","model","product_name","color","variant"} and v not in (None,"")}
     return json.dumps({
         "task":"Find official manufacturer product-page URLs for this exact product. Return JSON only.",
         "preferred_country":country,
         "identity":data,
+        "try_multiple_searches":_search_formulations(data,country),
         "priority":["manufacturer page in preferred country","manufacturer page in nearby/Latin American region","global manufacturer page"],
-        "rules":["Search strong identifiers and product name/model","Do not return retailers or marketplaces as official","Return URLs as candidates only; caller validates every page independently"],
+        "rules":[
+            "Use several search formulations when the first result is not the preferred regional manufacturer page.",
+            "Search every available strong identifier (MPN, EAN, UPC, GTIN) and also product name/model when present.",
+            "Treat regional domains of the same manufacturer as one manufacturer family, but rank the preferred country first.",
+            "Do not return retailers, marketplaces, comparison sites or social media as official manufacturer pages.",
+            "Return URLs as candidates only; caller validates identity, variant and source independently.",
+            "Return up to 8 useful official candidates, ordered best first."
+        ],
         "output":{"candidates":[{"url":"https://example.com/product","country":"PE","confidence":0.95,"reason":"exact identifier on manufacturer page"}]}
     },ensure_ascii=False)
 
@@ -69,7 +93,7 @@ def discover_official_urls(identity: ProductIdentity, config: AIConfig | None) -
             return _parse(_json_from_text(_openai_text(r.json())))
         if c.provider=="openrouter":
             base=(c.base_url or "https://openrouter.ai/api/v1").rstrip('/')
-            body={"model":c.model,"messages":[{"role":"system","content":"Return JSON only. Find official product URLs conservatively."},{"role":"user","content":prompt}],"tools":[{"type":"openrouter:web_search","max_total_results":10}],"temperature":0}
+            body={"model":c.model,"messages":[{"role":"system","content":"Return JSON only. Find official product URLs conservatively."},{"role":"user","content":prompt}],"tools":[{"type":"openrouter:web_search","max_total_results":12}],"temperature":0}
             r=requests.post(base+"/chat/completions",headers=headers,json=body,timeout=max(c.timeout,60))
             r.raise_for_status()
             text=(((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")

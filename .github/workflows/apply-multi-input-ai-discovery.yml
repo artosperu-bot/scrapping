@@ -40,3 +40,4 @@ jobs:
             git commit -m 'feat: support generic product identities and AI web discovery fallback'
             git push
           fi
+# rerun after stale mapper import cleanup

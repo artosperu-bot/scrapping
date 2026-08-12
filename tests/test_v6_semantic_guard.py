@@ -1,5 +1,5 @@
 from product_intelligence.semantic_guard import infer_contract, validate_value
-from product_intelligence.excel_mapper import map_header
+from product_intelligence.excel_mapper_v8 import map_header
 
 
 def test_audio_power_rejects_speed_unit():
@@ -49,6 +49,7 @@ def test_fuzzy_does_not_use_long_description_to_force_mapping():
     key,conf,cls=map_header("CampoRaro #999","this field mentions cable length and weight and dimensions")
     assert key is None
 
+
 def test_power_source_not_confused_with_power():
     key,_,_=map_header("Alimentacion #1583","Selecciona el tipo de alimentación eléctrica / Select the power source")
     assert key=="power_source"
@@ -70,8 +71,8 @@ def test_seller_sku_classified_seller_data():
     key,conf,cls=map_header("SKU del vendedor #29","creado y designado por ti como vendedor")
     assert key is None and cls=="SELLER_DATA"
 
+
 def test_package_contents_box_context_allowed():
     c=infer_contract("Contenido del paquete #19","elementos incluidos con el producto embalado","package_contents")
     ok,reason,_=validate_value("1 x headphones",c,evidence_attribute="What's in the box",evidence_raw="1 x headphones")
-    # package contents are inherently package-context evidence via the attribute name
     assert ok or reason=="PACKAGE_CONTEXT_NOT_PROVEN"

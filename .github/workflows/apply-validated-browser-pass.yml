@@ -1,0 +1,24 @@
+name: Apply validated browser pass
+on:
+  push:
+    paths:
+      - 'tools/optimize_validated_browser_pass.py'
+      - '.github/workflows/apply-validated-browser-pass.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python tools/optimize_validated_browser_pass.py
+      - run: pip install -e '.[dev]' && pytest -q
+      - run: |
+          git config user.name artosperu-bot
+          git config user.email artosperu@gmail.com
+          git add src
+          git commit -m 'perf: enrich galleries with browser only after exact identity' || exit 0
+          git push

@@ -9,7 +9,6 @@ from .models import ProductRecord
 from .normalize import canonical_key,key_norm
 from .attribute_resolver import best_candidate
 from .semantic_guard import infer_contract,validate_value,is_placeholder
-from .ai_enrichment import AIConfig,AIEnricher
 from .template_intelligence import classify_field
 from .template_contract import analyze_template_contract
 from .field_derivations import derive_description,derive_connectivity,derive_headphone_type,derive_water_resistance,derive_power_source,derive_autonomy,derive_features,derive_segment,derive_boolean
@@ -166,8 +165,7 @@ def media_rank(item):
     source_class_rank={'manufacturer':3,'secondary':2,'marketplace':1}.get(str(item.get('source_class') or ''),0)
     return (s,source_class_rank,float(item.get('confidence',0)))
 
-def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_config:AIConfig|None=None,row_assignments:dict[tuple[str,int],ProductRecord]|None=None):
-    ai=AIEnricher(ai_config or AIConfig())
+def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,row_assignments:dict[tuple[str,int],ProductRecord]|None=None):
     row_assignments=row_assignments or {}
     wb=load_workbook(template)
     template_plan=analyze_template_contract(template)
@@ -214,15 +212,6 @@ def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_con
                     continue
                 if cell.value not in (None,'') and not overwrite:continue
                 ext=_external_id(header);options=opts[c]
-                if ai.config.enabled and (ext=='53' or key_norm(_strip_field_id(header)) in {'descripcion','description'}) and rec.identity.match_level not in {'CONFLICT','LOW'}:
-                    suggestion=ai.suggest(rec,header,str(desc) if desc else None,None,language='es')
-                    if suggestion and float(suggestion.get('confidence') or 0)>=.84:
-                        value=suggestion['value'];evs=suggestion.get('evidence') or []
-                        ev_attr='; '.join(str(x.get('attribute','')) for x in evs[:6]);ev_raw='; '.join(str(x.get('value','')) for x in evs[:6])
-                        ok,greason,_=validate_value(value,contracts[c],evidence_attribute=ev_attr,evidence_raw=ev_raw)
-                        if ok:
-                            cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":"ai_description","value":value,"source":"AI over validated evidence","reason":suggestion.get("reason"),"confidence":round(float(suggestion.get('confidence') or 0),3),"evidence_ids":suggestion.get("evidence_ids")});continue
-                        rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":greason,"layer":"ai_description"})
                 value,vconf,reason,ev_attr,ev_raw=_derived_for_field(rec,header,str(desc) if desc else None,key,contracts[c],options,ext)
                 source=None
                 if value not in (None,'') and vconf>=.85:
@@ -256,15 +245,6 @@ def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_con
                                 rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":creason,"attribute":cand.evidence.attribute});continue
                             value=cv
                         cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key,"value":value,"source":cand.evidence.source_url,"evidence_attribute":cand.evidence.attribute,"confidence":round(cand.score,3),"reasons":cand.reasons});continue
-                if ai.config.enabled and rec.identity.match_level not in {'CONFLICT','LOW'}:
-                    suggestion=ai.suggest(rec,header,str(desc) if desc else None,options if contracts[c].value_type=='controlled' else None,language='es')
-                    if suggestion and float(suggestion.get('confidence') or 0)>=.82:
-                        value=suggestion['value'];evs=suggestion.get('evidence') or []
-                        ev_attr='; '.join(str(x.get('attribute','')) for x in evs[:4]);ev_raw='; '.join(str(x.get('value','')) for x in evs[:4])
-                        ok,greason,_=validate_value(value,contracts[c],evidence_attribute=ev_attr,evidence_raw=ev_raw)
-                        if ok:
-                            cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key or 'ai_derived',"value":value,"source":"AI over validated evidence","reason":suggestion.get('reason'),"confidence":round(float(suggestion.get('confidence') or 0),3),"evidence_ids":suggestion.get('evidence_ids')});continue
-                        rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":greason,"layer":"ai"})
             ranked=sorted([i for i in rec.images if i.get('autofill_eligible',True) and i.get('role','product_gallery')=='product_gallery' and i.get('scope') in {'EXACT_VARIANT','EXACT_PRODUCT'} and i.get('confidence',0)>=.80],key=media_rank,reverse=True)
             seen=set();dedup=[]
             for i in ranked:

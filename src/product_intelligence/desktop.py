@@ -18,21 +18,10 @@ def _configure_frozen_browser():
 _configure_frozen_browser()
 
 from .batch import run_batch
-from .ai_enrichment import AIConfig
 from .input_identity import parse_product_entries
-from .model_catalog import DEFAULT_MODELS, capability, list_models
 from .excel_mapper_v8 import fill_excel_v8
 from .models import ProductRecord
 from .repair import repair_existing_record
-
-
-PROVIDER_DEFAULTS={
-    'openai':('https://api.openai.com/v1','gpt-5-mini-2025-08-07'),
-    'openrouter':('https://openrouter.ai/api/v1','openai/gpt-5-mini'),
-    'mistral':('https://api.mistral.ai/v1','mistral-small-latest'),
-    'ollama':('http://127.0.0.1:11434','mistral'),
-    'openai_compatible':('',''),
-}
 
 
 class App(tk.Tk):
@@ -69,9 +58,6 @@ class App(tk.Tk):
         ttk.Label(searchbox,text='✓ Búsqueda web gratuita SIEMPRE ACTIVA — DuckDuckGo HTML, Bing/Bing RSS, Brave web, Mojeek y Yahoo. No requiere API key.',font=('Segoe UI',9,'bold')).pack(anchor='w')
         ttk.Label(searchbox,text='Busca MPN/EAN/UPC/GTIN/nombre y refuerza consultas con official, specifications, datasheet, manual y support. Después el scraper valida cada URL.').pack(anchor='w',pady=(3,0))
 
-        self.ai_discovery=tk.BooleanVar(value=False);self.ai_enrichment=tk.BooleanVar(value=False)
-        self.ai_provider=tk.StringVar(value='off');self.ai_model=tk.StringVar(value='')
-        self.ai_base=tk.StringVar(value='');self.ai_key=tk.StringVar(value='');self.ai_country=tk.StringVar(value='PE')
         info=ttk.LabelFrame(main,text='5. Política de fuentes',padding=10);info.pack(fill='x',pady=(0,8))
         ttk.Label(info,text='1) URLs que pegues → se prueban primero y se validan.').pack(anchor='w')
         ttk.Label(info,text='2) Fabricante / ficha técnica / PDF / soporte oficial → máxima prioridad.').pack(anchor='w')
@@ -101,35 +87,6 @@ class App(tk.Tk):
         except queue.Empty:pass
         self.after(150,self._drain)
 
-    def _provider_changed(self,_event=None):
-        provider=self.ai_provider.get();base,model=PROVIDER_DEFAULTS.get(provider,('',''))
-        self.ai_base.set(base);self.ai_model.set(model);self.model_combo.configure(values=DEFAULT_MODELS.get(provider,[]));self._refresh_capability()
-
-    def _refresh_capability(self):
-        cap=capability(self.ai_provider.get(),self.ai_model.get())
-        web='Sí' if cap.web_discovery else 'No'
-        evidence='Sí' if cap.evidence_enrichment else 'No'
-        suffix=''
-        if self.ai_discovery.get() and not cap.web_discovery:
-            suffix=' — Este proveedor no ofrece Web Discovery integrada; la búsqueda web gratuita del scraper sigue funcionando.'
-        self.ai_status.set(f'IA opcional → Web Discovery integrada: {web} | Interpretar evidencia: {evidence}.{suffix}')
-
-    def load_models(self):
-        def work():
-            try:
-                cfg=AIConfig(enabled=True,provider=self.ai_provider.get(),model=self.ai_model.get(),base_url=self.ai_base.get().strip(),api_key=self.ai_key.get().strip())
-                models=list_models(cfg)
-                self.after(0,lambda:self.model_combo.configure(values=models))
-                self.emit(f'Modelos disponibles ({self.ai_provider.get()}): {len(models)}')
-            except Exception as e:self.emit(f'No se pudieron cargar modelos: {e}')
-        threading.Thread(target=work,daemon=True).start()
-
-    def _ai_config(self):
-        provider=self.ai_provider.get().strip();model=self.ai_model.get().strip();cap=capability(provider,model)
-        discovery=bool(self.ai_discovery.get() and cap.web_discovery)
-        enrichment=bool(self.ai_enrichment.get() and cap.evidence_enrichment)
-        return AIConfig(enabled=discovery or enrichment,provider=provider if discovery or enrichment else 'off',model=model,base_url=self.ai_base.get().strip(),api_key=self.ai_key.get().strip(),discovery_enabled=discovery,enrichment_enabled=enrichment,preferred_country=(self.ai_country.get().strip().upper() or 'PE'))
-
     def _manual_entries(self):
         return parse_product_entries(self.product_queries.get('1.0','end').strip())
 
@@ -138,7 +95,7 @@ class App(tk.Tk):
 
     def run(self):
         if not self.excel.get() or not Path(self.excel.get()).exists():messagebox.showerror('Falta archivo','Selecciona una plantilla .xlsx.');return
-        entries=self._manual_entries();identities=[e.identity for e in entries];source_urls=[e.source_urls for e in entries];cfg=None
+        entries=self._manual_entries();identities=[e.identity for e in entries];source_urls=[e.source_urls for e in entries]
         self.runbtn.configure(state='disabled')
         def work():
             try:
@@ -146,7 +103,7 @@ class App(tk.Tk):
                 self.emit('Búsqueda web gratuita: ACTIVA (sin API key de búsqueda).')
                 if identities:
                     for i,x in enumerate(identities,1):self.emit(f'Entrada {i}: '+json.dumps({k:v for k,v in x.model_dump().items() if v not in (None,'')},ensure_ascii=False))
-                res=run_batch(self.excel.get(),self.out.get(),overwrite=self.overwrite.get(),log=self.emit,ai_config=None,manual_identities=identities or None,manual_source_urls=source_urls or None)
+                res=run_batch(self.excel.get(),self.out.get(),overwrite=self.overwrite.get(),log=self.emit,manual_identities=identities or None,manual_source_urls=source_urls or None)
                 self.emit(json.dumps(res,ensure_ascii=False,indent=2));self.emit('=== TERMINADO ===')
                 self.after(0,lambda:messagebox.showinfo('Terminado',f"Excel: {res['output_excel']}\nTrazabilidad: {res['trace']}"))
             except Exception as e:
@@ -163,7 +120,7 @@ class App(tk.Tk):
         try:
             recs=[repair_existing_record(ProductRecord.model_validate_json(Path(p).read_text(encoding='utf-8'))) for p in files]
             dest=out/(Path(template).stem+'_reprocesado.xlsx');trace=out/'trazabilidad_reprocesado.json'
-            rep=fill_excel_v8(template,str(dest),recs,overwrite=self.overwrite.get(),trace_path=str(trace),ai_config=None)
+            rep=fill_excel_v8(template,str(dest),recs,overwrite=self.overwrite.get(),trace_path=str(trace))
             self.emit(f'Reprocesado: {dest}');self.emit(json.dumps(rep['summary'],ensure_ascii=False));messagebox.showinfo('Reprocesado',str(dest))
         except Exception as e:self.emit(traceback.format_exc());messagebox.showerror('Error',str(e))
 

@@ -8,8 +8,6 @@ from urllib.parse import urlparse
 
 from openpyxl import load_workbook
 
-from .ai_enrichment import AIConfig
-from .ai_discovery import discover_official_urls
 from .input_identity import parse_product_query
 from .discovery import search_web
 from .excel_mapper_v8 import fill_excel_v8
@@ -197,7 +195,7 @@ def _merge_valid_records(records: list[ProductRecord]) -> ProductRecord:
     return merged
 
 
-def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, ai_config: AIConfig | None = None, log=lambda m: None) -> ProductRecord | None:
+def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, log=lambda m: None) -> ProductRecord | None:
     """Single product scraping path. The Excel contract decides which capabilities are needed."""
     pipe = ProductPipeline()
     manual_urls=list(dict.fromkeys([u for u in ((item.source_urls or []) + ([item.source_url] if item.source_url else [])) if u]))
@@ -207,27 +205,6 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
     candidates=manual_candidates + [c for c in free_candidates if getattr(c,"url",None) not in known_manual]
     if manual_urls:
         log(f"  fuentes manuales prioritarias: {len(manual_urls)}; todas pasan por validación de identidad")
-    preferred_country=(getattr(ai_config,"preferred_country","PE") or "PE").strip().lower() if ai_config else "pe"
-    def _preferred_region_candidate(c):
-        if not bool(getattr(c,"likely_official",False)):
-            return False
-        host=(urlparse(getattr(c,"url","")).hostname or "").lower()
-        return host.endswith("."+preferred_country) or ("."+preferred_country+".") in host
-    has_official=any(bool(getattr(c,"likely_official",False)) for c in candidates)
-    has_preferred_official=any(_preferred_region_candidate(c) for c in candidates)
-    needs_ai=bool(ai_config and ai_config.discovery_enabled)
-    if needs_ai:
-        ai_urls=discover_official_urls(item.identity,ai_config)
-        if ai_urls:
-            log(f"  IA web discovery técnica: {len(ai_urls)} URLs oficiales/técnicas candidatas; se prueban primero y todas se validan con el scraper")
-            known={getattr(c,"url","") for c in candidates}
-            injected=[]
-            for aic in ai_urls:
-                if aic.url in known: continue
-                injected.append(type("Candidate",(),{"url":aic.url,"likely_official":False,"score":aic.confidence,"ai_assisted":True,"country":aic.country})())
-                known.add(aic.url)
-            injected.sort(key=lambda c:(str(getattr(c,"country","") or "").lower()!=preferred_country,-float(getattr(c,"score",0))))
-            candidates=injected+candidates
     media_slots = int((template_plan or {}).get("media_slots", 0) or 0)
     target_semantics = list((template_plan or {}).get("scrape_semantics") or [])
     include_images = bool(media_slots)
@@ -264,7 +241,7 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
             )
             if rec.identity.identifiers_conflicting:
                 raise ValueError("identificadores en conflicto")
-            if (getattr(candidate,"ai_assisted",False) or getattr(candidate,"manual_source",False)) and (rec.fetch or {}).get("source_class") != "manufacturer":
+            if getattr(candidate,"manual_source",False) and (rec.fetch or {}).get("source_class") != "manufacturer":
                 learned_brand=re.sub(r"[^a-z0-9]","",key_norm(rec.identity.brand or ""))
                 host_compact=re.sub(r"[^a-z0-9]","",key_norm(host))
                 if learned_brand and learned_brand in host_compact:
@@ -323,7 +300,6 @@ def run_batch(
     output_dir: str,
     overwrite: bool = False,
     log=lambda m: None,
-    ai_config: AIConfig | None = None,
     manual_part_numbers: list[str] | None = None,
     manual_identities: list[ProductIdentity] | None = None,
     manual_source_urls: list[list[str]] | None = None,
@@ -358,7 +334,7 @@ def run_batch(
     for index, item in enumerate(items, 1):
         label = item.identity.mpn or item.identity.ean or item.identity.model or item.identity.product_name
         log(f"[{index}/{len(items)}] {label}")
-        rec = scrape_item(item, str(out / "json"), template_plan=template_plan, ai_config=ai_config, log=log)
+        rec = scrape_item(item, str(out / "json"), template_plan=template_plan, log=log)
         if rec:
             records.append(rec)
             row_assignments[(item.sheet, item.row)] = rec
@@ -375,7 +351,6 @@ def run_batch(
         [],
         overwrite=overwrite,
         trace_path=trace,
-        ai_config=ai_config,
         row_assignments=row_assignments,
     )
     summary = {

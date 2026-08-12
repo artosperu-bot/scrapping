@@ -194,15 +194,27 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
     """Single product scraping path. The Excel contract decides which capabilities are needed."""
     pipe = ProductPipeline()
     candidates = [type("Candidate", (), {"url": item.source_url, "likely_official": True, "score": 1.0, "ai_assisted": False})()] if item.source_url else search_web(item.identity, limit=16)
-    if ai_config and ai_config.discovery_enabled and not any(bool(getattr(c,"likely_official",False)) for c in candidates):
+    preferred_country=(getattr(ai_config,"preferred_country","PE") or "PE").strip().lower() if ai_config else "pe"
+    def _preferred_region_candidate(c):
+        if not bool(getattr(c,"likely_official",False)):
+            return False
+        host=(urlparse(getattr(c,"url","")).hostname or "").lower()
+        return host.endswith("."+preferred_country) or ("."+preferred_country+".") in host
+    has_official=any(bool(getattr(c,"likely_official",False)) for c in candidates)
+    has_preferred_official=any(_preferred_region_candidate(c) for c in candidates)
+    needs_ai=bool(ai_config and ai_config.discovery_enabled and (not has_official or not has_preferred_official))
+    if needs_ai:
         ai_urls=discover_official_urls(item.identity,ai_config)
         if ai_urls:
-            log(f"  IA web discovery: {len(ai_urls)} URLs candidatas; todas se validarán con el scraper")
+            log(f"  IA web discovery: {len(ai_urls)} URLs candidatas para mejorar fuente oficial/regional; todas se validarán con el scraper")
             known={getattr(c,"url","") for c in candidates}
+            injected=[]
             for aic in ai_urls:
                 if aic.url in known: continue
-                candidates.append(type("Candidate",(),{"url":aic.url,"likely_official":False,"score":aic.confidence,"ai_assisted":True})())
+                injected.append(type("Candidate",(),{"url":aic.url,"likely_official":False,"score":aic.confidence,"ai_assisted":True,"country":aic.country})())
                 known.add(aic.url)
+            injected.sort(key=lambda c:(str(getattr(c,"country","") or "").lower()!=preferred_country,-float(getattr(c,"score",0))))
+            candidates=injected+candidates
     media_slots = int((template_plan or {}).get("media_slots", 0) or 0)
     target_semantics = list((template_plan or {}).get("scrape_semantics") or [])
     include_images = bool(media_slots)

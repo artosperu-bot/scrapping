@@ -50,6 +50,7 @@ def _host_connectivity_attribute(attribute: str) -> bool:
     return any(x in attr for x in [
         "connectivity", "conectividad", "conexion", "connection", "interface", "interfaz",
         "audio connector", "connector", "conector", "host port", "host interface",
+        "wireless", "network", "red inalambrica", "red inalámbrica",
     ])
 
 

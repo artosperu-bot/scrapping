@@ -5,6 +5,20 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def format_money(value: float | int | None, currency: str | None) -> str:
+    if value is None:
+        return ""
+    code = str(currency or "").upper().strip() or "PEN"
+    amount = float(value)
+    if code == "PEN":
+        return f"S/ {amount:,.2f}"
+    if code == "USD":
+        return f"US$ {amount:,.2f}"
+    if code in {"CLP", "COP"}:
+        return f"{code} {amount:,.0f}"
+    return f"{code} {amount:,.2f}"
+
+
 @dataclass(slots=True)
 class PriceOffer:
     part_number: str | None

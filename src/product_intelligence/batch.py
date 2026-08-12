@@ -202,11 +202,11 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
         return host.endswith("."+preferred_country) or ("."+preferred_country+".") in host
     has_official=any(bool(getattr(c,"likely_official",False)) for c in candidates)
     has_preferred_official=any(_preferred_region_candidate(c) for c in candidates)
-    needs_ai=bool(ai_config and ai_config.discovery_enabled and (not has_official or not has_preferred_official))
+    needs_ai=bool(ai_config and ai_config.discovery_enabled)
     if needs_ai:
         ai_urls=discover_official_urls(item.identity,ai_config)
         if ai_urls:
-            log(f"  IA web discovery: {len(ai_urls)} URLs candidatas para mejorar fuente oficial/regional; todas se validarán con el scraper")
+            log(f"  IA web discovery técnica: {len(ai_urls)} URLs oficiales/técnicas candidatas; se prueban primero y todas se validan con el scraper")
             known={getattr(c,"url","") for c in candidates}
             injected=[]
             for aic in ai_urls:

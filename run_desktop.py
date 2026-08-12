@@ -1,4 +1,4 @@
-from product_intelligence.media_progress_desktop import main
+from product_intelligence.price_desktop import main
 
-# Desktop entry point. Keeping this file intentionally small also makes PyInstaller rebuilds deterministic.
+# Final desktop entry point: base Excel flow + multimedia/progress + price intelligence.
 main()

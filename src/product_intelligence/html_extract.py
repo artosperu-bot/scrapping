@@ -10,18 +10,28 @@ from .structured_extract import extract_embedded_metadata, flatten_pairs
 from .image_extract import extract_image_candidates
 
 
+DOCUMENT_LABELS = [
+    "datasheet", "data sheet", "manual", "specification", "spec sheet", "ficha técnica", "ficha tecnica",
+    "specs & downloads", "specifications & downloads", "documents & downloads", "downloads",
+    "quick start guide", "quickstart guide", "user manual", "declaration of conformity",
+    "documentos y descargas", "manual de usuario", "guía de inicio", "guia de inicio",
+]
+
+
 def extract_page(html: str, base_url: str, identity_terms: list[str] | None = None) -> dict:
     soup = BeautifulSoup(html, "lxml")
     title = soup.title.get_text(" ", strip=True) if soup.title else None
     text = soup.get_text("\n", strip=True)
     pdfs = []
+    document_links = []
     for a in soup.find_all("a", href=True):
         href = urljoin(base_url, a["href"])
         label = a.get_text(" ", strip=True).lower()
-        if ".pdf" in href.lower() or any(k in label for k in [
-            "datasheet", "data sheet", "manual", "specification", "spec sheet", "ficha técnica", "ficha tecnica"
-        ]):
+        is_document_label = any(k in label for k in DOCUMENT_LABELS)
+        if ".pdf" in href.lower():
             pdfs.append(href)
+        elif is_document_label:
+            document_links.append(href)
 
     jsonld = []
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
@@ -36,6 +46,7 @@ def extract_page(html: str, base_url: str, identity_terms: list[str] | None = No
         "title": title,
         "text": text,
         "pdfs": list(dict.fromkeys(pdfs)),
+        "document_links": list(dict.fromkeys(document_links)),
         "images": images,
         "jsonld": jsonld,
         "embedded": embedded,
@@ -70,10 +81,6 @@ def identity_from_page(page: dict, expected: ProductIdentity | None = None, sour
         ean=str(prod.get("gtin13")) if prod.get("gtin13") else None,
         upc=str(prod.get("gtin12")) if prod.get("gtin12") else None,
     )
-    # Reinforce expected identifiers only from content returned by the validated page.
-    # A URL/path containing an MPN is a discovery hint, not evidence: retailers and search
-    # redirects can embed arbitrary identifiers in slugs while the actual page describes a
-    # different model. Structured Product metadata above remains the strongest source.
     if expected:
         haystack = str(page.get("text") or "").lower()
         compact = re.sub(r"\s+", "", haystack)
@@ -126,7 +133,7 @@ def table_evidence(html: str, source_url: str, match_level: str, base_confidence
 
 
 def structured_evidence(page: dict, source_url: str, match_level: str, confidence: float, source_type: str) -> list[Evidence]:
-    out=[]
+    out = []
     for path, value in flatten_pairs(page.get("embedded", {})):
         leaf = path.split(".")[-1]
         if leaf.lower() in {"name", "description", "model", "mpn", "sku", "gtin", "gtin12", "gtin13", "gtin14", "brand", "color", "weight", "width", "height", "depth", "material"}:

@@ -27,6 +27,7 @@ class BatchItem:
     sheet: str
     identity: ProductIdentity
     source_url: str | None = None
+    source_urls: list[str] | None = None
 
 
 def _clean_id(value):
@@ -74,7 +75,7 @@ def detect_items(template: str) -> list[BatchItem]:
             if not any(vals.get(k) for k in ["mpn", "ean", "upc", "gtin", "model", "product_name"]):
                 continue
             identity = ProductIdentity(**{k: v for k, v in vals.items() if k in ProductIdentity.model_fields})
-            items.append(BatchItem(row=row, sheet=ws.title, identity=identity, source_url=source_url))
+            items.append(BatchItem(row=row, sheet=ws.title, identity=identity, source_url=source_url, source_urls=[source_url] if source_url else []))
     return items
 
 
@@ -92,10 +93,16 @@ def _best_product_sheet(template: str) -> tuple[str, int]:
     return best[1], best[2]
 
 
-def manual_identity_items(template: str, identities: list[ProductIdentity]) -> list[BatchItem]:
-    """Bind generic product identities to product rows. One strong value/name is enough."""
+def manual_identity_items(template: str, identities: list[ProductIdentity], source_urls_by_index: list[list[str]] | None = None) -> list[BatchItem]:
+    """Bind identities to rows; user URLs are priority candidates, never trusted evidence."""
     sheet, header_row = _best_product_sheet(template)
-    return [BatchItem(header_row + i + 1, sheet, ident) for i, ident in enumerate(identities)]
+    items=[]
+    for i, ident in enumerate(identities):
+        urls=[]
+        if source_urls_by_index and i < len(source_urls_by_index):
+            urls=list(dict.fromkeys(u for u in (source_urls_by_index[i] or []) if u))
+        items.append(BatchItem(header_row + i + 1, sheet, ident, source_urls=urls))
+    return items
 
 
 def manual_items(template: str, part_numbers: list[str]) -> list[BatchItem]:
@@ -193,7 +200,13 @@ def _merge_valid_records(records: list[ProductRecord]) -> ProductRecord:
 def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, ai_config: AIConfig | None = None, log=lambda m: None) -> ProductRecord | None:
     """Single product scraping path. The Excel contract decides which capabilities are needed."""
     pipe = ProductPipeline()
-    candidates = [type("Candidate", (), {"url": item.source_url, "likely_official": True, "score": 1.0, "ai_assisted": False})()] if item.source_url else search_web(item.identity, limit=16)
+    manual_urls=list(dict.fromkeys([u for u in ((item.source_urls or []) + ([item.source_url] if item.source_url else [])) if u]))
+    manual_candidates=[type("Candidate", (), {"url": u, "likely_official": False, "score": 1.0, "ai_assisted": False, "manual_source": True})() for u in manual_urls]
+    free_candidates=search_web(item.identity, limit=16)
+    known_manual=set(manual_urls)
+    candidates=manual_candidates + [c for c in free_candidates if getattr(c,"url",None) not in known_manual]
+    if manual_urls:
+        log(f"  fuentes manuales prioritarias: {len(manual_urls)}; todas pasan por validación de identidad")
     preferred_country=(getattr(ai_config,"preferred_country","PE") or "PE").strip().lower() if ai_config else "pe"
     def _preferred_region_candidate(c):
         if not bool(getattr(c,"likely_official",False)):
@@ -251,7 +264,7 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
             )
             if rec.identity.identifiers_conflicting:
                 raise ValueError("identificadores en conflicto")
-            if getattr(candidate,"ai_assisted",False) and (rec.fetch or {}).get("source_class") != "manufacturer":
+            if (getattr(candidate,"ai_assisted",False) or getattr(candidate,"manual_source",False)) and (rec.fetch or {}).get("source_class") != "manufacturer":
                 learned_brand=re.sub(r"[^a-z0-9]","",key_norm(rec.identity.brand or ""))
                 host_compact=re.sub(r"[^a-z0-9]","",key_norm(host))
                 if learned_brand and learned_brand in host_compact:
@@ -313,6 +326,7 @@ def run_batch(
     ai_config: AIConfig | None = None,
     manual_part_numbers: list[str] | None = None,
     manual_identities: list[ProductIdentity] | None = None,
+    manual_source_urls: list[list[str]] | None = None,
 ) -> dict:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -329,7 +343,7 @@ def run_batch(
 
     manual_mode = bool(manual_identities or manual_part_numbers)
     if manual_identities:
-        items=manual_identity_items(template,manual_identities)
+        items=manual_identity_items(template,manual_identities,manual_source_urls)
     elif manual_part_numbers:
         items=manual_items(template,manual_part_numbers)
     else:

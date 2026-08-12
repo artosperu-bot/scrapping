@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from .discovery import search_web
 from .media_discovery import discover_media
 from .media_downloader import download_media_item, write_media_metadata
+from .media_url_quality import promote_image_url
 from .models import ProductIdentity
 from .web_fetch import fetch_page
 
@@ -136,14 +137,28 @@ def run_media_product(
                 page_is_validated=True,
             )
             for item in discovered:
-                media_url = str(item.get("url") or "").strip()
-                if not media_url or media_url in seen_media_urls:
+                original_url = str(item.get("url") or "").strip()
+                if not original_url:
                     continue
                 if not _eligible_media(item, official_page=official_page):
+                    emit(
+                        "media_filtered",
+                        url=original_url,
+                        role=item.get("role"),
+                        scope=item.get("scope"),
+                        confidence=item.get("confidence"),
+                        source=item.get("source"),
+                    )
+                    continue
+
+                media_url = promote_image_url(original_url) if str(item.get("media_type") or "").lower() == "image" else original_url
+                if not media_url or media_url in seen_media_urls:
                     continue
                 seen_media_urls.add(media_url)
                 enriched = {
                     **item,
+                    "url": media_url,
+                    "original_media_url": original_url if media_url != original_url else None,
                     "page_url": final_url,
                     "page_discovery_source": discovery_source,
                     "official_page": official_page,

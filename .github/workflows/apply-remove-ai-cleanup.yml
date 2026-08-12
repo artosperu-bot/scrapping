@@ -1,0 +1,103 @@
+name: Apply remove AI cleanup
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/apply-remove-ai-cleanup.yml'
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove obsolete AI path and stale artifacts
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # batch.py
+          p=Path('src/product_intelligence/batch.py')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace('from .ai_enrichment import AIConfig\n','')
+          s=s.replace('from .ai_discovery import discover_official_urls\n','')
+          s=s.replace('def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, ai_config: AIConfig | None = None, log=lambda m: None) -> ProductRecord | None:',
+                      'def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, log=lambda m: None) -> ProductRecord | None:')
+          start=s.find('    preferred_country=(getattr(ai_config,')
+          end=s.find('    media_slots = ', start)
+          if start!=-1 and end!=-1:
+              s=s[:start]+s[end:]
+          s=s.replace('(getattr(candidate,"ai_assisted",False) or getattr(candidate,"manual_source",False))', 'getattr(candidate,"manual_source",False)')
+          s=s.replace('    ai_config: AIConfig | None = None,\n','')
+          s=s.replace('rec = scrape_item(item, str(out / "json"), template_plan=template_plan, ai_config=ai_config, log=log)',
+                      'rec = scrape_item(item, str(out / "json"), template_plan=template_plan, log=log)')
+          s=s.replace('        ai_config=ai_config,\n','')
+          p.write_text(s,encoding='utf-8')
+
+          # excel_mapper_v8.py
+          p=Path('src/product_intelligence/excel_mapper_v8.py')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace('from .ai_enrichment import AIConfig,AIEnricher\n','')
+          s=s.replace('def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,ai_config:AIConfig|None=None,row_assignments:dict[tuple[str,int],ProductRecord]|None=None):\n    ai=AIEnricher(ai_config or AIConfig())\n',
+                      'def fill_excel_v8(template,output,records,overwrite=False,trace_path=None,row_assignments:dict[tuple[str,int],ProductRecord]|None=None):\n')
+          ai_start=s.find('                if ai.config.enabled and (ext==\'53\'')
+          derived=s.find('                value,vconf,reason,ev_attr,ev_raw=_derived_for_field', ai_start)
+          if ai_start!=-1 and derived!=-1:
+              s=s[:ai_start]+s[derived:]
+          p.write_text(s,encoding='utf-8')
+
+          # desktop.py: replace with compact no-AI desktop surface.
+          p=Path('src/product_intelligence/desktop.py')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace('from .ai_enrichment import AIConfig\n','')
+          s=s.replace('from .model_catalog import DEFAULT_MODELS, capability, list_models\n','')
+          prov=s.find('PROVIDER_DEFAULTS={')
+          cls=s.find('class App(',prov)
+          if prov!=-1 and cls!=-1:
+              s=s[:prov]+s[cls:]
+          # Remove hidden AI variables in _build.
+          for line in [
+              "        self.ai_discovery=tk.BooleanVar(value=False);self.ai_enrichment=tk.BooleanVar(value=False)\n",
+              "        self.ai_provider=tk.StringVar(value='off');self.ai_model=tk.StringVar(value='')\n",
+              "        self.ai_base=tk.StringVar(value='');self.ai_key=tk.StringVar(value='');self.ai_country=tk.StringVar(value='PE')\n",
+          ]:
+              s=s.replace(line,'')
+          # Remove dead provider/model methods.
+          method_start=s.find('    def _provider_changed(')
+          manual_start=s.find('    def _manual_entries(',method_start)
+          if method_start!=-1 and manual_start!=-1:
+              s=s[:method_start]+s[manual_start:]
+          s=s.replace(';cfg=None\n','\n')
+          s=s.replace(',ai_config=None,manual_identities=', ',manual_identities=')
+          s=s.replace(',trace_path=str(trace),ai_config=None)', ',trace_path=str(trace))')
+          p.write_text(s,encoding='utf-8')
+
+          # Remove obsolete AI modules/tests and stale generated artifacts.
+          for rel in [
+              'src/product_intelligence/ai_discovery.py',
+              'src/product_intelligence/ai_enrichment.py',
+              'src/product_intelligence/model_catalog.py',
+              'tests/test_ai_discovery_openai.py',
+              'tests/test_multi_input_ai_discovery.py',
+              'tests/test_v8_ai_enrichment.py',
+              'demo_output/JBLENDURRUN3BTBAM.v7.json',
+              'demo_output/JBLQ350WLBLKAM.v7.json',
+              'demo_output/JBLT530CBLKAM.v7.json',
+              'official_probe/summary.json',
+              'examples/plantilla_productos.xlsx',
+              'examples/product.example.json',
+          ]:
+              f=Path(rel)
+              if f.exists(): f.unlink()
+      - name: Run regression suite
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          python -m pytest -q
+      - name: Commit cleanup
+        run: |
+          git config user.name artosperu-bot
+          git config user.email artosperu@gmail.com
+          git add -A
+          git commit -m "refactor: remove obsolete AI path and legacy artifacts" || exit 0
+          git push

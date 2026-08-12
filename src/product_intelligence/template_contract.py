@@ -137,9 +137,43 @@ def _is_required(marker: Any) -> bool:
     return True
 
 
+def _looks_like_generic_product_attribute(label: str, desc: str, group: str | None) -> bool:
+    """Decide whether an unknown column is still an intrinsic product attribute.
+
+    This intentionally does not require a pre-existing canonical alias. Marketplace
+    templates introduce new technical attributes constantly, so the bilingual field
+    description and section/group must be able to make a new attribute scrapeable.
+    """
+    g = key_norm(group or "")
+    text = key_norm(f"{label} {desc}")
+
+    if g in {"especificaciones", "specifications", "specs", "technical specifications", "caracteristicas tecnicas"}:
+        return True
+
+    # Generic intrinsic-product instructions. Seller/commercial/catalog fields are
+    # filtered before this helper is called.
+    instruction = any(x in text for x in [
+        "indica ", "indique ", "ingresa ", "selecciona ", "enter ", "select ", "indicates ", "specify ",
+    ])
+    product_context = any(x in text for x in [
+        "del producto", "producto cuenta", "producto tiene", "product has", "of the product",
+        "product outside", "manufacturer", "fabricante", "technical", "tecnica", "técnica",
+    ])
+    technical_signal = any(x in text for x in [
+        "mm", "cm", "kg", " g ", "hz", "khz", "mhz", "ghz", "watt", "mah", "volt", "ohm", "db",
+        "bluetooth", "usb", "wifi", "wireless", "wired", "bateria", "batería", "battery", "dimension",
+        "resistencia", "resistance", "capacidad", "capacity", "potencia", "power", "frecuencia", "frequency",
+        "material", "procesador", "processor", "memoria", "memory", "pantalla", "display", "resolution",
+        "carga", "charging", "autonomia", "autonomía", "play time", "contenido", "included", "water", "ip code",
+    ])
+    return bool(desc.strip()) and instruction and (product_context or technical_signal)
+
+
 def _field_role(field: dict, group: str | None) -> tuple[str, bool, str]:
-    label = key_norm(field.get("label") or "")
-    desc = key_norm(field.get("description") or "")
+    label_raw = str(field.get("label") or "")
+    desc_raw = str(field.get("description") or "")
+    label = key_norm(label_raw)
+    desc = key_norm(desc_raw)
     semantic = key_norm((field.get("contract") or {}).get("semantic") or field.get("canonical") or "")
     field_class = field.get("field_class") or "UNKNOWN"
     ext = str(field.get("external_id") or "")
@@ -150,7 +184,10 @@ def _field_role(field: dict, group: str | None) -> tuple[str, bool, str]:
     if field_class == "SELLER_DATA":
         return ROLE_SELLER, False, "Dato comercial/operativo del vendedor; no se inventa por scraping."
 
-    if ext in {"1", "22"} or any(x in combined for x in ["categoria primaria", "primary category", "condicion del producto", "status of the product"]):
+    if ext in {"1", "22", "49"} or any(x in combined for x in [
+        "categoria primaria", "primary category", "condicion del producto", "status of the product",
+        "detalles de la condicion", "detalles de la condición", "condition details",
+    ]):
         return ROLE_MARKETPLACE, False, "Dato de catálogo/marketplace definido por el negocio, no por la ficha técnica."
     if ext in {"133815", "133816"} or semantic in {"name cn", "name en", "name_cn", "name_en"}:
         return ROLE_DERIVED, False, "Salida logística derivable a partir de identidad validada/traducción controlada."
@@ -171,6 +208,9 @@ def _field_role(field: dict, group: str | None) -> tuple[str, bool, str]:
         "garantia del producto", "product warranty", "peso del paquete", "package weight",
     ]):
         return ROLE_SCRAPE, True, "La descripción del Excel define un dato técnico verificable."
+
+    if _looks_like_generic_product_attribute(label_raw, desc_raw, group):
+        return ROLE_SCRAPE, True, "Atributo técnico genérico definido por la propia descripción/sección del Excel."
 
     return ROLE_REVIEW, False, "La intención no es suficientemente clara; requiere clasificación antes de escribir."
 

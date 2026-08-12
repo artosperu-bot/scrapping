@@ -1,6 +1,6 @@
 from product_intelligence.models import ProductIdentity
 from product_intelligence.price_identity import dedupe_offers, score_offer_identity
-from product_intelligence.price_models import PriceOffer
+from product_intelligence.price_models import PriceOffer, format_money
 
 
 def identity():
@@ -42,3 +42,10 @@ def test_dedupe_keeps_best_same_channel_seller_url():
     assert len(rows) == 1
     assert rows[0].confidence == 1.0
     assert rows[0].source_type == "api"
+
+
+def test_money_format_respects_currency():
+    assert format_money(299, "PEN") == "S/ 299.00"
+    assert format_money(29936, "CLP") == "CLP 29,936"
+    assert format_money(49.9, "USD") == "US$ 49.90"
+    assert format_money(None, "PEN") == ""

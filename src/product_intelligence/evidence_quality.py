@@ -24,10 +24,9 @@ STRICT_ATTRIBUTE_HINTS = {
     "package_contents": (r"package\s+contents", r"what.?s\s+in\s+the\s+box", r"contenido\s+del\s+paquete", r"contenido\s+de\s+la\s+caja"),
 }
 
-# These are invalid *values* when detached from a real label/value pair. Keep ordinary field
-# labels such as Color, Interface or Bluetooth Version valid as attributes.
 LABEL_ONLY_VALUES = {
     "version", "enabled", "disabled", "de audio", "de pc", "del dial",
+    "info", "information", "chart", "(lbs)", "lbs", "(approximate)", "approximate",
 }
 
 
@@ -106,6 +105,13 @@ def strict_semantic_gate(canonical: str | None, ev: Evidence) -> tuple[bool, str
     raw_value = _clean(ev.normalized_value if ev.normalized_value is not None else ev.raw_value)
     value = key_norm(raw_value)
     joined = f"{attr} {value}"
+    selector = key_norm(_clean(ev.selector))
+
+    # Never let media metadata (pixel width/height, gallery dimensions, etc.) become
+    # physical product/package dimensions. This is a source-path semantic mismatch.
+    if canonical in {"width", "height", "length", "dimensions", "package_width", "package_height", "package_length"}:
+        if re.search(r"(?:image|images|img|media|gallery|picture|photo).*(?:width|height|size|dimension)|(?:width|height).*(?:image|images|img|media|gallery)", selector, re.I):
+            return False, "MEDIA_DIMENSION_NOT_PHYSICAL_DIMENSION"
 
     hints = STRICT_ATTRIBUTE_HINTS.get(canonical)
     if hints and not any(re.search(p, joined, re.I) for p in hints):
@@ -117,9 +123,14 @@ def strict_semantic_gate(canonical: str | None, ev: Evidence) -> tuple[bool, str
     if canonical == "battery_life":
         if not (re.search(r"\d", value) and re.search(r"\b(h|hr|hrs|hour|hours|hora|horas|min|minutes?)\b", value, re.I)):
             return False, "BATTERY_LIFE_DURATION_MISSING"
-    if canonical == "weight":
+    if canonical in {"weight", "package_weight"}:
         if not re.search(r"\d", value) or not re.search(r"\b(mg|g|kg|lb|lbs|oz)\b", value, re.I):
             return False, "WEIGHT_UNIT_MISSING"
+    if canonical in {"width", "height", "length", "package_width", "package_height", "package_length"}:
+        if not re.search(r"\d", value):
+            return False, "DIMENSION_NUMBER_MISSING"
+        if not re.search(r"\b(mm|cm|m|in|inch|inches|pulg|pulgada|pulgadas)\b|\"", raw_value, re.I):
+            return False, "DIMENSION_UNIT_MISSING"
     if canonical == "dimensions":
         count = len(re.findall(r"\d+(?:[.,]\d+)?\s*(?:mm|cm|m|in|inch|pulg)", value, re.I))
         if count < 2:
@@ -141,7 +152,7 @@ def strict_semantic_gate(canonical: str | None, ev: Evidence) -> tuple[bool, str
     if canonical == "brand":
         if len(raw_value) > 60:
             return False, "BRAND_VALUE_IMPLAUSIBLE"
-        if value in {"manufacturer", "fabricante", "seller", "merchant", "distributor", "distribuidor"}:
+        if value in {"manufacturer", "fabricante", "seller", "merchant", "distributor", "distribuidor", "info", "information"}:
             return False, "BRAND_LABEL_NOT_VALUE"
     if canonical == "processor":
         if value in {"de pc", "pc", "procesador", "processor", "cpu", "chipset"} or len(value) < 3:
@@ -153,6 +164,8 @@ def strict_semantic_gate(canonical: str | None, ev: Evidence) -> tuple[bool, str
             return False, "BLUETOOTH_LABEL_NOT_VALUE"
         if re.search(r"version", attr, re.I) and not re.search(r"\b(?:bluetooth\s*)?\d(?:\.\d)?\b", raw_value, re.I):
             return False, "BLUETOOTH_VERSION_FORMAT_INVALID"
+        if re.search(r"power|signal|frequency|frecuencia|transmitter|transmisor|dbm|mw", attr, re.I):
+            return False, "BLUETOOTH_TELEMETRY_NOT_TRANSPORT"
     if canonical == "color":
         if value in {"del dial", "dial", "color", "colour", "variant", "variante"}:
             return False, "COLOR_VALUE_IMPLAUSIBLE"

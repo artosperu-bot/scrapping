@@ -92,6 +92,8 @@ def classify_media_role(url: str, alt: str | None, source: str, media_type: str)
         return "product_gallery", True
     if source.startswith("jsonld:Product.image") or source.startswith("meta:og:image"):
         return "product_gallery", True
+    if source.startswith("json:") and re.search(r"image|gallery|media|asset|picture|photo", hay, re.I):
+        return "product_gallery", True
     if source.startswith("network:image") and re.search(r"product|mastercatalog|catalog", hay, re.I):
         return "product_gallery", True
     return "unknown_image", False
@@ -257,8 +259,9 @@ def discover_media(
 
     for img in soup.find_all("img"):
         alt = img.get("alt") or img.get("title")
-        for attr in ["src", "data-src", "data-original", "data-zoom-image", "data-large-image"]:
-            add(img.get(attr), f"dom:{attr}", tag_hint="image", alt=alt)
+        parent_ctx=" ".join([str(img.get("class") or ""), str(img.get("id") or ""), str(getattr(img.parent,"attrs",{}).get("class","") if getattr(img,"parent",None) else "")])
+        for attr in ["src", "data-src", "data-original", "data-original-src", "data-zoom", "data-zoom-image", "data-large", "data-large-image", "data-full", "data-image"]:
+            add(img.get(attr), f"dom:{attr}:{parent_ctx}", tag_hint="image", alt=alt, surrounding_text=parent_ctx)
         for attr in ["srcset", "data-srcset"]:
             raw = img.get(attr) or ""
             for part in raw.split(","):
@@ -315,6 +318,46 @@ def discover_media(
             walk(json.loads(script.string or ""))
         except Exception:
             pass
+
+    # Generic embedded application JSON/state. This is common in modern storefronts where the
+    # visible gallery is backed by a JSON array rather than individual <img> tags.
+    def walk_media_json(obj, path="root", context=""):
+        if isinstance(obj, dict):
+            ctx_parts=[]
+            for k in ["name","title","productName","sku","mpn","id","color","variant","model"]:
+                v=obj.get(k)
+                if isinstance(v,(str,int,float)):
+                    ctx_parts.append(f"{k}={v}")
+            local_ctx=" ".join([context,*ctx_parts])[-1200:]
+            for k,v in obj.items():
+                pth=f"{path}.{k}"
+                if isinstance(v,str) and _media_type(v)=="image" and re.search(r"image|img|gallery|media|asset|photo|picture|src|url",str(k),re.I):
+                    add(v,f"json:{pth}",tag_hint="image",surrounding_text=local_ctx)
+                elif isinstance(v,(dict,list)):
+                    walk_media_json(v,pth,local_ctx)
+        elif isinstance(obj,list):
+            for idx,v in enumerate(obj[:500]):
+                walk_media_json(v,f"{path}[{idx}]",context)
+
+    for script in soup.find_all("script"):
+        typ=(script.get("type") or "").lower()
+        raw=script.string or script.get_text(" ",strip=False) or ""
+        if not raw or len(raw)>5_000_000:
+            continue
+        if "json" in typ or script.get("id") in {"__NEXT_DATA__","__NUXT_DATA__"}:
+            try:
+                walk_media_json(json.loads(raw),f"script:{script.get('id') or typ or 'json'}")
+            except Exception:
+                pass
+        # Last-resort public source scan for explicit image URLs inside JS configuration.
+        # Identity validation below prevents unrelated page assets from being auto-filled.
+
+    # Gallery zoom links sometimes carry the highest-resolution asset.
+    for link in soup.find_all("a",href=True):
+        href=link.get("href")
+        ctx=" ".join([str(link.get("class") or ""),str(link.get("id") or ""),link.get_text(" ",strip=True)[:120]])
+        if _media_type(urljoin(base_url,href))=="image" and (link.find("img") is not None or re.search(r"gallery|zoom|product|image",ctx,re.I)):
+            add(href,f"dom:a:href:{ctx}",tag_hint="image",surrounding_text=ctx)
 
     # Browser/network discovered public assets. Provenance is the validated product page.
     for item in network_resources or []:

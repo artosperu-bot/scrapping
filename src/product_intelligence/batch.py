@@ -194,7 +194,9 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
     """Single product scraping path. The Excel contract decides which capabilities are needed."""
     pipe = ProductPipeline()
     candidates = [type("Candidate", (), {"url": item.source_url, "likely_official": True, "score": 1.0})()] if item.source_url else search_web(item.identity, limit=12)
-    include_images = bool((template_plan or {}).get("media_slots", 0))
+    media_slots = int((template_plan or {}).get("media_slots", 0) or 0)
+    target_semantics = list((template_plan or {}).get("scrape_semantics") or [])
+    include_images = bool(media_slots)
     include_pdfs = bool((template_plan or {}).get("summary", {}).get("scrape_targets", 1))
     errors: list[str] = []
     accepted: list[ProductRecord] = []
@@ -217,6 +219,8 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
                 include_pdfs=include_pdfs,
                 include_images=include_images,
                 browser_fallback=True,
+                target_semantics=target_semantics,
+                media_slots=media_slots,
             )
             if rec.identity.identifiers_conflicting:
                 raise ValueError("identificadores en conflicto")

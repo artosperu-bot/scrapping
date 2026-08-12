@@ -21,6 +21,7 @@ from .models import ProductRecord
 from .normalize import ALIASES, canonical_key, key_norm
 from .semantic_guard import infer_contract, is_placeholder, validate_value
 from .template_intelligence import classify_field
+from .template_contract import analyze_template_contract
 
 IDENTITY_ALIASES={
     "mpn":["mpn","part number","part no","pn","codigo fabricante","código fabricante","manufacturer part number"],
@@ -218,6 +219,8 @@ def fill_excel_v8(template:str,output:str,records:list[ProductRecord],overwrite:
     ai=AIEnricher(ai_config)
     row_assignments=row_assignments or {}
     wb=load_workbook(template)
+    template_plan=analyze_template_contract(template)
+    target_lookup={(f["sheet"],f["column"]):f for sh in template_plan.get("sheets",[]) for f in sh.get("fields",[])}
     options_idx=_build_option_index(wb)
     written=[];rejected=[];cleared_examples=[]
     for ws in wb.worksheets:
@@ -259,7 +262,8 @@ def fill_excel_v8(template:str,output:str,records:list[ProductRecord],overwrite:
                 if _is_template_example(cell.value,desc):
                     cleared_examples.append({"sheet":ws.title,"cell":cell.coordinate,"value":cell.value,"reason":"TEMPLATE_EXAMPLE"})
                     cell.value=None
-                if field_class=='SELLER_DATA':
+                plan_field=target_lookup.get((ws.title,c),{})
+                if field_class=='SELLER_DATA' or plan_field.get("role") in {"SELLER_INPUT","MARKETPLACE_INPUT","DERIVED_OUTPUT"}:
                     continue
                 if cell.value not in (None,'') and not overwrite:continue
                 ext=_external_id(header);options=opts[c]
@@ -310,9 +314,14 @@ def fill_excel_v8(template:str,output:str,records:list[ProductRecord],overwrite:
                     if ok:
                         cell.value=value;written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key,"value":value,"source":"identity","confidence":vconf});continue
 
-                # Strict evidence resolver scans ALL clean evidence, including former additional_attributes.
-                if key:
-                    cand=best_candidate(rec,header,str(desc) if desc else None,key,contracts[c])
+                # Strict evidence resolver scans ALL clean evidence. For a previously unseen technical
+                # field, the Excel contract itself supplies the semantic target instead of requiring
+                # a hardcoded category dictionary entry.
+                resolver_key=key or plan_field.get("semantic") or plan_field.get("canonical")
+                if not resolver_key and plan_field.get("role")=="SCRAPE_TARGET":
+                    resolver_key=_strip_field_id(header)
+                if resolver_key:
+                    cand=best_candidate(rec,header,str(desc) if desc else None,resolver_key,contracts[c])
                     if cand:
                         value=cand.value
                         if contracts[c].value_type=='controlled':
@@ -321,7 +330,7 @@ def fill_excel_v8(template:str,output:str,records:list[ProductRecord],overwrite:
                                 rejected.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"candidate":value,"reason":creason,"attribute":cand.evidence.attribute});continue
                             value=cv
                         cell.value=value
-                        written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":key,"value":value,"source":cand.evidence.source_url,"evidence_attribute":cand.evidence.attribute,"confidence":round(cand.score,3),"reasons":cand.reasons})
+                        written.append({"sheet":ws.title,"cell":cell.coordinate,"header":header,"attribute":resolver_key,"value":value,"source":cand.evidence.source_url,"evidence_attribute":cand.evidence.attribute,"confidence":round(cand.score,3),"reasons":cand.reasons})
                         continue
 
                 # Optional AI fallback. It sees only clean evidence already attached to this exact product.

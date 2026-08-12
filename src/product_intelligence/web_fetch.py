@@ -56,7 +56,7 @@ def fetch_static(url: str, timeout: int = 30) -> FetchResult:
     )
 
 
-def fetch_browser(url: str, timeout: int = 45, capture_json: bool = True) -> FetchResult:
+def fetch_browser(url: str, timeout: int = 45, capture_json: bool = True, activate_lazy_media: bool = False) -> FetchResult:
     """Render a public page with a normal Chromium browser.
 
     This is a compatibility fallback for JavaScript-rendered pages. It intentionally
@@ -118,6 +118,20 @@ def fetch_browser(url: str, timeout: int = 45, capture_json: bool = True) -> Fet
             page.wait_for_load_state("networkidle", timeout=min(timeout, 12) * 1000)
         except Exception:
             warnings.append("networkidle_timeout")
+        if activate_lazy_media:
+            try:
+                page.evaluate("""async () => {
+                    const step = Math.max(600, Math.floor(window.innerHeight * 0.8));
+                    const maxY = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+                    for (let y = 0; y < maxY; y += step) {
+                        window.scrollTo(0, y);
+                        await new Promise(r => setTimeout(r, 90));
+                    }
+                    window.scrollTo(0, 0);
+                }""")
+                page.wait_for_timeout(500)
+            except Exception:
+                warnings.append("lazy_media_activation_failed")
         html = page.content()
         final_url = page.url
         status = resp.status if resp else 0
@@ -137,7 +151,7 @@ def fetch_browser(url: str, timeout: int = 45, capture_json: bool = True) -> Fet
     )
 
 
-def fetch_page(url: str, timeout: int = 30, browser_fallback: bool = True) -> FetchResult:
+def fetch_page(url: str, timeout: int = 30, browser_fallback: bool = True, prefer_browser: bool = False, activate_lazy_media: bool = False) -> FetchResult:
     """Fast HTTP first, browser fallback only when it materially helps.
 
     401/403/429 are not treated as permission to circumvent site controls. We may
@@ -145,11 +159,12 @@ def fetch_page(url: str, timeout: int = 30, browser_fallback: bool = True) -> Fe
     if the browser is also denied, the caller receives the denial and should move on.
     """
     static = fetch_static(url, timeout=timeout)
-    needs_browser = static.status_code in {401, 403, 429} or _looks_js_shell(static.html)
+    needs_browser = prefer_browser or static.status_code in {401, 403, 429} or _looks_js_shell(static.html)
     if browser_fallback and needs_browser:
         try:
-            browser = fetch_browser(url, timeout=max(timeout, 40))
-            if browser.status_code and browser.status_code < 400 and len(browser.html) >= len(static.html):
+            browser = fetch_browser(url, timeout=max(timeout, 40), activate_lazy_media=activate_lazy_media)
+            browser_is_useful = browser.status_code and browser.status_code < 400 and (prefer_browser or len(browser.html) >= len(static.html))
+            if browser_is_useful:
                 browser.warnings.insert(0, f"static_status={static.status_code}")
                 return browser
             static.warnings.append(f"browser_fallback_status={browser.status_code}")

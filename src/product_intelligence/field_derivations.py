@@ -135,7 +135,6 @@ def derive_autonomy(rec: ProductRecord) -> Derived:
 
 
 def derive_connectivity(rec: ProductRecord, options: list[Any]) -> Derived:
-    text=key_norm(_all_text(rec))
     option_map={key_norm(str(o)):str(o) for o in options}
     wanted=[]
     def add_option(keys:list[str]):
@@ -144,23 +143,38 @@ def derive_connectivity(rec: ProductRecord, options: list[Any]) -> Derived:
             if nk in option_map and option_map[nk] not in wanted:
                 wanted.append(option_map[nk]); return True
         return False
-    if "usb c" in text or "usbc" in text: add_option(["USB-C","USB C"])
-    elif re.search(r"\busb\b",text): add_option(["USB"])
+
+    relevant=[]
+    excluded=[]
+    for ev,_q in iter_clean_evidence(rec):
+        attr=key_norm(ev.attribute)
+        val=str(ev.normalized_value if ev.normalized_value not in (None,"") else ev.raw_value)
+        joined=key_norm(f"{ev.attribute} {val}")
+        if re.search(r"charg|carga|power input|alimentaci[oó]n|battery|bater[ií]a",attr,re.I):
+            excluded.append(joined); continue
+        if re.search(r"connect|conect|interface|interfaz|audio connector|audio connection|wired|wireless|bluetooth|usb|hdmi|ethernet|rj 45|thunderbolt|jack",joined,re.I):
+            relevant.append(joined)
+    identity_text=key_norm(" ".join(x for x in [rec.identity.product_name,rec.identity.model] if x))
+    text=key_norm(" ".join([identity_text,*relevant]))
+
+    # USB counts only when proven in an interface/audio/data context, never from charging alone.
+    if any(re.search(r"usb c|usbc",x,re.I) for x in relevant): add_option(["USB-C","USB C"])
+    elif any(re.search(r"\busb\b",x,re.I) for x in relevant): add_option(["USB"])
     if "bluetooth" in text: add_option(["Bluetooth"])
     if "wifi 6" in text: add_option(["Wifi 6","Wifi"])
     elif "wifi" in text or "wi fi" in text: add_option(["Wifi"])
     if "ethernet" in text or "rj 45" in text: add_option(["Ethernet"])
     if "hdmi" in text: add_option(["HDMI"])
     if "thunderbolt" in text: add_option(["Thunderbolt"])
-    if "3 5mm" in text or "3.5mm" in _all_text(rec).lower(): add_option(["Auxiliar 3.5mm"])
-    identity_text=key_norm(" ".join(x for x in [rec.identity.product_name,rec.identity.model] if x))
-    descriptions=" ".join(str(ev.raw_value or "") for ev,_ in iter_clean_evidence(rec) if key_norm(ev.attribute) in {"description","connectivity","connection","interface","connector","audio connection"})
-    conn_text=key_norm(identity_text+" "+descriptions)
-    if re.search(r"\bwired\b|(?<!in)al[aá]mbric|cableado",conn_text): add_option(["Alámbrico","Cableado"])
-    if re.search(r"wireless|inal[aá]mbric|2 4g wireless|2 4 ghz",conn_text): add_option(["Inalámbrico","WF wireless"])
+    if "3 5mm" in text or "3.5mm" in " ".join(relevant).lower(): add_option(["Auxiliar 3.5mm"])
+    if re.search(r"wireless|inal[aá]mbric|2 4g wireless|2 4 ghz",text):
+        add_option(["Inalámbrico","WF wireless"])
+        if re.search(r"2 4g|2 4 ghz|radio ?frequency|radiofrecuencia|rf\b",text,re.I):
+            add_option(["Radiofrecuencia (RF)","RF"])
+    if re.search(r"\bwired\b|(?<!in)al[aá]mbric|cableado",text): add_option(["Alámbrico","Cableado"])
     if wanted:
-        return Derived(", ".join(wanted),.93,"technologies_mapped_to_allowed_options")
-    has_interface=any(re.search(r"interface|interfaz|pci[e ]|nvme|m 2",key_norm(f"{ev.attribute} {ev.raw_value}"),re.I) for ev,_ in iter_clean_evidence(rec))
+        return Derived(", ".join(wanted),.95,"connectivity_from_interface_evidence_excluding_charging")
+    has_interface=bool(relevant)
     if has_interface and "otro" in option_map:
         return Derived(option_map["otro"],.88,"real_interface_not_represented_in_marketplace_options")
     return Derived(reason="connectivity_not_proven_or_not_mappable")

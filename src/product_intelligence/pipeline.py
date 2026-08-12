@@ -15,6 +15,7 @@ from .text_extract import extract_text_evidence
 from .source_extract import source_evidence
 from .media_discovery import discover_media, build_site_profile
 from .evidence_graph import build_evidence_graph
+from .target_extract import extract_target_evidence
 
 
 ACCEPTABLE_MEDIA_SCOPES = {"EXACT_VARIANT", "EXACT_PRODUCT"}
@@ -29,8 +30,14 @@ class ProductPipeline:
         include_pdfs: bool = True,
         include_images: bool = True,
         browser_fallback: bool = True,
+        target_semantics: list[str] | None = None,
+        media_slots: int = 0,
     ) -> ProductRecord:
-        fetch = fetch_page(url, browser_fallback=browser_fallback)
+        fetch = fetch_page(
+            url, browser_fallback=browser_fallback,
+            prefer_browser=bool(media_slots > 1),
+            activate_lazy_media=bool(media_slots > 1),
+        )
         if fetch.status_code >= 400:
             raise ValueError(f"Fuente no accesible: HTTP {fetch.status_code} ({fetch.method}). No se intenta eludir controles del sitio.")
 
@@ -68,6 +75,10 @@ class ProductPipeline:
         evidence = table_evidence(fetch.html, fetch.final_url, candidate.match_level, base, source_type=html_type)
         evidence += structured_evidence(page, fetch.final_url, candidate.match_level, min(.99, base + .02), html_type)
         evidence += extract_text_evidence(page.get("text", ""), fetch.final_url, html_type, candidate.match_level, max(.60, base-.08), expected_capacity=candidate.capacity or expected.capacity)
+        evidence += extract_target_evidence(
+            page.get("text", ""), target_semantics, fetch.final_url, html_type,
+            candidate.match_level, max(.60, base-.06),
+        )
 
         # Raw source / "view-source + Ctrl+F" layer. This runs only AFTER identity validation,
         # so hidden JSON/config/data-* values can enrich specs without letting a search redirect,
@@ -121,6 +132,9 @@ class ProductPipeline:
                         _e.confidence=min(float(_e.confidence or 0),float(pconf))
                     evidence.extend(ev)
                     evidence.extend(extract_text_evidence(pdf_text, pdf, "official_pdf", candidate.match_level, min(base,.95,pconf), expected_capacity=candidate.capacity or expected.capacity))
+                    evidence.extend(extract_target_evidence(
+                        pdf_text, target_semantics, pdf, "official_pdf", candidate.match_level, min(base,.94,pconf)
+                    ))
                     pdf_notes.extend(extract_technical_notes(pdf_text,pdf))
                     sources.append(pdf)
                 except Exception:
@@ -150,6 +164,8 @@ class ProductPipeline:
             "json_responses_captured": len(fetch.json_responses),
             "network_resources_captured": len(fetch.network_resources),
             "raw_source_evidence": sum(1 for e in rec.evidence if e.source_type == "official_source_html"),
+            "target_semantics_requested": list(target_semantics or []),
+            "media_slots_requested": int(media_slots or 0),
         }
         rec.warnings.extend(fetch.warnings)
         unverified = sum(1 for m in media if m.get("scope") == "UNVERIFIED")

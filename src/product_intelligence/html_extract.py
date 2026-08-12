@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.parse import urljoin, urlsplit, unquote
+from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from .models import Evidence, ProductIdentity
@@ -70,17 +70,12 @@ def identity_from_page(page: dict, expected: ProductIdentity | None = None, sour
         ean=str(prod.get("gtin13")) if prod.get("gtin13") else None,
         upc=str(prod.get("gtin12")) if prod.get("gtin12") else None,
     )
-    # Reinforce expected identifiers only from rendered page content or the URL PATH.
-    # Query strings/fragments are explicitly excluded because search/auth redirects can
-    # echo the user's MPN (e.g. ?q=PARTNUMBER) without proving anything about the page.
+    # Reinforce expected identifiers only from content returned by the validated page.
+    # A URL/path containing an MPN is a discovery hint, not evidence: retailers and search
+    # redirects can embed arbitrary identifiers in slugs while the actual page describes a
+    # different model. Structured Product metadata above remains the strongest source.
     if expected:
-        clean_path=""
-        if source_url:
-            try:
-                clean_path=unquote(urlsplit(source_url).path or "")
-            except Exception:
-                clean_path=""
-        haystack = f"{clean_path}\n{page.get('text') or ''}".lower()
+        haystack = str(page.get("text") or "").lower()
         compact = re.sub(r"\s+", "", haystack)
         for field in ["mpn", "ean", "upc", "gtin", "model", "brand", "capacity", "variant"]:
             val = getattr(expected, field, None)

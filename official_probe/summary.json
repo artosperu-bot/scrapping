@@ -1,0 +1,14 @@
+{
+  "JBLQ350WLBLKAM": {
+    "ok": false,
+    "error": "ValueError: Fuente no accesible: HTTP 403 (requests). No se intenta eludir controles del sitio."
+  },
+  "JBLENDURRUN3BTBAM": {
+    "ok": false,
+    "error": "ValueError: Fuente no accesible: HTTP 403 (requests). No se intenta eludir controles del sitio."
+  },
+  "JBLT530CBLKAM": {
+    "ok": false,
+    "error": "ValueError: Fuente no accesible: HTTP 403 (requests). No se intenta eludir controles del sitio."
+  }
+}

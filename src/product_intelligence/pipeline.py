@@ -34,8 +34,6 @@ class ProductPipeline:
         target_semantics: list[str] | None = None,
         media_slots: int = 0,
     ) -> ProductRecord:
-        # Layer 1-3: static delivery first. fetch_page only escalates automatically for
-        # obvious JS shells / access responses; otherwise requests remains the fast path.
         fetch = fetch_page(url, browser_fallback=browser_fallback)
         if fetch.status_code >= 400:
             raise ValueError(f"Fuente no accesible: HTTP {fetch.status_code} ({fetch.method}). No se intenta eludir controles del sitio.")
@@ -60,9 +58,6 @@ class ProductPipeline:
                 f"confirmados={candidate.identifiers_confirmed}, conflictos={candidate.identifiers_conflicting}"
             )
 
-        # Layer 4-5: render only when the workbook actually needs it. A gallery always
-        # benefits from lazy-load activation; otherwise target coverage in the static page
-        # determines whether JavaScript rendering / same-site XHR capture is worthwhile.
         decision = browser_decision(fetch.html, target_semantics, media_slots)
         if fetch.method == "playwright":
             browser_reason = "browser_used_by_initial_fetch"
@@ -100,9 +95,6 @@ class ProductPipeline:
             base = min(base, .82)
         html_type = "official_html" if source_class == "manufacturer" else f"{source_class}_html"
 
-        # Evidence is collected in a deterministic order. Structured product data is
-        # strongest; then tables/HTML, targeted labels, embedded source state, same-site
-        # JSON and finally official PDFs/text fallbacks.
         evidence = structured_evidence(page, fetch.final_url, candidate.match_level, min(.99, base + .02), html_type)
         evidence += table_evidence(fetch.html, fetch.final_url, candidate.match_level, base, source_type=html_type)
         evidence += extract_target_evidence(
@@ -111,7 +103,6 @@ class ProductPipeline:
         )
         evidence += extract_text_evidence(page.get("text", ""), fetch.final_url, html_type, candidate.match_level, max(.60, base-.08), expected_capacity=candidate.capacity or expected.capacity)
 
-        # Raw source / embedded-state layer runs only after identity validation.
         if source_class == "manufacturer":
             evidence += source_evidence(
                 fetch.html,
@@ -126,14 +117,14 @@ class ProductPipeline:
             from .structured_extract import flatten_pairs
             try:
                 import json as _json
-                preview=_json.dumps(response.get("data"),ensure_ascii=False)[:120000]
+                preview = _json.dumps(response.get("data"), ensure_ascii=False)[:120000]
             except Exception:
-                preview=str(response.get("data"))[:120000]
+                preview = str(response.get("data"))[:120000]
             rscope, rconf, _rev, _rconflicts = validate_resource_identity(
                 response.get("url") or fetch.final_url, candidate,
                 found_on_validated_product_page=True, surrounding_text=preview,
             )
-            if rscope not in {"EXACT_VARIANT","EXACT_PRODUCT"} or _rconflicts:
+            if rscope not in {"EXACT_VARIANT", "EXACT_PRODUCT"} or _rconflicts:
                 continue
             for path, value in flatten_pairs(response.get("data"), max_depth=4):
                 leaf = path.split(".")[-1]
@@ -146,25 +137,79 @@ class ProductPipeline:
                     ))
 
         sources = [fetch.final_url]
-        pdf_notes=[]
+        pdf_notes = []
+        followed_document_pages = 0
+        followed_pdfs = 0
+
+        def consume_pdf(pdf_url: str):
+            nonlocal followed_pdfs
+            try:
+                pdf_text, ev = extract_pdf(pdf_url, candidate.match_level, min(base, .96))
+                pscope, pconf, _pev, pconflicts = validate_resource_identity(
+                    pdf_url, candidate, found_on_validated_product_page=True, surrounding_text=pdf_text[:160000]
+                )
+                if pscope not in {"EXACT_VARIANT", "EXACT_PRODUCT"} or pconflicts:
+                    return
+                for _e in ev:
+                    _e.confidence = min(float(_e.confidence or 0), float(pconf))
+                evidence.extend(ev)
+                evidence.extend(extract_target_evidence(
+                    pdf_text, target_semantics, pdf_url, "official_pdf", candidate.match_level, min(base, .94, pconf)
+                ))
+                evidence.extend(extract_text_evidence(
+                    pdf_text, pdf_url, "official_pdf", candidate.match_level, min(base, .95, pconf),
+                    expected_capacity=candidate.capacity or expected.capacity,
+                ))
+                pdf_notes.extend(extract_technical_notes(pdf_text, pdf_url))
+                if pdf_url not in sources:
+                    sources.append(pdf_url)
+                followed_pdfs += 1
+            except Exception:
+                return
+
         if include_pdfs and source_class == "manufacturer":
-            for pdf in page["pdfs"][:12]:
+            seen_pdfs = set()
+            for pdf in page.get("pdfs", [])[:12]:
+                if pdf not in seen_pdfs:
+                    seen_pdfs.add(pdf)
+                    consume_pdf(pdf)
+
+            # Follow same-site official documentation hubs (Documents & Downloads, Specs & Downloads,
+            # support pages, manual indexes) and harvest their evidence/PDF links. They are not treated
+            # as independent product identities until the target product is revalidated on that page.
+            base_host = (urlparse(fetch.final_url).hostname or "").lower().removeprefix("www.")
+            for doc_url in page.get("document_links", [])[:6]:
                 try:
-                    pdf_text, ev = extract_pdf(pdf, candidate.match_level, min(base, .96))
-                    pscope, pconf, _pev, pconflicts = validate_resource_identity(
-                        pdf, candidate, found_on_validated_product_page=True, surrounding_text=pdf_text[:160000]
-                    )
-                    if pscope not in {"EXACT_VARIANT","EXACT_PRODUCT"} or pconflicts:
+                    doc_host = (urlparse(doc_url).hostname or "").lower().removeprefix("www.")
+                    if not doc_host or not (doc_host == base_host or doc_host.endswith("." + base_host) or base_host.endswith("." + doc_host)):
                         continue
-                    for _e in ev:
-                        _e.confidence=min(float(_e.confidence or 0),float(pconf))
-                    evidence.extend(ev)
-                    evidence.extend(extract_target_evidence(
-                        pdf_text, target_semantics, pdf, "official_pdf", candidate.match_level, min(base,.94,pconf)
-                    ))
-                    evidence.extend(extract_text_evidence(pdf_text, pdf, "official_pdf", candidate.match_level, min(base,.95,pconf), expected_capacity=candidate.capacity or expected.capacity))
-                    pdf_notes.extend(extract_technical_notes(pdf_text,pdf))
-                    sources.append(pdf)
+                    doc_fetch = fetch_page(doc_url, browser_fallback=False)
+                    if doc_fetch.status_code >= 400:
+                        continue
+                    doc_page = extract_page(doc_fetch.html, doc_fetch.final_url, [x for x in terms if x])
+                    doc_identity = identity_from_page(doc_page, expected=expected, source_url=doc_fetch.final_url)
+                    if expected.mpn and not doc_identity.mpn and doc_identity.sku:
+                        doc_identity.mpn = doc_identity.sku
+                    doc_identity = compare_identity(expected, doc_identity)
+                    # Documentation hubs may omit structured identity, so accept when the exact target
+                    # appears in page text or the identity resolver can confirm it.
+                    text_compact = "".join(str(doc_page.get("text") or "").lower().split())
+                    target_compact = "".join(str(expected.mpn or expected.ean or expected.upc or expected.gtin or "").lower().split())
+                    target_seen = bool(target_compact and target_compact in text_compact)
+                    if doc_identity.match_level not in {"EXACT", "HIGH"} and not target_seen:
+                        continue
+                    followed_document_pages += 1
+                    sources.append(doc_fetch.final_url)
+                    doc_level = "EXACT" if target_seen else doc_identity.match_level
+                    doc_conf = min(.94, base)
+                    evidence.extend(structured_evidence(doc_page, doc_fetch.final_url, doc_level, doc_conf, "official_support_html"))
+                    evidence.extend(table_evidence(doc_fetch.html, doc_fetch.final_url, doc_level, doc_conf, source_type="official_support_html"))
+                    evidence.extend(extract_target_evidence(doc_page.get("text", ""), target_semantics, doc_fetch.final_url, "official_support_html", doc_level, min(.92, doc_conf)))
+                    evidence.extend(extract_text_evidence(doc_page.get("text", ""), doc_fetch.final_url, "official_support_html", doc_level, min(.92, doc_conf), expected_capacity=candidate.capacity or expected.capacity))
+                    for pdf in doc_page.get("pdfs", [])[:12]:
+                        if pdf not in seen_pdfs:
+                            seen_pdfs.add(pdf)
+                            consume_pdf(pdf)
                 except Exception:
                     continue
 
@@ -181,8 +226,8 @@ class ProductPipeline:
             _m["source_class"] = source_class
             _m["source_page"] = fetch.final_url
         rec.media = media
-        rec.images = [m for m in media if include_images and m.get("media_type") == "image" and m.get("scope") in ACCEPTABLE_MEDIA_SCOPES and m.get("confidence",0) >= .80 and m.get("autofill_eligible")]
-        rec.videos = [m for m in media if m.get("media_type") == "video" and m.get("scope") in ACCEPTABLE_MEDIA_SCOPES and m.get("confidence",0) >= .80 and m.get("autofill_eligible")]
+        rec.images = [m for m in media if include_images and m.get("media_type") == "image" and m.get("scope") in ACCEPTABLE_MEDIA_SCOPES and m.get("confidence", 0) >= .80 and m.get("autofill_eligible")]
+        rec.videos = [m for m in media if m.get("media_type") == "video" and m.get("scope") in ACCEPTABLE_MEDIA_SCOPES and m.get("confidence", 0) >= .80 and m.get("autofill_eligible")]
         rec.site_profile = build_site_profile(fetch.final_url, media, fetch.json_responses)
         rec.technical_notes = extract_technical_notes(page.get("text", ""), fetch.final_url) + pdf_notes
         rec.fetch = {
@@ -193,6 +238,8 @@ class ProductPipeline:
             "json_responses_captured": len(fetch.json_responses),
             "network_resources_captured": len(fetch.network_resources),
             "raw_source_evidence": sum(1 for e in rec.evidence if e.source_type == "official_source_html"),
+            "official_document_pages_followed": followed_document_pages,
+            "official_pdfs_followed": followed_pdfs,
             "target_semantics_requested": list(target_semantics or []),
             "media_slots_requested": int(media_slots or 0),
             "extraction_order": extraction_plan(),

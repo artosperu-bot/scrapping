@@ -5,6 +5,7 @@ from dataclasses import dataclass, asdict
 from typing import Any
 
 from .attribute_resolver import best_candidate
+from .identifiers import validate_gtin
 from .models import ProductRecord
 from .normalize import key_norm
 from .semantic_guard import FieldContract, validate_value
@@ -32,6 +33,7 @@ CONFLICTING_EVIDENCE = "CONFLICTING_EVIDENCE"
 
 FOUND_STATES = {FOUND_DIRECT, FOUND_MAPPED, FOUND_DERIVED, FOUND_CLASSIFIED}
 IDENTITY_ALIASES = {"brand", "model", "mpn", "ean", "upc", "gtin", "product name"}
+BARCODE_KEYS = {"ean", "upc", "gtin", "barcode", "codigo de barras", "código de barras"}
 
 
 @dataclass
@@ -118,6 +120,29 @@ def _status_from_reason(reason: str, default: str) -> str:
     return default
 
 
+def _is_barcode_field(field: str, evidence_attribute: str | None) -> bool:
+    candidates = {key_norm(field), key_norm(evidence_attribute or "")}
+    return any(item in BARCODE_KEYS or "codigo de barras" in item or "barcode" in item for item in candidates)
+
+
+def _barcode_guard(value: Any, field: str, evidence_attribute: str | None) -> tuple[bool, str]:
+    """Validate GS1 checksum whenever the candidate has a standard GTIN length.
+
+    Non-standard marketplace identifiers are not silently converted into GTINs. They may pass
+    the generic field contract, but 8/12/13/14 digit values must satisfy their checksum.
+    """
+    if not _is_barcode_field(field, evidence_attribute):
+        return True, "NOT_BARCODE_FIELD"
+    digits = re.sub(r"\D", "", str(value or ""))
+    if not digits or digits != str(value).strip():
+        return False, "BARCODE_MUST_BE_NUMERIC"
+    if len(digits) in {8, 12, 13, 14}:
+        validation = validate_gtin(digits)
+        if not validation.valid:
+            return False, f"INVALID_{validation.gtin_type or 'GTIN'}:{validation.reason}"
+    return True, "OK"
+
+
 def _finalize(value: Any, confidence: float, contract: FieldContract, options: list[Any], *, field: str, source: str | None, evidence_attribute: str | None, evidence_raw: Any, reason: str, default_status: str, transformation: str | None = None) -> FieldResult:
     if value in (None, ""):
         return FieldResult(field=field, status=_status_from_reason(reason, INSUFFICIENT_EVIDENCE), confidence=confidence, source=source, evidence_attribute=evidence_attribute, evidence_raw=evidence_raw, reason=reason)
@@ -132,6 +157,10 @@ def _finalize(value: Any, confidence: float, contract: FieldContract, options: l
                 return FieldResult(field=field, value=None, status=NOT_AVAILABLE_IN_MARKETPLACE_OPTIONS, confidence=confidence, source=source, evidence_attribute=evidence_attribute, evidence_raw=evidence_raw, reason=mapping_reason, transformation="controlled_option_mapping")
             return FieldResult(field=field, value=None, status=INSUFFICIENT_EVIDENCE, confidence=confidence, source=source, evidence_attribute=evidence_attribute, evidence_raw=evidence_raw, reason=mapping_reason)
         mapped = key_norm(str(final_value)) != key_norm(str(value))
+
+    barcode_ok, barcode_reason = _barcode_guard(final_value, field, evidence_attribute)
+    if not barcode_ok:
+        return FieldResult(field=field, value=None, status=INSUFFICIENT_EVIDENCE, confidence=0.0, source=source, evidence_attribute=evidence_attribute, evidence_raw=evidence_raw, reason=barcode_reason)
 
     ok, guard_reason, guard_conf = validate_value(final_value, contract, evidence_attribute=evidence_attribute, evidence_raw=evidence_raw)
     if not ok:

@@ -30,6 +30,38 @@ def _gtin_type(value: str | None) -> str | None:
     return {8: "GTIN-8", 12: "GTIN-12", 13: "GTIN-13", 14: "GTIN-14"}.get(len(digits))
 
 
+def _bluetooth_version(attribute: str, raw: str) -> str | None:
+    """Return a Bluetooth protocol version only from version-shaped evidence.
+
+    Telemetry attributes such as ``Bluetooth Transmitter Power = 20 dBm`` contain the
+    word Bluetooth but are not evidence that the product exposes Bluetooth transport.
+    """
+    attr = key_norm(attribute)
+    raw_text = str(raw or "").strip()
+    if re.search(r"bluetooth\s*(?:version|versi[oó]n)", attr, re.I) or attr in {"bluetooth", "bluetooth version", "version bluetooth", "version de bluetooth"}:
+        m = re.fullmatch(r"\s*(?:bluetooth\s*)?(\d(?:\.\d)?)\s*", raw_text, re.I)
+        return m.group(1) if m else None
+    m = re.search(r"\bbluetooth\s*(?:version\s*)?(\d(?:\.\d)?)\b", raw_text, re.I)
+    return m.group(1) if m else None
+
+
+def _host_connectivity_attribute(attribute: str) -> bool:
+    attr = key_norm(attribute)
+    return any(x in attr for x in [
+        "connectivity", "conectividad", "conexion", "connection", "interface", "interfaz",
+        "audio connector", "connector", "conector", "host port", "host interface",
+    ])
+
+
+def _charging_or_accessory_context(attribute: str, raw: str) -> bool:
+    joined = key_norm(f"{attribute} {raw}")
+    return any(x in joined for x in [
+        "charging", "charge cable", "charging cable", "cable de carga", "recarga",
+        "package contents", "what s in the box", "contenido del paquete", "included items",
+        "battery charging", "usb charging",
+    ])
+
+
 def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
     """Build conservative reusable product facts from filtered/deduplicated evidence."""
     identity_gtin = rec.identity.gtin or rec.identity.ean or rec.identity.upc
@@ -96,31 +128,34 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
 
         if "bluetooth" in attr:
             explicit = _norm_bool(raw)
-            if explicit is not None:
+            if explicit is not None and not re.search(r"power|signal|frequency|frecuencia|transmitter|transmisor|dbm|mw", attr, re.I):
                 facts["connectivity"]["bluetooth"]["present"] = explicit
-            m = re.search(r"(?:bluetooth\s*)?(\d(?:\.\d)?)", raw, re.I)
-            if m:
-                facts["connectivity"]["bluetooth"]["version"] = m.group(1)
+            version = _bluetooth_version(ev.attribute, raw)
+            if version:
+                facts["connectivity"]["bluetooth"]["version"] = version
                 facts["connectivity"]["bluetooth"]["present"] = True
 
         joined = f"{attr} {val}"
         if "bluetooth" in val and any(x in attr for x in ["connect", "conexion", "technology", "wireless"]):
             facts["connectivity"]["bluetooth"]["present"] = True
             facts["connectivity"]["wireless"] = True
-        if re.search(r"\busb[ -]?c\b", joined, re.I):
+
+        host_connectivity = _host_connectivity_attribute(ev.attribute)
+        accessory_context = _charging_or_accessory_context(ev.attribute, raw)
+        if host_connectivity and not accessory_context and re.search(r"\busb[ -]?c\b", joined, re.I):
             facts["connectivity"]["usb_c"] = True
-        elif re.search(r"\busb\b", joined, re.I):
+        elif host_connectivity and not accessory_context and re.search(r"\busb\b", joined, re.I):
             facts["connectivity"]["usb"] = True
-        if re.search(r"\b3[., ]5\s*mm\b|headphone jack|audio jack", joined, re.I):
+        if host_connectivity and re.search(r"\b3[., ]5\s*mm\b|headphone jack|audio jack", joined, re.I):
             facts["connectivity"]["jack_3_5mm"] = True
         if re.search(r"2[ .]?4\s*ghz|radio ?frequency|\brf\b", joined, re.I):
             facts["connectivity"]["rf_2_4ghz"] = True
             facts["connectivity"]["wireless"] = True
-        if re.search(r"\bwi[ -]?fi\b", joined, re.I):
+        if host_connectivity and re.search(r"\bwi[ -]?fi\b", joined, re.I):
             facts["connectivity"]["wifi"] = True
-        if re.search(r"\bnfc\b", joined, re.I):
+        if host_connectivity and re.search(r"\bnfc\b", joined, re.I):
             facts["connectivity"]["nfc"] = True
-        if re.search(r"\bwired\b|cableado|al[aá]mbric", joined, re.I):
+        if host_connectivity and re.search(r"\bwired\b|cableado|al[aá]mbric", joined, re.I):
             facts["connectivity"]["wired"] = True
         if re.search(r"\bwireless\b|inal[aá]mbric", joined, re.I):
             facts["connectivity"]["wireless"] = True

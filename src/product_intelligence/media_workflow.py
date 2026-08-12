@@ -77,7 +77,7 @@ def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
     if row.get("conflict_reasons"):
         return False
     role = str(row.get("role") or "")
-    if role == "page_asset":
+    if role in {"page_asset", "related_product"}:
         return False
     scope = str(row.get("scope") or "")
     if scope not in {"EXACT_VARIANT", "EXACT_PRODUCT", "PRODUCT_FAMILY"}:

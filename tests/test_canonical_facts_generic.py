@@ -27,8 +27,8 @@ def test_ssd_interface_does_not_create_wireless_facts():
 def test_smartphone_ip_rating_is_decomposed():
     facts=build_canonical_facts(record(evidence("IP Rating","IP68"), evidence("Battery Capacity","6320 mAh")))
     assert facts["durability"]["ip_rating"] == "IP68"
-    assert facts["durability"]["dust_rating"] == "6"
-    assert facts["durability"]["water_rating"] == "8"
+    assert facts["durability"]["dust_rating"] == 6
+    assert facts["durability"]["water_rating"] == 8
 
 
 def test_wired_usb_c_without_battery_maps_safely():

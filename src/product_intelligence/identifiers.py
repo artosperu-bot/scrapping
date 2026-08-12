@@ -30,7 +30,6 @@ def validate_gtin(value: str | None) -> GTINValidation:
     body = raw[:-1]
     check = int(raw[-1])
     total = 0
-    # GS1: starting from the rightmost body digit, weights alternate 3,1.
     for index, digit in enumerate(reversed(body)):
         total += int(digit) * (3 if index % 2 == 0 else 1)
     expected = (10 - (total % 10)) % 10
@@ -43,6 +42,13 @@ def is_valid_gtin(value: str | None) -> bool:
     return validate_gtin(value).valid
 
 
+def _adjacent_transposition(a: str, b: str) -> bool:
+    if len(a) != len(b):
+        return False
+    diff = [index for index, (left, right) in enumerate(zip(a, b)) if left != right]
+    return len(diff) == 2 and diff[1] == diff[0] + 1 and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]]
+
+
 def possible_identifier_typo(expected: str | None, candidate: str | None) -> dict | None:
     """Return a warning-only typo candidate; never mutates or confirms identity."""
     a = normalize_identifier(expected)
@@ -52,11 +58,9 @@ def possible_identifier_typo(expected: str | None, candidate: str | None) -> dic
     if abs(len(a) - len(b)) > 1:
         return None
     similarity = ratio(a, b) / 100
-    # Strong enough to surface for review, not strong enough to silently replace.
-    if similarity < .88:
-        return None
     differences = sum(x != y for x, y in zip(a, b)) + abs(len(a) - len(b))
-    if differences > 2:
+    plausible = similarity >= .85 or _adjacent_transposition(a, b)
+    if not plausible or differences > 2:
         return None
     return {
         "code": "possible_part_number_typo",

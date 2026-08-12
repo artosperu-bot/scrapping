@@ -38,14 +38,14 @@ PROVIDER_DEFAULTS={
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('Product Intelligence 0.10 — Excel + Scraping + IA opcional')
-        self.geometry('1040x900');self.minsize(900,700)
+        self.title('Product Intelligence 0.10.2 — Excel + Scraping + búsqueda web gratuita')
+        self.geometry('1040x930');self.minsize(900,720)
         self.q=queue.Queue();self._build();self.after(150,self._drain)
 
     def _build(self):
         main=ttk.Frame(self,padding=14);main.pack(fill='both',expand=True)
-        ttk.Label(main,text='Product Intelligence 0.10',font=('Segoe UI',16,'bold')).pack(anchor='w')
-        ttk.Label(main,text='El Excel define qué datos se necesitan. El scraper sigue siendo la autoridad; la IA solo ayuda a descubrir fuentes o interpretar evidencia validada.').pack(anchor='w',pady=(2,10))
+        ttk.Label(main,text='Product Intelligence 0.10.2',font=('Segoe UI',16,'bold')).pack(anchor='w')
+        ttk.Label(main,text='El Excel define qué datos se necesitan. El scraper sigue siendo la autoridad. La búsqueda web normal no requiere API de pago.').pack(anchor='w',pady=(2,10))
 
         f=ttk.LabelFrame(main,text='1. Plantilla Excel',padding=10);f.pack(fill='x')
         self.excel=tk.StringVar();ttk.Entry(f,textvariable=self.excel).pack(side='left',fill='x',expand=True)
@@ -65,29 +65,34 @@ class App(tk.Tk):
         self.overwrite=tk.BooleanVar(value=False)
         ttk.Checkbutton(opts,text='Sobrescribir datos de producto existentes; proteger precio/SKU/stock y demás datos del vendedor',variable=self.overwrite).pack(side='left')
 
-        ai=ttk.LabelFrame(main,text='4. IA opcional — nunca reemplaza el scraping',padding=10);ai.pack(fill='x',pady=(0,8))
-        self.ai_discovery=tk.BooleanVar(value=True);self.ai_enrichment=tk.BooleanVar(value=False)
-        ttk.Checkbutton(ai,text='IA Web Discovery: ayudar a encontrar mejores URLs oficiales/regionales cuando haga falta',variable=self.ai_discovery,command=self._refresh_capability).grid(row=0,column=0,columnspan=4,sticky='w')
-        ttk.Checkbutton(ai,text='IA sobre evidencia: ayudar con descripción/campos ambiguos SOLO después del scraping validado',variable=self.ai_enrichment,command=self._refresh_capability).grid(row=1,column=0,columnspan=4,sticky='w')
+        searchbox=ttk.LabelFrame(main,text='4. Descubrimiento web',padding=10);searchbox.pack(fill='x',pady=(0,8))
+        ttk.Label(searchbox,text='✓ Búsqueda web gratuita SIEMPRE ACTIVA — DuckDuckGo HTML, Bing/Bing RSS, Brave web, Mojeek y Yahoo. No requiere API key.',font=('Segoe UI',9,'bold')).pack(anchor='w')
+        ttk.Label(searchbox,text='Busca MPN/EAN/UPC/GTIN/nombre y refuerza consultas con official, specifications, datasheet, manual y support. Después el scraper valida cada URL.').pack(anchor='w',pady=(3,0))
 
-        ttk.Label(ai,text='Proveedor').grid(row=2,column=0,sticky='w',pady=(8,0))
+        ai=ttk.LabelFrame(main,text='5. IA opcional — no necesaria para buscar en Internet',padding=10);ai.pack(fill='x',pady=(0,8))
+        self.ai_discovery=tk.BooleanVar(value=False);self.ai_enrichment=tk.BooleanVar(value=False)
+        ttk.Checkbutton(ai,text='IA Web Discovery adicional (OPCIONAL, puede generar cargos del proveedor)',variable=self.ai_discovery,command=self._refresh_capability).grid(row=0,column=0,columnspan=5,sticky='w')
+        ttk.Checkbutton(ai,text='IA sobre evidencia: ayudar con descripción/campos ambiguos SOLO después del scraping validado',variable=self.ai_enrichment,command=self._refresh_capability).grid(row=1,column=0,columnspan=5,sticky='w')
+        ttk.Label(ai,text='Para costo cero total: deja ambas opciones apagadas, o usa Ollama local para interpretación.').grid(row=2,column=0,columnspan=5,sticky='w',pady=(3,4))
+
+        ttk.Label(ai,text='Proveedor').grid(row=3,column=0,sticky='w',pady=(8,0))
         self.ai_provider=tk.StringVar(value='openai')
         self.provider_combo=ttk.Combobox(ai,textvariable=self.ai_provider,values=['openai','openrouter','mistral','ollama','openai_compatible'],state='readonly',width=19)
-        self.provider_combo.grid(row=2,column=1,sticky='w',padx=(6,16),pady=(8,0));self.provider_combo.bind('<<ComboboxSelected>>',self._provider_changed)
+        self.provider_combo.grid(row=3,column=1,sticky='w',padx=(6,16),pady=(8,0));self.provider_combo.bind('<<ComboboxSelected>>',self._provider_changed)
 
-        ttk.Label(ai,text='Modelo').grid(row=2,column=2,sticky='w',pady=(8,0))
+        ttk.Label(ai,text='Modelo').grid(row=3,column=2,sticky='w',pady=(8,0))
         self.ai_model=tk.StringVar(value='gpt-5-mini-2025-08-07')
         self.model_combo=ttk.Combobox(ai,textvariable=self.ai_model,values=DEFAULT_MODELS['openai'],width=34)
-        self.model_combo.grid(row=2,column=3,sticky='ew',padx=(6,6),pady=(8,0));self.model_combo.bind('<<ComboboxSelected>>',lambda _e:self._refresh_capability())
-        ttk.Button(ai,text='Cargar modelos',command=self.load_models).grid(row=2,column=4,sticky='w',pady=(8,0))
+        self.model_combo.grid(row=3,column=3,sticky='ew',padx=(6,6),pady=(8,0));self.model_combo.bind('<<ComboboxSelected>>',lambda _e:self._refresh_capability())
+        ttk.Button(ai,text='Cargar modelos',command=self.load_models).grid(row=3,column=4,sticky='w',pady=(8,0))
 
-        ttk.Label(ai,text='Base URL').grid(row=3,column=0,sticky='w',pady=(6,0))
-        self.ai_base=tk.StringVar(value='https://api.openai.com/v1');ttk.Entry(ai,textvariable=self.ai_base).grid(row=3,column=1,columnspan=4,sticky='ew',padx=(6,0),pady=(6,0))
-        ttk.Label(ai,text='API key').grid(row=4,column=0,sticky='w',pady=(6,0))
-        self.ai_key=tk.StringVar();ttk.Entry(ai,textvariable=self.ai_key,show='*').grid(row=4,column=1,columnspan=2,sticky='ew',padx=(6,16),pady=(6,0))
-        ttk.Label(ai,text='País preferido').grid(row=4,column=3,sticky='e',pady=(6,0))
-        self.ai_country=tk.StringVar(value='PE');ttk.Entry(ai,textvariable=self.ai_country,width=6).grid(row=4,column=4,sticky='w',padx=(6,0),pady=(6,0))
-        self.ai_status=tk.StringVar();ttk.Label(ai,textvariable=self.ai_status).grid(row=5,column=0,columnspan=5,sticky='w',pady=(7,0))
+        ttk.Label(ai,text='Base URL').grid(row=4,column=0,sticky='w',pady=(6,0))
+        self.ai_base=tk.StringVar(value='https://api.openai.com/v1');ttk.Entry(ai,textvariable=self.ai_base).grid(row=4,column=1,columnspan=4,sticky='ew',padx=(6,0),pady=(6,0))
+        ttk.Label(ai,text='API key').grid(row=5,column=0,sticky='w',pady=(6,0))
+        self.ai_key=tk.StringVar();ttk.Entry(ai,textvariable=self.ai_key,show='*').grid(row=5,column=1,columnspan=2,sticky='ew',padx=(6,16),pady=(6,0))
+        ttk.Label(ai,text='País preferido').grid(row=5,column=3,sticky='e',pady=(6,0))
+        self.ai_country=tk.StringVar(value='PE');ttk.Entry(ai,textvariable=self.ai_country,width=6).grid(row=5,column=4,sticky='w',padx=(6,0),pady=(6,0))
+        self.ai_status=tk.StringVar();ttk.Label(ai,textvariable=self.ai_status).grid(row=6,column=0,columnspan=5,sticky='w',pady=(7,0))
         ai.columnconfigure(3,weight=1);self._refresh_capability()
 
         btns=ttk.Frame(main);btns.pack(fill='x')
@@ -96,8 +101,8 @@ class App(tk.Tk):
 
         ttk.Separator(main).pack(fill='x',pady=12)
         ttk.Label(main,text='Actividad / auditoría').pack(anchor='w')
-        self.log=tk.Text(main,height=20,wrap='word',font=('Consolas',9));self.log.pack(fill='both',expand=True,pady=(4,0))
-        self.log.insert('end','Listo. Selecciona una plantilla Excel.\n')
+        self.log=tk.Text(main,height=18,wrap='word',font=('Consolas',9));self.log.pack(fill='both',expand=True,pady=(4,0))
+        self.log.insert('end','Listo. Búsqueda web gratuita activa. Selecciona una plantilla Excel.\n')
 
     def pick_excel(self):
         p=filedialog.askopenfilename(filetypes=[('Excel','*.xlsx')])
@@ -123,8 +128,8 @@ class App(tk.Tk):
         evidence='Sí' if cap.evidence_enrichment else 'No'
         suffix=''
         if self.ai_discovery.get() and not cap.web_discovery:
-            suffix=' — Para este proveedor, Web Discovery queda desactivado; usa OpenRouter si quieres este modelo + Internet.'
-        self.ai_status.set(f'Capacidades detectadas → Web Discovery: {web} | Interpretar evidencia: {evidence}.{suffix}')
+            suffix=' — Este proveedor no ofrece Web Discovery integrada; la búsqueda web gratuita del scraper sigue funcionando.'
+        self.ai_status.set(f'IA opcional → Web Discovery integrada: {web} | Interpretar evidencia: {evidence}.{suffix}')
 
     def load_models(self):
         def work():
@@ -148,12 +153,17 @@ class App(tk.Tk):
     def run(self):
         if not self.excel.get() or not Path(self.excel.get()).exists():messagebox.showerror('Falta archivo','Selecciona una plantilla .xlsx.');return
         identities=self._manual_identities();cfg=self._ai_config()
+        if cfg.discovery_enabled and cfg.provider != 'ollama':
+            self.emit('ADVERTENCIA DE COSTO: IA Web Discovery integrada está activada y el proveedor puede cobrar búsquedas/herramientas además de tokens.')
+        if cfg.enrichment_enabled and cfg.provider != 'ollama':
+            self.emit('Aviso: IA sobre evidencia usa la API del proveedor y puede consumir tokens facturables.')
         if (cfg.discovery_enabled or cfg.enrichment_enabled) and cfg.provider not in {'ollama'} and not cfg.api_key:
-            self.emit('Aviso: IA activada sin API key. El scraper seguirá funcionando; las llamadas IA pueden fallar y se omitirán.')
+            self.emit('Aviso: IA activada sin API key. El scraper y la búsqueda web gratuita seguirán funcionando; las llamadas IA se omitirán si fallan.')
         self.runbtn.configure(state='disabled')
         def work():
             try:
                 self.emit('=== INICIO ===')
+                self.emit('Búsqueda web gratuita: ACTIVA (sin API key de búsqueda).')
                 if identities:
                     for i,x in enumerate(identities,1):self.emit(f'Entrada {i}: '+json.dumps({k:v for k,v in x.model_dump().items() if v not in (None,'')},ensure_ascii=False))
                 res=run_batch(self.excel.get(),self.out.get(),overwrite=self.overwrite.get(),log=self.emit,ai_config=cfg,manual_identities=identities or None)

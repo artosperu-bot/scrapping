@@ -26,6 +26,10 @@ def derive_autonomy(rec: ProductRecord) -> Derived:
     if direct.value not in (None,""):
         return direct
     facts=build_canonical_facts(rec)
+    runtime=facts["battery"].get("runtime_hours")
+    if runtime is not None:
+        value=f"{runtime:g} h" if isinstance(runtime,(int,float)) else f"{runtime} h"
+        return Derived(value,.94,"FOUND_DERIVED:canonical_battery_runtime")
     if facts["connectivity"].get("wired") is True and facts["battery"].get("present") is False:
         return Derived(reason="NOT_APPLICABLE:wired_product_without_battery")
     return Derived(reason="INSUFFICIENT_EVIDENCE:autonomy_not_found")
@@ -59,12 +63,7 @@ def _allowed_option(options:list[Any], *aliases:str) -> str | None:
 
 
 def derive_connectivity(rec: ProductRecord, options:list[Any]) -> Derived:
-    """Map canonical transport facts to marketplace options without mixing technologies.
-
-    Wireless is not Bluetooth. Bluetooth is emitted only when explicitly proven; proprietary
-    RF may emit wireless/RF without Bluetooth. Wired USB-C never inherits Bluetooth from page
-    labels or charging text.
-    """
+    """Map canonical transport facts to marketplace options without mixing technologies."""
     facts=build_canonical_facts(rec)
     c=facts["connectivity"]
     chosen=[]
@@ -96,14 +95,12 @@ def derive_power_source(rec: ProductRecord, options:list[Any]) -> Derived:
     battery=facts["battery"]
     conn=facts["connectivity"]
 
-    # Prefer a proven rechargeable battery when present.
     if battery.get("present") is True and battery.get("rechargeable") is True:
         value=_allowed_option(options,"Batería recargable","Bateria recargable")
         if value:return Derived(value,.94,"FOUND_DERIVED:rechargeable_battery_fact")
     if direct.value not in (None,""):
         return direct
 
-    # A wired USB/USB-C device explicitly without an internal battery is powered over USB.
     if battery.get("present") is False and conn.get("wired") is True and (conn.get("usb_c") or conn.get("usb")):
         value=_allowed_option(options,"USB","USB-C","USB C")
         if value:return Derived(value,.94,"FOUND_DERIVED:wired_usb_without_battery")

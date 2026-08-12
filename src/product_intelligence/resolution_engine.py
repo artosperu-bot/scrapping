@@ -55,11 +55,6 @@ def _not_applicable(facts: dict[str, Any], semantic: str) -> tuple[bool, str]:
 
 
 def _canonical_resolves(facts: dict[str, Any], semantic: str) -> tuple[bool, str, str]:
-    """Tell whether a marketplace semantic is already resolvable from canonical facts.
-
-    This prevents gap research from re-searching facts the system already knows under a
-    different source label or representation.
-    """
     s = _phrase(semantic)
     conn = facts.get("connectivity", {})
     bt = conn.get("bluetooth", {})
@@ -153,16 +148,17 @@ def analyze_resolution(rec: ProductRecord, template_plan: dict | None) -> dict[s
             research.append(semantic)
         else:
             na, na_reason = _not_applicable(facts, semantic)
+            direct = _semantic_has_direct_evidence(rec, semantic)
             canonical_ok, canonical_status, canonical_reason = _canonical_resolves(facts, semantic)
             if na:
                 status = NOT_APPLICABLE
                 reason = na_reason
+            elif direct:
+                status = FOUND_DIRECT
+                reason = "validated_evidence_matches_field_semantics"
             elif canonical_ok:
                 status = canonical_status
                 reason = canonical_reason
-            elif _semantic_has_direct_evidence(rec, semantic):
-                status = FOUND_DIRECT
-                reason = "validated_evidence_matches_field_semantics"
             else:
                 status = INSUFFICIENT_EVIDENCE
                 reason = "no_validated_evidence_or_canonical_fact_for_requested_semantic"

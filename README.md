@@ -1,175 +1,146 @@
-# Product Intelligence V9
+# Product Intelligence 0.10
 
-Aplicación de escritorio para **identificar productos, descubrir fuentes públicas, extraer datos técnicos y completar plantillas Excel sin mezclar modelos/variantes**.
+Aplicación de escritorio para completar plantillas de catálogo a partir de **productos identificados con precisión y evidencia pública trazable**, sin mezclar modelos, variantes ni datos comerciales del vendedor.
 
-> **Documento obligatorio de arquitectura:** [`ARCHITECTURE_PRODUCT_INTELLIGENCE.md`](ARCHITECTURE_PRODUCT_INTELLIGENCE.md)
->
-> Toda mejora futura debe seguir esa pipeline: identidad exacta → evidencias crudas → normalización semántica → unidades → traducción controlada → conflictos → confianza → JSON maestro → contrato Excel → salida y trazabilidad.
->
-> En especial, la extracción de imágenes debe tratar la **galería oficial completa** como una entidad estructurada. Encontrar una imagen válida no autoriza a detener la búsqueda si la misma ficha contiene más imágenes del SKU exacto.
+## Regla principal: Excel primero
 
-## Qué hace
+El motor **no empieza scrapeando Internet**. Primero entiende la plantilla que debe llenar.
 
-1. Lee la plantilla Excel y detecta automáticamente:
-   - fila de atributos;
-   - fila de instrucciones;
-   - listas de opciones;
-   - columnas de identidad, especificaciones, imágenes y datos del vendedor.
-2. Detecta productos a partir de MPN/Part Number, EAN/UPC/GTIN, modelo, marca y nombre disponibles en cada fila.
-3. Busca candidatos en web cuando no se proporcionó URL.
-4. Valida **identidad antes de extraer**.
-   - Si existe MPN/EAN/UPC/GTIN de entrada, se exige coincidencia fuerte incluso en la web del fabricante.
-   - Una fuente secundaria/marketplace solo entra con identidad `EXACT`.
-   - Un conflicto de MPN/EAN/GTIN/variante descarta la fuente.
-   - Una página de familia/categoría que contiene el MPN no puede aportar indiscriminadamente especificaciones de otros productos de la página.
-5. Extrae candidatos desde varias capas:
-   - HTML/source HTML;
-   - JSON-LD / Microdata / RDFa;
-   - variables JavaScript embebidas;
-   - XHR/fetch/API/GraphQL observados por Chromium;
-   - DOM renderizado;
-   - PDFs oficiales enlazados;
-   - galerías e imágenes asociadas a la variante;
-   - OCR solo como último recurso cuando no hay texto estructurado utilizable.
-6. Conserva primero **evidencia cruda** antes de traducir o normalizar.
-7. Valida cada PDF/XHR/imagen contra la identidad antes de usarlo.
-8. Normaliza atributos, valores y unidades sin perder el valor original.
-9. Detecta conflictos entre fuentes en vez de escoger simplemente la primera respuesta.
-10. Para cada columna del Excel crea un contrato semántico usando conjuntamente:
-   - encabezado;
-   - ID externo;
-   - descripción/instrucción;
-   - sintaxis;
-   - opciones válidas;
-   - contexto producto/paquete.
-11. Formatea el valor según lo que **el Excel espera**, no según cómo lo expresa la página.
-12. Solo escribe una celda cuando la evidencia pasa los controles. Si no, queda vacía y se registra el motivo en `trazabilidad.json`.
+```text
+EXCEL
+  ↓
+encabezados + IDs + descripciones + requerido/opcional + listas válidas
+  ↓
+template_contract.json
+  ↓
+qué datos son identidad / scrapeables / derivados / imágenes / vendedor / marketplace
+  ↓
+recién entonces identificar y buscar el producto exacto
+  ↓
+extraer evidencia útil
+  ↓
+resolver campo por campo
+  ↓
+validar el formato que exige el Excel
+  ↓
+llenar celdas + trazabilidad
+```
 
-## Regla principal
+La descripción situada sobre una columna forma parte del contrato. Si explica mejor la intención que el nombre corto del encabezado, esa descripción debe guiar la semántica y el formato final.
 
-> **No encontrado / no demostrado = vacío. Nunca se completa con otro producto o variante parecida.**
+Ejemplo:
 
-Esta regla no significa abandonar información disponible. Si una fuente oficial exacta contiene varias especificaciones o varias imágenes válidas del mismo SKU, el motor debe intentar recuperarlas todas.
+```text
+CuentaConBluetooth #1568
+"Selecciona si el producto cuenta con bluetooth."
+Syntax: One value from the list
+```
+
+El motor entiende `bluetooth` como el concepto a demostrar y devuelve exactamente una opción permitida por la plantilla, por ejemplo `Sí` o `No`.
+
+## Lo que nunca se inventa por scraping
+
+Los campos comerciales/operativos del vendedor se preservan pero no se buscan en Internet para sustituirlos:
+
+- SKU del vendedor;
+- cantidad/stock de Falabella;
+- precio y precio oferta;
+- fechas de oferta;
+- SKU padre cuando es una relación administrada por el vendedor;
+- garantía del vendedor;
+- otros campos comerciales equivalentes.
+
+La categoría/condición del marketplace también se mantiene separada de las especificaciones técnicas cuando corresponde.
+
+## Flujo de producto
+
+Una vez conocido el contrato del Excel:
+
+```text
+identidad inicial / Part Number
+  ↓
+validar producto y variante exacta
+  ↓
+fuentes oficiales primero + fallbacks confiables
+  ↓
+HTML / source / JSON-LD / JS / XHR/API / DOM / PDF
+  ↓
+evidencia cruda
+  ↓
+normalización semántica y de unidades
+  ↓
+traducción técnica controlada
+  ↓
+conflictos + confianza + validación lógica
+  ↓
+JSON de producto
+  ↓
+resolver únicamente los objetivos del contrato Excel
+```
+
+**No encontrado / no demostrado = vacío.** Una fuente parecida o una variante cercana nunca autoriza a inventar el dato.
 
 ## Imágenes
 
-La galería no se forma con todos los `<img>` de la página y tampoco se limita a la primera imagen válida.
+Las columnas `Imagen principal`, `Imagen2`…`ImagenN` determinan cuántos slots de media necesita la plantilla. Si existen 8 columnas, la capa de Media Intelligence debe intentar recuperar hasta 8 imágenes válidas de la variante exacta.
 
-El motor debe inspeccionar, cuando existan:
+La galería se busca en JSON-LD, JSON/JavaScript, `src/srcset`, atributos lazy/zoom, `<picture>`, sliders y endpoints XHR/API. Se eliminan logos, banners, relacionados, otras variantes y duplicados, conservando preferentemente la mayor resolución.
 
-- JSON-LD `Product.image`;
-- arrays de media en JSON/JavaScript;
-- `src`, `srcset`, `data-src`, `data-srcset`, `data-zoom-image`, `data-large`;
-- `<picture>` / `<source>`;
-- sliders/carruseles del producto;
-- endpoints XHR/API de media;
-- OpenGraph como respaldo.
+## Salidas
 
-Clasificación:
+Cada ejecución batch genera:
 
-- `product_gallery` → elegible;
-- `product_video` → elegible cuando corresponde;
-- `page_asset` → logo/icono/badge/footer, nunca se sube;
-- `unknown_image` → no se autocompleta.
+- `template_contract.json` — qué pide realmente la plantilla;
+- `json/<identificador>.json` — producto y evidencia;
+- `trazabilidad.json` — por qué se escribió/rechazó cada celda;
+- `resumen.json` — estado global;
+- `<plantilla>_completado.xlsx`.
 
-Además valida modelo, MPN/EAN cuando aparecen, capacidad/color/variante y procedencia desde la página validada. Imágenes del mismo archivo con distintos tamaños (`sw`, `sh`, `w`, `h`, etc.) se deduplican conservando preferentemente la versión de mayor calidad.
+## Arquitectura y reglas
 
-Si la ficha oficial exacta muestra 5 imágenes válidas y el Excel admite 8, el resultado esperado es llenar `Imagen principal` + `Imagen2`…`Imagen5`, no detenerse después de `Imagen principal`.
+- [`EXCEL_CONTRACT.md`](EXCEL_CONTRACT.md) — contrato de entrada y clasificación de columnas.
+- [`ARCHITECTURE_PRODUCT_INTELLIGENCE.md`](ARCHITECTURE_PRODUCT_INTELLIGENCE.md) — evidencia, identidad, normalización, conflictos y media.
+- [`ARCHITECTURE_RUNTIME_AND_CAPABILITIES.md`](ARCHITECTURE_RUNTIME_AND_CAPABILITIES.md) — núcleo ligero, navegador y capacidades opcionales.
 
-Las reglas completas están en [`ARCHITECTURE_PRODUCT_INTELLIGENCE.md`](ARCHITECTURE_PRODUCT_INTELLIGENCE.md).
+## Capacidades
 
-## Campos del vendedor
+El ejecutable estándar mantiene un núcleo ligero. Las capacidades pesadas se cargan solo cuando se instalan explícitamente:
 
-Precio, stock, promociones, SKU propio, garantía del vendedor y otros datos comerciales no se inventan por scraping. Se protegen. Los valores que la propia plantilla declara explícitamente como ejemplos pueden eliminarse para evitar subir datos ficticios.
+- `browser` — Playwright para páginas dinámicas;
+- `vision` — OpenCV para calidad/deduplicación de imágenes;
+- `ocr` — PaddleOCR como último recurso;
+- `documents` — parsing avanzado con Docling;
+- `api` / `cli` — interfaces opcionales.
 
-## Ejecutar en Windows sin compilar
+OCR no debe ejecutarse cuando HTML, JSON o PDF de texto ya ofrecen evidencia suficiente.
 
-Doble clic en:
+## Ejecutar en Windows
 
-`INSTALAR_Y_ABRIR_WINDOWS.bat`
-
-La primera ejecución instala dependencias y Chromium de Playwright.
-
-## Crear el EXE de Windows
-
-Doble clic en:
-
-`CONSTRUIR_EXE_WINDOWS.bat`
-
-Al terminar tendrás:
-
-`dist\ProductIntelligence\ProductIntelligence.exe`
-
-Se genera como aplicación `onedir` para que Chromium y sus recursos viajen junto al EXE de manera estable.
-
-## Uso de la interfaz
-
-1. Elegir el Excel.
-2. Elegir carpeta de salida.
-3. Mantener activado **Sobrescribir valores existentes** cuando quieres recalcular campos del producto; los datos comerciales del vendedor siguen protegidos.
-4. Pegar part numbers manualmente si se desea usar el modo directo.
-5. Pulsar **EJECUTAR SCRAPING Y COMPLETAR EXCEL**.
-
-Salida:
-
-- `<plantilla>_completado.xlsx`
-- `json/<identificador>.json`
-- `trazabilidad.json`
-- `resumen.json`
-
-## Reprocesar JSON antiguos
-
-La interfaz incluye **Reprocesar JSON antiguos...**. Sirve para pasar resultados anteriores por los controles actuales sin volver a scrapear, útil para auditoría y migración.
-
-## 403 / páginas dinámicas
-
-Se intenta HTTP normal primero. Si una página pública necesita JavaScript/cookies, se abre Chromium real con Playwright. No se implementan CAPTCHA solvers, plugins stealth ni evasión de controles de acceso. Si la fuente sigue bloqueada, se descarta y se prueba otra fuente candidata exacta.
-
-## Pruebas
-
-Ejecutar:
+Sin compilar:
 
 ```bat
-.venv\Scripts\activate
-pytest -q
+INSTALAR_Y_ABRIR_WINDOWS.bat
 ```
 
-Las pruebas unitarias no son suficientes para declarar una mejora terminada. También se requiere prueba real con varios part numbers, plantilla Excel real, revisión de trazabilidad y comparación entre la **cantidad visible de imágenes válidas en la galería oficial y la cantidad realmente extraída**.
+Crear el EXE:
 
-## IA asistida opcional
+```bat
+CONSTRUIR_EXE_WINDOWS.bat
+```
 
-La IA es una capa opcional, no una autoridad:
+Salida esperada:
 
 ```text
-web/PDF/API/imagenes
-  -> identidad exacta
-  -> evidencia limpia
-  -> normalizacion/resolucion
-  -> IA opcional para descripcion/casos ambiguos
-  -> validacion deterministica final
-  -> Excel
+dist\ProductIntelligence\ProductIntelligence.exe
 ```
 
-La IA recibe únicamente evidencias ya scrapeadas y validadas para el producto. Debe devolver los IDs de evidencia usados. No puede completar datos del vendedor, no puede decidir que otra variante es equivalente y no puede inventar números.
+El build ejecuta regresiones antes de publicar el ejecutable.
 
-### Proveedores
+## Desarrollo
 
-- `ollama`: para usar un modelo local en tu PC. Base URL habitual: `http://127.0.0.1:11434`.
-- `openai_compatible`: para cualquier endpoint que implemente `/chat/completions`. La URL, modelo y API key se configuran en la app.
+```bash
+pip install -e ".[dev]"
+python -m pytest -q
+```
 
-La IA viene **apagada por defecto**. El sistema funciona sin ella.
-
-## Modo directo por Part Number
-
-La app permite pegar uno o varios **part numbers** directamente.
-
-1. Selecciona el Excel.
-2. Pega los part numbers, uno por línea o separados por coma/punto y coma.
-3. Opcionalmente activa IA.
-4. Ejecuta el proceso.
-
-Si el cuadro de part numbers está vacío, el programa detecta identidades desde el Excel. Si se ingresan part numbers manualmente, se asignan en orden a las primeras filas de producto de la hoja de carga detectada. El part number se usa como identidad de búsqueda; **no se copia silenciosamente al SKU del vendedor**.
-
-La búsqueda usa varios backends públicos de descubrimiento y toda URL encontrada pasa después por validación estricta de identidad antes de extraer o escribir datos.
-
-El archivo `.gitignore` excluye entornos, builds, Chromium de Playwright, claves/API, Excel locales y salidas generadas.
+Los tests unitarios no bastan para declarar terminado el scraper. Las mejoras de extracción deben validarse también con part numbers reales, plantilla real, trazabilidad y control de variante.

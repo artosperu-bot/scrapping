@@ -34,31 +34,59 @@ jobs:
           from product_intelligence.models import ProductIdentity
           from product_intelligence.media_workflow import run_media_product
 
-          products = [
-              ProductIdentity(brand='JBL', model='Quantum 350 Wireless', mpn='JBLQ350WLBLKAM'),
-              ProductIdentity(brand='JBL', model='Endurance Run 3 Wireless', mpn='JBLENDURRUN3BTBAM'),
-              ProductIdentity(brand='JBL', model='Tune 530C USB-C', mpn='JBLT530CBLKAM'),
+          cases = [
+              (
+                  ProductIdentity(brand='JBL', model='Quantum 350 Wireless', mpn='JBLQ350WLBLKAM'),
+                  'https://www.jbl.com.pe/JBLQ350WLBLKAM.html',
+              ),
+              (
+                  ProductIdentity(brand='JBL', model='Endurance Run 3 Wireless', mpn='JBLENDURRUN3BTBAM'),
+                  'https://www.jbl.com.pe/ENDURANCE-RUN-3-WIRELESS.html?dwvar_ENDURANCE-RUN-3-WIRELESS_color=Blue-GLOBAL-Current',
+              ),
+              (
+                  ProductIdentity(brand='JBL', model='Tune 530C USB-C', mpn='JBLT530CBLKAM'),
+                  'https://www.jbl.com.pe/TUNE530C-USB-C.html?dwvar_TUNE530C-USB-C_color=Black-AM-Current',
+              ),
           ]
           root = Path('media_smoke_output')
           total = 0
           small = []
-          for identity in products:
+          empty_products = []
+          official_counts = {}
+
+          for identity, official_url in cases:
               events = []
-              rows = run_media_product(identity, root, auto_search=True, max_pages=8, on_event=events.append)
+              rows = run_media_product(
+                  identity,
+                  root,
+                  manual_urls=[official_url],
+                  auto_search=True,
+                  max_pages=8,
+                  on_event=events.append,
+              )
               accepted = [r for r in rows if r.get('downloaded') or r.get('metadata_only')]
+              official = [r for r in accepted if r.get('official_page')]
               total += len(accepted)
+              official_counts[identity.mpn] = len(official)
+              if not accepted:
+                  empty_products.append(identity.mpn)
               for row in accepted:
                   if row.get('media_type') == 'image' and row.get('downloaded'):
                       w, h = row.get('width'), row.get('height')
                       if w is not None and h is not None and (w < 300 or h < 300 or w*h < 120000):
                           small.append((identity.mpn, row.get('url'), w, h))
-              print(identity.mpn, 'accepted=', len(accepted), 'events=', len(events))
+              print(identity.mpn, 'accepted=', len(accepted), 'official=', len(official), 'events=', len(events))
+
           print('TOTAL_ACCEPTED_MEDIA=', total)
+          print('OFFICIAL_COUNTS=', official_counts)
           print('SMALL_ACCEPTED=', small)
+          print('EMPTY_PRODUCTS=', empty_products)
           if small:
               raise SystemExit(f'Small images were accepted: {small}')
-          if total < 1:
-              raise SystemExit('No validated media found for real JBL smoke set')
+          if empty_products:
+              raise SystemExit(f'Products with no validated media: {empty_products}')
+          if any(count < 1 for count in official_counts.values()):
+              raise SystemExit(f'Official pages yielded no accepted media: {official_counts}')
           PY
       - uses: actions/upload-artifact@v4
         if: always()

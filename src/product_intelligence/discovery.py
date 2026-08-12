@@ -224,6 +224,25 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
     return []
 
 
+def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12,timeout:int=15)->list[SearchCandidate]:
+    """Free second-pass discovery for unresolved workbook semantics.
+
+    Returned URLs are only candidates. The normal product pipeline still has to validate
+    exact identity/variant before any evidence from them can be used.
+    """
+    base=build_query(identity)
+    if not base:return []
+    terms=[]
+    for field in fields or []:
+        cleaned=re.sub(r"#\s*[A-Za-z]*\d+","",str(field)).strip()
+        if cleaned and cleaned not in terms:terms.append(cleaned)
+    urls=[]
+    for field in terms[:6]:
+        for query in [f'{base} "{field}"',f'{base} "{field}" specifications',f'{base} "{field}" manual datasheet']:
+            urls.extend(_provider_search(query,max(8,min(timeout,15))))
+    return _rank_candidates(urls,identity,limit)
+
+
 def fuzz_contains(needle:str,hay:str)->bool:
     toks=[x for x in needle.split() if len(x)>=3]
     return bool(toks) and sum(1 for x in toks if x in hay)>=max(1,len(toks)-1)

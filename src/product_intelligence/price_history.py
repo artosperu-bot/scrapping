@@ -12,12 +12,30 @@ def _base(output_root: str | Path) -> Path:
     return path
 
 
+def _latest_key(row: dict) -> tuple:
+    return (
+        str(row.get("part_number") or row.get("model") or "").casefold(),
+        str(row.get("channel") or "").casefold(),
+        str(row.get("seller_display_name") or "").casefold(),
+        str(row.get("publication_id") or row.get("sku") or row.get("url") or "").casefold(),
+    )
+
+
 def save_price_run(output_root: str | Path, offers: list[PriceOffer]) -> None:
     base = _base(output_root)
     rows = [o.to_dict() for o in offers]
 
+    existing = load_latest(output_root)
+    merged: dict[tuple, dict] = {_latest_key(row): row for row in existing if isinstance(row, dict)}
+    touched_products = {str(row.get("part_number") or row.get("model") or "").casefold() for row in rows}
+    if touched_products:
+        merged = {key: row for key, row in merged.items() if key[0] not in touched_products}
+    for row in rows:
+        merged[_latest_key(row)] = row
+    latest_rows = sorted(merged.values(), key=lambda row: (str(row.get("part_number") or row.get("model") or ""), float(row.get("selling_price") or 0)))
+
     tmp = base / "latest.json.tmp"
-    tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(latest_rows, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(base / "latest.json")
 
     with (base / "history.jsonl").open("a", encoding="utf-8") as fh:

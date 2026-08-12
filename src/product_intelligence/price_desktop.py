@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .media_progress_desktop import App as MediaProgressApp
+from .price_models import format_money
 from .price_workflow import run_price_product
 
 
@@ -74,7 +75,7 @@ class App(MediaProgressApp):
         columns = ("product", "channel", "seller", "price", "list_price", "stock", "confidence", "url")
         self.price_tree = ttk.Treeview(box, columns=columns, show="headings", selectmode="browse")
         headings = {"product": "Producto", "channel": "Canal", "seller": "Vendedor", "price": "Precio", "list_price": "Precio lista", "stock": "Stock", "confidence": "Conf.", "url": "Enlace"}
-        widths = {"product": 150, "channel": 100, "seller": 150, "price": 85, "list_price": 85, "stock": 65, "confidence": 65, "url": 260}
+        widths = {"product": 150, "channel": 100, "seller": 150, "price": 105, "list_price": 105, "stock": 65, "confidence": 65, "url": 260}
         for col in columns:
             self.price_tree.heading(col, text=headings[col])
             self.price_tree.column(col, width=widths[col], anchor="w")
@@ -170,8 +171,9 @@ class App(MediaProgressApp):
                     self._price_completed += 1
                     overall = int((self._price_completed / max(1, self._price_total)) * 100)
                     self._set_price_progress(100, overall)
-                    best = event.get("best_price")
-                    self.price_summary.set(f"{self._price_completed}/{self._price_total} productos · {event.get('offers', 0)} ofertas en este producto · mejor precio: {('S/ ' + format(best, '.2f')) if best is not None else 'sin oferta válida'}")
+                    best_by_currency = event.get("best_by_currency") or {}
+                    best_text = " · ".join(format_money(value, currency) for currency, value in sorted(best_by_currency.items())) or "sin oferta válida"
+                    self.price_summary.set(f"{self._price_completed}/{self._price_total} productos · {event.get('offers', 0)} ofertas en este producto · mejores precios: {best_text}")
                 elif kind == "fatal":
                     self.price_status.set("Error general durante la búsqueda de precios.")
                     self.emit(event.get("error") or "Error de precios")
@@ -195,7 +197,8 @@ class App(MediaProgressApp):
     def _insert_price_offer(self, row: dict, label: str | None):
         price = row.get("selling_price")
         list_price = row.get("list_price")
-        self.price_tree.insert("", "end", values=(label or row.get("part_number") or row.get("model") or "", row.get("channel") or "", row.get("seller_display_name") or "No expuesto", f"S/ {price:.2f}" if isinstance(price, (int, float)) else "", f"S/ {list_price:.2f}" if isinstance(list_price, (int, float)) else "", row.get("stock") if row.get("stock") is not None else "", f"{float(row.get('confidence') or 0):.2f}", row.get("url") or ""))
+        currency = str(row.get("currency") or "PEN")
+        self.price_tree.insert("", "end", values=(label or row.get("part_number") or row.get("model") or "", row.get("channel") or "", row.get("seller_display_name") or "No expuesto", format_money(price, currency), format_money(list_price, currency), row.get("stock") if row.get("stock") is not None else "", f"{float(row.get('confidence') or 0):.2f}", row.get("url") or ""))
 
     def _open_price_offer(self, _event=None):
         item = self.price_tree.focus()

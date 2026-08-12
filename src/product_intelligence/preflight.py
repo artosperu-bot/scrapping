@@ -5,6 +5,7 @@ from typing import Any
 
 from .batch import detect_items
 from .template_contract import analyze_template_contract
+from .extraction_strategy import extraction_plan
 
 
 ACTION_BY_ROLE = {
@@ -84,6 +85,7 @@ def analyze_workbook(template: str) -> dict[str, Any]:
         "products": products,
         "attributes": attributes,
         "reference_sheets": contract.get("reference_sheets", []),
+        "extraction_plan": extraction_plan(),
         "summary": {
             **contract.get("summary", {}),
             "products_detected": len(products),

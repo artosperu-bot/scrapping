@@ -150,8 +150,6 @@ def _looks_like_generic_product_attribute(label: str, desc: str, group: str | No
     if g in {"especificaciones", "specifications", "specs", "technical specifications", "caracteristicas tecnicas"}:
         return True
 
-    # Generic intrinsic-product instructions. Seller/commercial/catalog fields are
-    # filtered before this helper is called.
     instruction = any(x in text for x in [
         "indica ", "indique ", "ingresa ", "selecciona ", "enter ", "select ", "indicates ", "specify ",
     ])
@@ -181,6 +179,14 @@ def _field_role(field: dict, group: str | None) -> tuple[str, bool, str]:
 
     if field_class == "IMAGE":
         return ROLE_MEDIA, True, "La plantilla solicita una URL de imagen de producto."
+
+    # Falabella #614607 is misleadingly named SellerWarrantyInMonths, but the workbook
+    # instruction explicitly accepts the coverage period offered by the manufacturer OR
+    # seller. Therefore it is a product-data target when an exact technical/official source
+    # proves the period. This is different from #9 Garantía del vendedor, which is seller input.
+    if ext == "614607" and any(x in desc for x in ["fabricante", "manufacturer"]):
+        return ROLE_SCRAPE, True, "Periodo de garantía del fabricante/vendedor demostrable por fuente validada; salida en meses."
+
     if field_class == "SELLER_DATA":
         return ROLE_SELLER, False, "Dato comercial/operativo del vendedor; no se inventa por scraping."
 
@@ -210,7 +216,7 @@ def _field_role(field: dict, group: str | None) -> tuple[str, bool, str]:
         return ROLE_SCRAPE, True, "La descripción del Excel define un dato técnico verificable."
 
     if _looks_like_generic_product_attribute(label_raw, desc_raw, group):
-        return ROLE_SCRAPE, True, "Atributo técnico genérico definido por la propia descripción/sección del Excel."
+        return ROLE_SCRAPE, True, "Atributo técnico definido por la propia descripción/sección del Excel; no requiere alias previo."
 
     return ROLE_REVIEW, False, "La intención no es suficientemente clara; requiere clasificación antes de escribir."
 

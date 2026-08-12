@@ -9,7 +9,7 @@ from .html_extract import extract_page, identity_from_page, table_evidence, stru
 from .pdf_extract import extract_pdf
 from .record_builder import build_record_strict
 from .source_policy import classify_source
-from .web_fetch import fetch_page
+from .web_fetch import fetch_page, fetch_browser
 from .note_extract import extract_technical_notes
 from .text_extract import extract_text_evidence
 from .source_extract import source_evidence
@@ -33,11 +33,9 @@ class ProductPipeline:
         target_semantics: list[str] | None = None,
         media_slots: int = 0,
     ) -> ProductRecord:
-        fetch = fetch_page(
-            url, browser_fallback=browser_fallback,
-            prefer_browser=bool(media_slots > 1),
-            activate_lazy_media=bool(media_slots > 1),
-        )
+        # Fast identity preflight first. A rich Chromium pass is expensive and should run
+        # only after this URL has proved that it is the requested product.
+        fetch = fetch_page(url, browser_fallback=browser_fallback)
         if fetch.status_code >= 400:
             raise ValueError(f"Fuente no accesible: HTTP {fetch.status_code} ({fetch.method}). No se intenta eludir controles del sitio.")
 
@@ -63,6 +61,24 @@ class ProductPipeline:
                 f"Fuente rechazada: clase={source_class}, identidad={candidate.match_level}, "
                 f"confirmados={candidate.identifiers_confirmed}, conflictos={candidate.identifiers_conflicting}"
             )
+
+        # Once identity is proven, enrich the same public product page with a normal browser
+        # when the Excel asks for a gallery. This activates lazy-loaded images and captures
+        # JSON/XHR/media without spending Chromium time on rejected search candidates.
+        if media_slots > 1 and fetch.method != "playwright":
+            try:
+                rich = fetch_browser(fetch.final_url, timeout=45, activate_lazy_media=True)
+                if rich.status_code and rich.status_code < 400:
+                    fetch = rich
+                    page = extract_page(fetch.html, fetch.final_url, [x for x in terms if x])
+                    rich_candidate = identity_from_page(page, expected=expected, source_url=fetch.final_url)
+                    if source_class == "manufacturer" and expected.mpn and not rich_candidate.mpn and rich_candidate.sku:
+                        rich_candidate.mpn = rich_candidate.sku
+                    rich_candidate = compare_identity(expected, rich_candidate)
+                    if rich_candidate.match_level in required:
+                        candidate = rich_candidate
+            except Exception as exc:
+                fetch.warnings.append(f"validated_browser_enrichment_failed:{type(exc).__name__}")
 
         for field in ["brand", "manufacturer", "product_name", "model", "mpn", "sku", "ean", "upc", "gtin", "variant", "capacity", "color", "region"]:
             if getattr(candidate, field, None) is None and getattr(expected, field, None) is not None:

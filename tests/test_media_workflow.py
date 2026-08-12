@@ -52,6 +52,7 @@ def test_fetch_enables_lazy_media_and_color_is_relaxed_only_for_media(monkeypatc
 
     results = workflow.run_media_product(identity, tmp_path, manual_urls=["https://brand.example/model"], auto_search=False)
     assert captured["fetch_kwargs"]["activate_lazy_media"] is True
+    assert captured["fetch_kwargs"]["prefer_browser"] is True
     assert captured["expected"].color is None
     assert captured["expected"].capacity == "256 GB"
     assert results[0]["downloaded"] is True

@@ -3,6 +3,9 @@ from pathlib import Path
 from product_intelligence.media_progress import BatchProgress, stage_percent
 
 
+ROOT = Path(__file__).parents[1]
+
+
 def test_stage_percent_is_monotonic_and_done_is_100():
     stages = ["queued", "searching", "validating", "extracting", "downloading", "finalizing", "done"]
     values = [stage_percent(s) for s in stages]
@@ -36,8 +39,8 @@ def test_batch_progress_reaches_100_only_when_all_products_finish():
     assert progress.downloaded == 5
 
 
-def test_media_desktop_contains_real_progress_bars_and_wolf_animation():
-    source = (Path(__file__).parents[1] / "src" / "product_intelligence" / "media_desktop.py").read_text(encoding="utf-8")
+def test_progress_desktop_contains_real_progress_bars_and_wolf_animation():
+    source = (ROOT / "src" / "product_intelligence" / "media_progress_desktop.py").read_text(encoding="utf-8")
     assert "ttk.Progressbar" in source
     assert "self.media_overall_progress" in source
     assert "self.media_product_progress" in source
@@ -45,3 +48,8 @@ def test_media_desktop_contains_real_progress_bars_and_wolf_animation():
     assert "_draw_wolf" in source
     assert "BatchProgress" in source
     assert 'text="Progreso del proceso"' in source
+
+
+def test_exe_launches_progress_desktop_extension():
+    source = (ROOT / "run_desktop.py").read_text(encoding="utf-8")
+    assert "from product_intelligence.media_progress_desktop import main" in source

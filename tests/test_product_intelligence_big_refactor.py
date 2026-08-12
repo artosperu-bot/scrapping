@@ -74,3 +74,36 @@ def test_resolution_returns_no_value_for_unknown_fact_instead_of_inventing():
     )
     assert result.value is None
     assert result.status == "INSUFFICIENT_EVIDENCE"
+
+
+def test_invalid_standard_gtin_never_reaches_excel_writer():
+    rec = ProductRecord(
+        identity=ProductIdentity(ean="4006381333932", mpn="GEN-4", match_level="EXACT", confidence=.95),
+    )
+    result = resolve_marketplace_field(
+        rec,
+        header="Código de barras #56",
+        description="Universal product barcode",
+        canonical="ean",
+        contract=FieldContract(semantic="ean", value_type="number"),
+        options=[],
+    )
+    assert result.value is None
+    assert result.status == "INSUFFICIENT_EVIDENCE"
+    assert result.reason.startswith("INVALID_GTIN-13")
+
+
+def test_valid_upc_can_reach_barcode_field():
+    rec = ProductRecord(
+        identity=ProductIdentity(upc="050036416887", mpn="GEN-5", match_level="EXACT", confidence=.95),
+    )
+    result = resolve_marketplace_field(
+        rec,
+        header="Código de barras #56",
+        description="Universal product barcode",
+        canonical="upc",
+        contract=FieldContract(semantic="upc", value_type="number"),
+        options=[],
+    )
+    assert result.value == "050036416887"
+    assert result.status == FOUND_DIRECT

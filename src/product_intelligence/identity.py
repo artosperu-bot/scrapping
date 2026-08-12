@@ -26,6 +26,19 @@ def _norm(v: str | None) -> str:
     if not v: return ""
     return re.sub(r"[^a-z0-9]+", "", v.lower())
 
+def _text_supports(value: str | None, *texts: str | None) -> bool:
+    """Conservative lexical support for identity metadata.
+
+    This prevents an Organization/seller extracted from a commerce page from becoming the
+    product brand merely because the page contains the exact MPN. It is deliberately generic:
+    a brand/model is considered corroborated when it is present in title/model/name evidence.
+    """
+    needle=_norm(value)
+    if not needle:
+        return False
+    haystack=" ".join(_norm(x) for x in texts if x)
+    return len(needle) >= 2 and needle in haystack
+
 def compare_identity(expected: ProductIdentity, candidate: ProductIdentity) -> ProductIdentity:
     confirmed, conflicts = [], []
     score = 0.0
@@ -41,12 +54,25 @@ def compare_identity(expected: ProductIdentity, candidate: ProductIdentity) -> P
             if field in strong: strong_match = True
         elif field in strong or field in {"model", "capacity", "variant"}:
             conflicts.append(field)
+        elif field == "brand" and expected.brand and candidate.brand:
+            conflicts.append(field)
+
+    # A page may contain an exact MPN while JSON-LD Organization names the seller as brand.
+    # When the caller did not already know the brand, do not let an unsupported page-level
+    # organization become canonical identity metadata. The later evidence resolver may recover
+    # the real product brand from explicit Product.brand/specification evidence.
+    if not expected.brand and candidate.brand and not _text_supports(
+        candidate.brand, candidate.product_name, candidate.model
+    ):
+        candidate.brand = None
+
     if conflicts and any(x in strong for x in conflicts):
         level = "CONFLICT"
     elif strong_match and not conflicts:
+        # EXACT means exact product identifier, but confidence remains proportional to the
+        # corroboration actually available; it is not automatically 0.9+.
         level = "EXACT"
     else:
-        # fallback name/model similarity when strong IDs are unavailable
         sim = max(
             ratio(_norm(expected.product_name), _norm(candidate.product_name))/100 if expected.product_name and candidate.product_name else 0,
             ratio(_norm(expected.model), _norm(candidate.model))/100 if expected.model and candidate.model else 0,

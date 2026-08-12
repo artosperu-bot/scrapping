@@ -85,12 +85,8 @@ def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
     confidence = float(row.get("confidence") or 0.0)
 
     if official_page and role in {"product_gallery", "product_video"}:
-        # A validated official PDP is stronger page-level evidence. Keep a floor
-        # so unrelated/unknown assets still cannot bypass identity scoring.
         return confidence >= 0.84
 
-    # External discovery is intentionally conservative, even if an older
-    # classifier marked the row as autofill-eligible.
     return confidence >= 0.95
 
 
@@ -121,6 +117,7 @@ def run_media_product(
                 page_url,
                 timeout=30,
                 browser_fallback=True,
+                prefer_browser=True,
                 activate_lazy_media=True,
             )
             final_url = str(getattr(fetched, "final_url", None) or page_url)

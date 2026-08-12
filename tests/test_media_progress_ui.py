@@ -50,6 +50,8 @@ def test_progress_desktop_contains_real_progress_bars_and_wolf_animation():
     assert 'text="Progreso del proceso"' in source
 
 
-def test_exe_launches_progress_desktop_extension():
+def test_exe_preserves_progress_desktop_extension():
     source = (ROOT / "run_desktop.py").read_text(encoding="utf-8")
-    assert "from product_intelligence.media_progress_desktop import main" in source
+    assert "from product_intelligence.price_desktop import main" in source
+    price_source = (ROOT / "src" / "product_intelligence" / "price_desktop.py").read_text(encoding="utf-8")
+    assert "from .media_progress_desktop import App as MediaProgressApp" in price_source

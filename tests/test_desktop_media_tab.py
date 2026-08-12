@@ -8,9 +8,11 @@ def _media_desktop_source() -> str:
     return (ROOT / "src" / "product_intelligence" / "media_desktop.py").read_text(encoding="utf-8")
 
 
-def test_exe_entrypoint_uses_media_desktop_extension_chain():
+def test_exe_entrypoint_preserves_media_desktop_extension_chain():
     source = (ROOT / "run_desktop.py").read_text(encoding="utf-8")
-    assert "from product_intelligence.media_progress_desktop import main" in source
+    assert "from product_intelligence.price_desktop import main" in source
+    price_source = (ROOT / "src" / "product_intelligence" / "price_desktop.py").read_text(encoding="utf-8")
+    assert "from .media_progress_desktop import App as MediaProgressApp" in price_source
     progress_source = (ROOT / "src" / "product_intelligence" / "media_progress_desktop.py").read_text(encoding="utf-8")
     assert "from .media_desktop import App as MediaApp" in progress_source
 

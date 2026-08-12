@@ -23,8 +23,8 @@ def test_desktop_has_standalone_media_tab_and_workflow_import():
 
 def test_media_execution_is_separate_from_run_batch():
     source = _media_desktop_source()
-    start = source.index("def _start_media_indices")
-    end = source.index("def ", start + 5)
+    start = source.index("    def _start_media_indices")
+    end = source.index("\n    def _drain_media_events", start)
     media_method = source[start:end]
     assert "run_media_product" in media_method
     assert "run_batch" not in media_method

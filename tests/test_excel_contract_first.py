@@ -59,6 +59,35 @@ def test_excel_description_defines_bluetooth_contract(tmp_path):
     assert {str(x) for x in bluetooth["options"]} >= {"Sí", "No"}
 
 
+def test_unknown_technical_field_is_scrape_target_by_excel_contract(tmp_path):
+    path = tmp_path / "generic_product.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Subir plantilla"
+    ws.append(["Especificaciones", "Precio", "Principales"])
+    ws.append([
+        "Indica la velocidad máxima del producto en km/h. // Enter the maximum speed of the product in km/h.\n\n- Syntax: Text",
+        "Ingresa el precio que el cliente debe pagar por el producto.",
+        "Ingresa la condición física del producto.",
+    ])
+    ws.append([" ", " ( Optional ) ", " "])
+    ws.append(["VelocidadMaxima #999999", "PriceFalabella #52", "Detalles de la condición del Producto #49"])
+    ws.append([None, None, None])
+    wb.save(path)
+
+    plan = analyze_template_contract(str(path))
+    fields = all_fields(plan)
+    speed = next(field for field in fields if "VelocidadMaxima" in field["label"])
+    price = next(field for field in fields if "PriceFalabella" in field["label"])
+    condition = next(field for field in fields if "condición" in field["label"])
+
+    assert speed["role"] == "SCRAPE_TARGET"
+    assert speed["scrape"] is True
+    assert "VelocidadMaxima" in plan["scrape_semantics"]
+    assert price["role"] == "SELLER_INPUT" and price["scrape"] is False
+    assert condition["role"] == "MARKETPLACE_INPUT" and condition["scrape"] is False
+
+
 def test_seller_sku_is_not_product_identity():
     items = detect_items(str(template_path()))
     assert items

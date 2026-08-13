@@ -61,6 +61,13 @@ def _host_matches(url: str, domain: str) -> bool:
     return host == domain or host.endswith("." + domain)
 
 
+def _is_peru_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    if any(_host_matches(url, domain) for domain in PERU_PRICE_DOMAINS):
+        return True
+    return host.endswith(".pe") or host.endswith(".com.pe")
+
+
 def _is_targeted_marketplace_url(url: str) -> bool:
     return any(_host_matches(url, domain) for domain in TARGETED_PERU_DOMAINS)
 
@@ -114,6 +121,7 @@ def discover_targeted_peru_sources(
     limit_per_domain: int = 5,
     domains: tuple[str, ...] = TARGETED_PERU_DOMAINS,
 ) -> list[str]:
+    """Find multiple exact-product PDP candidates per priority Peru channel."""
     strong = _identity_query(identity)
     if not strong:
         return []
@@ -142,6 +150,7 @@ def discover_targeted_peru_sources(
                 break
         per_domain.append(clean_rows)
 
+    # Interleave channels so one marketplace cannot consume the entire fetch order.
     urls: list[str] = []
     seen: set[str] = set()
     for index in range(limit_per_domain):
@@ -154,11 +163,14 @@ def discover_targeted_peru_sources(
 
 def discover_price_sources(
     identity: ProductIdentity,
-    limit: int = 12,
+    limit: int = 24,
     *,
     priority_domains: tuple[str, ...] = PERU_PRICE_DOMAINS,
 ) -> list[str]:
-    targeted = discover_targeted_peru_sources(identity, limit_per_domain=max(2, min(5, limit)))
+    # Preserve all high-value targeted PDPs first. The generic limit applies to the
+    # overall fetch budget only after those deterministic marketplace candidates.
+    per_domain = max(3, min(5, max(1, limit // 4)))
+    targeted = discover_targeted_peru_sources(identity, limit_per_domain=per_domain)
     candidates = search_web(identity, limit=max(limit * 3, 24))
     urls: list[str] = []
     seen: set[str] = set()
@@ -166,18 +178,25 @@ def discover_price_sources(
         if url not in seen:
             seen.add(url)
             urls.append(url)
+
     generic: list[str] = []
     for candidate in candidates:
         url = str(getattr(candidate, "url", "") or "").strip()
         if not url.startswith(("http://", "https://")) or url in seen:
+            continue
+        if not _is_peru_url(url):
             continue
         if _is_known_target_listing_url(url, identity):
             continue
         seen.add(url)
         generic.append(url)
     generic.sort(key=lambda value: _priority_rank(value, priority_domains))
-    urls.extend(generic)
-    return urls[:limit]
+
+    # Never truncate already discovered priority PDPs merely because the generic
+    # fallback budget is small. Add generic Peru pages only up to the remaining cap.
+    remaining = max(0, limit - len(urls))
+    urls.extend(generic[:remaining])
+    return urls
 
 
 def _walk_jsonld(value):
@@ -270,8 +289,6 @@ def _peru_marketplace_html_offer(
         segment = page_text[start : start + 1200] if start >= 0 else page_text[:2500]
         values = [_money(v) for v in re.findall(r"S\s*/\s*([0-9][0-9.,]*)", segment, re.I)]
         values = [v for v in values if v and v > 0]
-        # Sodimac can expose a CMR coupon amount while omitting the product price.
-        # A lone monetary value is ambiguous and must never be promoted to price.
         if len(values) >= 2:
             selling = values[0]
             list_price = values[1] if values[1] >= values[0] else None
@@ -375,9 +392,6 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
     if rows:
         return rows
 
-    # For targeted Peru retailers, site-specific parsing and JSON-LD are the trust
-    # boundary. Do not fall through to a generic first-S/ regex: that can convert a
-    # coupon, installment or unrelated promotion into a fake product price.
     if _is_targeted_marketplace_url(url):
         return []
 

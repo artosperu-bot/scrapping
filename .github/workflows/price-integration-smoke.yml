@@ -28,8 +28,6 @@ jobs:
       - name: Install Chromium
         run: python -m playwright install chromium
       - name: Run real Peru max-coverage discovery for Q350
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: '0'
         run: |
           python - <<'PY'
           import json

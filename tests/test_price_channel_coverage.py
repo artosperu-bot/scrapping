@@ -5,6 +5,7 @@ from product_intelligence.price_channel_registry import (
     build_channel_coverage,
     channel_from_url,
 )
+from product_intelligence.price_identity import is_peru_offer
 from product_intelligence.price_models import PriceOffer
 
 
@@ -34,6 +35,11 @@ def test_registry_covers_requested_peru_channels_and_normalizes_aliases():
     assert channel_from_url("https://www.efe.com.pe/x") == "Tiendas EFE"
     assert channel_from_url("https://www.realplaza.com/x") == "Real Plaza"
     assert channel_from_url("https://tienda.claro.com.pe/x") == "Claro"
+
+
+def test_registry_backed_global_domains_are_still_recognized_as_peru_market():
+    assert is_peru_offer(_offer("Real Plaza", 299, "https://www.realplaza.com/producto/p")) is True
+    assert is_peru_offer(_offer("Juntoz", 299, "https://juntoz.com/product/q350")) is True
 
 
 def test_channel_coverage_lists_each_individual_store_instead_of_boolean_yes():

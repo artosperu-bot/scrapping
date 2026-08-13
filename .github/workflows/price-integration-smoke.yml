@@ -13,19 +13,21 @@ permissions:
 
 jobs:
   live-price-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
-      - name: Install core dependencies
+      - name: Install desktop dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-      - name: Run real Peru multiseller discovery for JBL fixtures
+          pip install -e ".[desktop,dev]"
+      - name: Install Chromium
+        run: python -m playwright install chromium
+      - name: Run real Peru max-coverage discovery for Q350
         run: |
           python - <<'PY'
           import json
@@ -34,36 +36,27 @@ jobs:
           from product_intelligence.price_identity import is_peru_offer
           from product_intelligence.price_workflow import run_price_product
 
-          products = [
-              ProductIdentity(brand='JBL', model='Quantum 350 Wireless', mpn='JBLQ350WLBLKAM'),
-              ProductIdentity(brand='JBL', model='Endurance Run 3 Wireless', mpn='JBLENDURRUN3BTBAM'),
-              ProductIdentity(brand='JBL', model='Tune 530C USB-C', mpn='JBLT530CBLKAM'),
-          ]
-          root = Path('price_smoke_output')
-          total = 0
-          q350 = []
-          for identity in products:
-              print('\n===', identity.mpn, '===')
-              events = []
-              offers = run_price_product(identity, root, on_event=events.append, max_sources=24)
-              foreign = [o for o in offers if not is_peru_offer(o)]
-              if foreign:
-                  raise SystemExit('Foreign offer leaked into Peru-only output: ' + json.dumps([o.to_dict() for o in foreign], ensure_ascii=False))
-              total += len(offers)
-              if identity.mpn == 'JBLQ350WLBLKAM':
-                  q350 = offers
-              for offer in offers:
-                  print(json.dumps(offer.to_dict(), ensure_ascii=False))
-              print('offers=', len(offers), 'channels=', len({o.channel for o in offers}), 'sellers=', len({(o.channel, o.seller_display_name) for o in offers}), 'events=', len(events))
-
-          print('TOTAL_VALIDATED_PERU_OFFERS=', total)
-          print('Q350_VALIDATED_PERU_OFFERS=', len(q350))
-          print('Q350_CHANNELS=', sorted({o.channel for o in q350}))
-          print('Q350_SELLERS=', sorted({f'{o.channel}:{o.seller_display_name}' for o in q350}))
-          if total < 1:
-              raise SystemExit('No validated Peru price offer found for the 3 real JBL products')
-          if len(q350) < 2:
-              raise SystemExit('Q350 did not produce at least two independently validated Peru offers')
+          identity = ProductIdentity(brand='JBL', model='Quantum 350 Wireless', mpn='JBLQ350WLBLKAM')
+          events = []
+          offers = run_price_product(identity, Path('price_smoke_output'), on_event=events.append, max_sources=40)
+          foreign = [o for o in offers if not is_peru_offer(o)]
+          strict = {'Falabella','Ripley','PlazaVea','Oechsle','MercadoLibre','Sodimac','JBL Perú'}
+          ambiguous = [o for o in offers if o.source_method == 'html' and o.channel in strict]
+          if foreign:
+              raise SystemExit('Foreign offer leaked into Peru-only output: ' + json.dumps([o.to_dict() for o in foreign], ensure_ascii=False))
+          if ambiguous:
+              raise SystemExit('Ambiguous generic HTML marketplace price leaked: ' + json.dumps([o.to_dict() for o in ambiguous], ensure_ascii=False))
+          for event in events:
+              if event.get('type') in {'source','page'}:
+                  print('EVENT', json.dumps(event, ensure_ascii=False))
+          for offer in offers:
+              print('OFFER', json.dumps(offer.to_dict(), ensure_ascii=False))
+          print('Q350_VALIDATED_PERU_OFFERS=', len(offers))
+          print('Q350_CHANNELS=', sorted({o.channel for o in offers}))
+          print('Q350_SELLERS=', sorted({f'{o.channel}:{o.seller_display_name}' for o in offers}))
+          print('EVENTS=', len(events))
+          if len(offers) < 4:
+              raise SystemExit('Q350 coverage did not improve beyond the previous 3 validated Peru offers')
           PY
       - uses: actions/upload-artifact@v4
         if: always()

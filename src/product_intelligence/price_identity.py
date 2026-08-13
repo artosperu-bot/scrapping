@@ -16,13 +16,6 @@ def _tokens(value: str | None) -> list[str]:
 
 
 def _model_generation_conflict(identity: ProductIdentity, evidence: dict) -> bool:
-    """Reject a declared exact identifier when the visible model generation contradicts it.
-
-    Marketplace data can be wrong: an offer may carry the requested MPN in one
-    attribute while its title/model clearly names another generation. Numeric model
-    tokens are a strong, general signal for that contradiction (e.g. Quantum 350 vs
-    Quantum 910). We only apply this when both sides expose numeric model tokens.
-    """
     expected_model = identity.model or identity.product_name or ""
     observed = " ".join(
         str(evidence.get(key) or "")
@@ -97,14 +90,31 @@ _PERU_CHANNELS = {
     "jblper",
 }
 
+# Some Peru retailers use a global/non-.pe hostname. Treat those as Peru only when
+# there is additional market evidence (PEN and/or an explicit /peru/ route).
+_PERU_RETAIL_HOSTS = {
+    "perudataconsult.net",
+}
+_PERU_PATH_HOSTS = {
+    "panacompu.com",
+}
+
 
 def is_peru_offer(row: PriceOffer) -> bool:
     """Return True only for offers evidenced as belonging to the Peru market."""
     channel = _norm(row.channel)
     if channel in _PERU_CHANNELS:
         return True
-    host = (urlsplit(row.url).hostname or "").lower().removeprefix("www.")
-    return host.endswith(".pe") or host.endswith(".com.pe")
+    parsed = urlsplit(row.url)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    path = (parsed.path or "").lower()
+    if host.endswith(".pe") or host.endswith(".com.pe"):
+        return True
+    if host in _PERU_RETAIL_HOSTS and str(row.currency or "").upper() == "PEN":
+        return True
+    if host in _PERU_PATH_HOSTS and (path.startswith("/peru/") or path == "/peru") and str(row.currency or "").upper() == "PEN":
+        return True
+    return False
 
 
 def _market_rank(row: PriceOffer) -> int:

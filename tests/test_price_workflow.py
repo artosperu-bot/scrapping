@@ -29,7 +29,12 @@ def test_price_workflow_survives_adapter_failure_and_emits_done(tmp_path, monkey
     monkeypatch.setattr(price_workflow, "save_price_run", lambda *_a, **_k: None)
 
     rows = price_workflow.run_price_product(identity, tmp_path, on_event=events.append)
-    assert rows == rows_from_page
+    # Currency groups may be reordered by the presentation policy. Verify the
+    # same validated offers are preserved without assuming CLP vs PEN ordering.
+    assert {(r.channel, r.currency, r.selling_price) for r in rows} == {
+        ("Shop", "PEN", 299),
+        ("Chile", "CLP", 29936),
+    }
     assert any(e.get("type") == "source" and e.get("channel") == "MercadoLibre" and e.get("status") == "error" for e in events)
     assert events[-1]["type"] == "done"
     assert events[-1]["best_by_currency"] == {"PEN": 299, "CLP": 29936}

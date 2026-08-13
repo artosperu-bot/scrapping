@@ -9,15 +9,16 @@ from .models import ProductIdentity
 from .price_adapters import parse_mercadolibre_payload, parse_vtex_payload
 from .price_discovery import discover_price_sources, extract_page_offers
 from .price_history import save_price_run
-from .price_identity import dedupe_offers
+from .price_identity import dedupe_offers, is_peru_offer
 from .price_models import PriceOffer
 from .web_fetch import fetch_page
 
 
-# Structured storefront endpoints that can be queried directly by exact Part Number.
-# They are intentionally attempted before search-engine discovery so local sources
-# are not dependent on what Google/Bing happened to index that day.
+# Structured storefront endpoints queried directly by exact Part Number before any
+# search engine. If one storefront does not expose VTEX at runtime, it simply
+# contributes zero rows and its targeted PDP discovery still runs afterward.
 PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
+    ("Falabella", "https://www.falabella.com.pe"),
     ("PlazaVea", "https://www.plazavea.com.pe"),
     ("Oechsle", "https://www.oechsle.pe"),
 )
@@ -29,7 +30,15 @@ def _query(identity: ProductIdentity) -> str:
 
 def _channel_from_url(url: str) -> str:
     host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
-    names = {"falabella": "Falabella", "ripley": "Ripley", "plazavea": "PlazaVea", "oechsle": "Oechsle", "mercadolibre": "MercadoLibre"}
+    names = {
+        "falabella": "Falabella",
+        "ripley": "Ripley",
+        "plazavea": "PlazaVea",
+        "oechsle": "Oechsle",
+        "mercadolibre": "MercadoLibre",
+        "sodimac": "Sodimac",
+        "jbl": "JBL Perú",
+    }
     for key, name in names.items():
         if key in host:
             return name
@@ -74,7 +83,7 @@ def run_price_product(
     output_root: str | Path,
     *,
     on_event=None,
-    max_sources: int = 12,
+    max_sources: int = 24,
 ) -> list[PriceOffer]:
     def emit(event_type: str, **payload):
         if on_event:
@@ -83,8 +92,6 @@ def run_price_product(
     offers: list[PriceOffer] = []
     emit("status", stage="searching", message="Consultando APIs y fuentes estructuradas de Perú")
 
-    # Deterministic local structured probes first. A search engine is not allowed to
-    # decide whether PlazaVea/Oechsle are consulted.
     for channel, base_url in PERU_STRUCTURED_SOURCES:
         try:
             rows = _try_vtex(base_url, identity, channel)
@@ -93,22 +100,20 @@ def run_price_product(
         except Exception as exc:
             emit("source", channel=channel, status="error", error=f"structured: {type(exc).__name__}: {exc}")
 
-    # MercadoLibre Peru is another direct structured source.
     try:
         ml = _try_mercadolibre(identity)
         offers.extend(ml)
-        emit("source", channel="MercadoLibre", status="ok", offers=len(ml))
+        emit("source", channel="MercadoLibre", status="ok", offers=len(ml), method="mercadolibre_mpe")
     except Exception as exc:
         emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
 
-    # General discovery is additive fallback, not the gate for local structured APIs.
     try:
         sources = discover_price_sources(identity, limit=max_sources)
     except Exception as exc:
         sources = []
         emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
 
-    emit("status", stage="validating", message=f"Revisando {len(sources)} fuentes web adicionales")
+    emit("status", stage="validating", message=f"Revisando {len(sources)} fuentes web adicionales de Perú")
     for pos, url in enumerate(sources, 1):
         channel = _channel_from_url(url)
         try:
@@ -117,7 +122,6 @@ def run_price_product(
             final_url = str(getattr(fetched, "final_url", None) or url)
             html = str(getattr(fetched, "html", "") or "")
 
-            # For newly discovered VTEX storefronts, reuse the same structured parser.
             if "vtex" in html.lower() or "vteximg" in html.lower() or "/api/catalog_system/" in html.lower():
                 try:
                     vtex_rows = _try_vtex(final_url, identity, channel)
@@ -133,8 +137,13 @@ def run_price_product(
         except Exception as exc:
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
 
-    valid = [row for row in dedupe_offers(offers) if row.confidence >= 0.70 and row.selling_price > 0]
-    emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas validadas")
+    deduped = dedupe_offers(offers)
+    valid = [
+        row
+        for row in deduped
+        if is_peru_offer(row) and row.confidence >= 0.70 and row.selling_price > 0
+    ]
+    emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas peruanas validadas")
     save_price_run(output_root, valid)
     for row in valid:
         emit("offer", offer=row.to_dict())
@@ -142,6 +151,7 @@ def run_price_product(
         "done",
         offers=len(valid),
         channels=len({r.channel for r in valid}),
+        sellers=len({(r.channel, r.seller_display_name) for r in valid}),
         best_by_currency=_best_by_currency(valid),
     )
     return valid

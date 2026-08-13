@@ -6,10 +6,10 @@ from urllib.parse import quote_plus, urlparse
 import requests
 
 from .models import ProductIdentity
-from .price_adapters import parse_mercadolibre_payload, parse_vtex_payload
+from .price_adapters import parse_mercadolibre_payload, parse_shopify_product_payload, parse_vtex_payload
 from .price_discovery import discover_price_sources, extract_page_offers
 from .price_history import save_price_run
-from .price_identity import dedupe_offers, is_peru_offer
+from .price_identity import competitor_key, dedupe_offers, filter_market_outliers, is_peru_offer
 from .price_models import PriceOffer
 from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
 from .web_fetch import fetch_page
@@ -30,7 +30,12 @@ def _query(identity: ProductIdentity) -> str:
 
 def _channel_from_url(url: str) -> str:
     host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
-    names = {"falabella":"Falabella","ripley":"Ripley","plazavea":"PlazaVea","oechsle":"Oechsle","mercadolibre":"MercadoLibre","sodimac":"Sodimac","jbl":"JBL Perú","infiniti":"Infiniti","perudataconsult":"Peru Data","arteus":"Arteus","baetech":"BaeTech","panacompu":"Pana Compu"}
+    names = {
+        "falabella":"Falabella","ripley":"Ripley","plazavea":"PlazaVea","oechsle":"Oechsle",
+        "mercadolibre":"MercadoLibre","sodimac":"Sodimac","jbl":"JBL Perú","infiniti":"Infiniti",
+        "perudataconsult":"Peru Data","arteus":"Arteus","baetech":"BaeTech","panacompu":"Pana Compu",
+        "memorykings":"Memory Kings","estuyo":"EsTuyo","bigmarket":"Big Market","efe":"Efe",
+    }
     for key, name in names.items():
         if key in host:
             return name
@@ -88,6 +93,24 @@ def _try_vtex(url: str, identity: ProductIdentity, channel: str, timeout: int = 
     if not isinstance(data, (list, dict)):
         return []
     return parse_vtex_payload(data, identity, channel=channel, source_url=origin)
+
+
+def _try_shopify(url: str, identity: ProductIdentity, channel: str, timeout: int = 12) -> list[PriceOffer]:
+    parsed = urlparse(url)
+    path = (parsed.path or "").rstrip("/")
+    if "/products/" not in path.lower():
+        return []
+    endpoint = f"{parsed.scheme}://{parsed.netloc}{path}.js"
+    response = requests.get(endpoint, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
+    if response.status_code != 200:
+        return []
+    try:
+        data = response.json()
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    return parse_shopify_product_payload(data, identity, channel=channel, source_url=url)
 
 
 def _best_by_currency(offers: list[PriceOffer]) -> dict[str, float]:
@@ -171,7 +194,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
     try:
         retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2))
-        emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="exact_mpn_retail")
+        emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="exact_identifier_retail")
     except Exception as exc:
         emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
     try:
@@ -195,16 +218,32 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
                         emit("offer", channel=channel, count=len(vtex_rows), method="vtex")
                 except Exception as exc:
                     emit("source", channel=channel, status="error", error=f"vtex: {type(exc).__name__}: {exc}")
+            try:
+                shopify_rows = _try_shopify(url, identity, channel)
+                offers.extend(shopify_rows)
+                if shopify_rows:
+                    emit("offer", channel=channel, count=len(shopify_rows), method="shopify_product_json")
+            except Exception as exc:
+                emit("source", channel=channel, status="error", error=f"shopify: {type(exc).__name__}: {exc}")
             offers.extend(page_rows)
             emit("page", url=url, channel=channel, status="parsed", offers=len(page_rows))
         except Exception as exc:
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
 
     deduped = dedupe_offers(offers)
-    valid = [row for row in deduped if _is_trusted_final_offer(row)]
+    trusted = [row for row in deduped if _is_trusted_final_offer(row)]
+    valid, rejected_outliers = filter_market_outliers(trusted)
+    if rejected_outliers:
+        emit("quality", rejected_outliers=len(rejected_outliers), prices=[r.selling_price for r in rejected_outliers])
     emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas peruanas validadas")
     save_price_run(output_root, valid)
     for row in valid:
         emit("offer", offer=row.to_dict())
-    emit("done", offers=len(valid), channels=len({r.channel for r in valid}), sellers=len({(r.channel, r.seller_display_name) for r in valid}), best_by_currency=_best_by_currency(valid))
+    emit(
+        "done",
+        offers=len(valid),
+        channels=len({r.channel for r in valid}),
+        sellers=len({competitor_key(r) for r in valid}),
+        best_by_currency=_best_by_currency(valid),
+    )
     return valid

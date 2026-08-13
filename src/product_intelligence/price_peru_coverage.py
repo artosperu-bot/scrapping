@@ -17,6 +17,7 @@ PERU_RETAIL_HINT_DOMAINS: tuple[str, ...] = (
     "panacompu.com", "memorykings.pe", "estuyo.pe", "bigmarketperu.com", "efe.com.pe",
 )
 TARGET_DISCOVERY_WORKERS = 4
+RETAIL_QUERY_WORKERS = 4
 _LISTING_MARKERS = ("/category/", "/categoria/", "/search/", "/buscar/", "/landing/", "/collections/", "/pages/", "/lista/")
 # /product intentionally covers product/products/producto/productos.
 _PRODUCT_MARKERS = ("/product", "/shop/", "/informacion-producto/", "/product-information/", "/articulo/")
@@ -216,31 +217,49 @@ def _general_alias_queries(identity: ProductIdentity) -> list[str]:
     return list(dict.fromkeys(queries))
 
 
-def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 20) -> list[str]:
-    strong = _strong(identity)
-    if not strong or limit <= 0: return []
-    rows, seen = [], set()
-    per_query = max(6, min(20, limit * 2))
-    for query in _general_retail_queries(identity):
-        try: found = search_web_query(identity, query, limit=per_query, timeout=12)
-        except Exception: found = []
+def _search_query_batches(identity: ProductIdentity, queries: list[str], per_query: int) -> list[list[str]]:
+    if not queries:
+        return []
+    workers = max(1, min(RETAIL_QUERY_WORKERS, len(queries)))
+    def run(query: str) -> list[str]:
+        try:
+            return search_web_query(identity, query, limit=per_query, timeout=12)
+        except Exception:
+            return []
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="peru-retail") as pool:
+        return list(pool.map(run, queries))
+
+
+def _append_retail_candidates(rows: list[str], seen: set[str], batches: list[list[str]], marker: str, limit: int) -> bool:
+    for found in batches:
         for raw in found:
             url = str(raw or "").strip()
-            if not url.startswith(("http://", "https://")) or url in seen: continue
-            if not _is_peru_retail_candidate(url, strong): continue
-            seen.add(url); rows.append(url)
-            if len(rows) >= limit: return rows
+            if not url.startswith(("http://", "https://")) or url in seen:
+                continue
+            if not _is_peru_retail_candidate(url, marker):
+                continue
+            seen.add(url)
+            rows.append(url)
+            if len(rows) >= limit:
+                return True
+    return False
+
+
+def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 20) -> list[str]:
+    strong = _strong(identity)
+    if not strong or limit <= 0:
+        return []
+    rows: list[str] = []
+    seen: set[str] = set()
+    per_query = max(6, min(20, limit * 2))
+
+    exact_batches = _search_query_batches(identity, _general_retail_queries(identity), per_query)
+    if _append_retail_candidates(rows, seen, exact_batches, strong, limit):
+        return rows
 
     model = str(identity.model or identity.product_name or "").strip()
     if model and len(rows) < limit:
         alias_identity = _alias_identity(identity)
-        for query in _general_alias_queries(identity):
-            try: found = search_web_query(alias_identity, query, limit=per_query, timeout=12)
-            except Exception: found = []
-            for raw in found:
-                url = str(raw or "").strip()
-                if not url.startswith(("http://", "https://")) or url in seen: continue
-                if not _is_peru_retail_candidate(url, model): continue
-                seen.add(url); rows.append(url)
-                if len(rows) >= limit: return rows
+        alias_batches = _search_query_batches(alias_identity, _general_alias_queries(identity), per_query)
+        _append_retail_candidates(rows, seen, alias_batches, model, limit)
     return rows

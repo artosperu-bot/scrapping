@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from statistics import median
 from urllib.parse import urlsplit, urlunsplit
 
 from .models import ProductIdentity
@@ -163,3 +164,26 @@ def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:
         best.values(),
         key=lambda x: (_market_rank(x), -x.confidence, str(x.currency or "").upper(), x.selling_price, x.channel.lower()),
     )
+
+
+def filter_market_outliers(
+    offers: list[PriceOffer],
+    *,
+    min_samples: int = 4,
+    low_ratio: float = 0.20,
+    high_ratio: float = 5.0,
+) -> tuple[list[PriceOffer], list[PriceOffer]]:
+    groups: dict[tuple[str, str], list[PriceOffer]] = {}
+    for row in offers:
+        groups.setdefault((_norm(row.part_number or row.model), str(row.currency or "").upper()), []).append(row)
+    rejected: list[PriceOffer] = []
+    for rows in groups.values():
+        prices = [float(r.selling_price) for r in rows if r.selling_price and r.selling_price > 0]
+        if len(prices) < min_samples:
+            continue
+        center = float(median(prices))
+        if center <= 0:
+            continue
+        rejected.extend(r for r in rows if r.selling_price and (r.selling_price < center * low_ratio or r.selling_price > center * high_ratio))
+    rejected_ids = {id(row) for row in rejected}
+    return [row for row in offers if id(row) not in rejected_ids], rejected

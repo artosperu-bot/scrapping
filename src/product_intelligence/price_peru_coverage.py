@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import re
+from urllib.parse import urlparse
+
+from .discovery import search_web_query
+from .models import ProductIdentity
+
+
+PERU_MARKETPLACE_DOMAINS: tuple[str, ...] = (
+    "falabella.com.pe",
+    "simple.ripley.com.pe",
+    "mercadolibre.com.pe",
+    "plazavea.com.pe",
+    "oechsle.pe",
+    "sodimac.com.pe",
+    "jbl.com.pe",
+)
+
+
+def _compact(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _host_matches(url: str, domain: str) -> bool:
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    return host == domain or host.endswith("." + domain)
+
+
+def _strong(identity: ProductIdentity) -> str:
+    return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
+
+
+def _is_pdp(url: str, domain: str, strong: str) -> bool:
+    path = (urlparse(url).path or "").lower()
+    if any(marker in path for marker in ("/category/", "/categoria/", "/search/", "/buscar/", "/landing/")):
+        return False
+    if domain == "falabella.com.pe":
+        return "/product/" in path
+    if domain == "simple.ripley.com.pe":
+        return "pmp" in path or _compact(strong) in _compact(path)
+    if domain == "mercadolibre.com.pe":
+        return "/p/" in path or "/up/" in path
+    if domain in {"plazavea.com.pe", "oechsle.pe"}:
+        return path.rstrip("/").endswith("/p")
+    if domain == "sodimac.com.pe":
+        return "/articulo/" in path
+    if domain == "jbl.com.pe":
+        return bool(_compact(strong) and _compact(strong) in _compact(path))
+    return False
+
+
+def _queries(identity: ProductIdentity, domain: str) -> list[str]:
+    strong = _strong(identity)
+    model = str(identity.model or identity.product_name or "").strip()
+    brand = str(identity.brand or "").strip()
+    queries = [f'"{strong}" site:{domain}']
+    if model:
+        queries.append(f'"{strong}" "{model}" site:{domain}')
+        queries.append(f'"{model}" {brand} site:{domain}'.strip())
+    if domain == "falabella.com.pe":
+        queries.append(f'"{strong}" site:falabella.com.pe/falabella-pe/product')
+        queries.append(f'"{strong}" "Vendido por" site:falabella.com.pe')
+    elif domain == "simple.ripley.com.pe":
+        queries.append(f'"{strong}" site:simple.ripley.com.pe pmp')
+    elif domain == "mercadolibre.com.pe":
+        queries.append(f'"{strong}" site:mercadolibre.com.pe/p')
+        queries.append(f'"{strong}" site:mercadolibre.com.pe/up')
+    elif domain == "plazavea.com.pe":
+        queries.append(f'"{strong}" site:plazavea.com.pe "/p"')
+    elif domain == "oechsle.pe":
+        queries.append(f'"{strong}" site:oechsle.pe "/p"')
+    elif domain == "sodimac.com.pe":
+        queries.append(f'"{strong}" site:sodimac.com.pe/sodimac-pe/articulo')
+    return list(dict.fromkeys(q for q in queries if q.strip()))
+
+
+def discover_additional_peru_pdps(
+    identity: ProductIdentity,
+    *,
+    limit_per_domain: int = 8,
+    domains: tuple[str, ...] = PERU_MARKETPLACE_DOMAINS,
+) -> list[str]:
+    """Return multiple validated-PDP candidates per Peru marketplace.
+
+    This is intentionally a coverage layer, not an identity decision layer. Every URL
+    is still fetched and validated later by the normal price parsers before becoming
+    an offer.
+    """
+    strong = _strong(identity)
+    if not strong:
+        return []
+    per_domain: list[list[str]] = []
+    for domain in domains:
+        found_domain: list[str] = []
+        seen: set[str] = set()
+        for query in _queries(identity, domain):
+            try:
+                urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
+            except Exception:
+                urls = []
+            for raw in urls:
+                url = str(raw or "").strip()
+                if not url.startswith(("http://", "https://")):
+                    continue
+                if url in seen or not _host_matches(url, domain) or not _is_pdp(url, domain, strong):
+                    continue
+                seen.add(url)
+                found_domain.append(url)
+                if len(found_domain) >= limit_per_domain:
+                    break
+            if len(found_domain) >= limit_per_domain:
+                break
+        per_domain.append(found_domain)
+
+    # Interleave domains so Falabella/ML cannot consume the full page-fetch budget.
+    merged: list[str] = []
+    seen_all: set[str] = set()
+    for index in range(limit_per_domain):
+        for rows in per_domain:
+            if index < len(rows) and rows[index] not in seen_all:
+                seen_all.add(rows[index])
+                merged.append(rows[index])
+    return merged

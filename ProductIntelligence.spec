@@ -3,7 +3,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
 root = Path(SPECPATH)
-datas=[]; binaries=[]; hiddenimports=['product_intelligence.isolated_desktop']
+datas=[]; binaries=[]; hiddenimports=['product_intelligence.isolated_desktop','product_intelligence.pdf_desktop']
 
 # Playwright ships runtime resources that PyInstaller does not always discover
 # automatically. Keep collect_all only for this capability; normal libraries

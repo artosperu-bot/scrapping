@@ -1,4 +1,4 @@
-from product_intelligence.price_desktop import main
+from product_intelligence.modern_desktop import main
 
-# Final desktop entry point: base Excel flow + multimedia/progress + price intelligence.
+# Final desktop entry point: preserved engines with the modern UI compatibility shell.
 main()

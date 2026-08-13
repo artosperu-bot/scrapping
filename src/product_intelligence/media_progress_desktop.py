@@ -36,15 +36,22 @@ class App(MediaApp):
         self._wolf_gif_index = 0
         super().__init__()
         self._load_wolf_gif()
-        # Mirror future worker events so the existing media UI and this progress UI
-        # can consume the same facts independently.
         self.media_events = _MirrorQueue(self._progress_events)
         self.after(150, self._drain_progress_events)
         self.after(160, self._animate_wolf)
 
     def _build_media_tab(self):
         super()._build_media_tab()
-        progress_box = ttk.LabelFrame(self.media_tab, text="Progreso del proceso", padding=8)
+
+        # The base gallery is packed with expand=True. If the progress panel is
+        # appended after it, Windows/Tk can squeeze the later widget to only the
+        # LabelFrame title. Temporarily remove the gallery, pack a fixed-height
+        # progress panel first, then let the gallery consume the remaining space.
+        self.media_gallery_box = self.media_canvas.master
+        self.media_gallery_box.pack_forget()
+
+        progress_box = ttk.LabelFrame(self.media_tab, text="Progreso del proceso", padding=8, height=150)
+        progress_box.pack_propagate(False)
         progress_box.pack(fill="x", pady=(8, 0))
 
         left = ttk.Frame(progress_box)
@@ -80,6 +87,8 @@ class App(MediaApp):
         ttk.Label(right, textvariable=self.wolf_caption, anchor="center").pack(fill="x")
         self._draw_wolf(0, "idle")
 
+        self.media_gallery_box.pack(fill="both", expand=True)
+
     @staticmethod
     def _wolf_asset_path() -> Path:
         if getattr(sys, "_MEIPASS", None):
@@ -87,7 +96,6 @@ class App(MediaApp):
         return Path(__file__).resolve().parent / "assets" / "wolf_search.gif"
 
     def _load_wolf_gif(self):
-        """Load all GIF frames once; retain PhotoImage refs to prevent Tk GC."""
         self._wolf_gif_frames = []
         path = self._wolf_asset_path()
         try:
@@ -219,7 +227,6 @@ class App(MediaApp):
                 self.wolf_canvas.create_text(166, 16, text="!", font=("Segoe UI", 18, "bold"))
             self._set_wolf_caption(self._wolf_state)
         else:
-            # Safe fallback if the asset is missing/corrupt or Pillow cannot decode it.
             self._draw_wolf(self._wolf_frame, self._wolf_state)
         self.after(160, self._animate_wolf)
 

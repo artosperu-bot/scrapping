@@ -3,7 +3,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
 root = Path(SPECPATH)
-datas=[]; binaries=[]; hiddenimports=[]
+datas=[]; binaries=[]; hiddenimports=['product_intelligence.isolated_desktop']
 
 # Playwright ships runtime resources that PyInstaller does not always discover
 # automatically. Keep collect_all only for this capability; normal libraries
@@ -32,13 +32,9 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # development
         'pytest',
-        # optional OCR / vision
         'paddleocr','paddlepaddle','paddle','cv2','numpy',
-        # optional document intelligence
         'docling',
-        # API/CLI surfaces are not part of the desktop executable
         'fastapi','uvicorn','multipart','python_multipart','typer','click',
     ],
     noarchive=False,

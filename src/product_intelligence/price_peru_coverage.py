@@ -26,6 +26,10 @@ PERU_RETAIL_HINT_DOMAINS: tuple[str, ...] = (
     "arteus.pe",
     "baetech.pe",
     "panacompu.com",
+    "memorykings.pe",
+    "estuyo.pe",
+    "bigmarketperu.com",
+    "efe.com.pe",
 )
 
 _LISTING_MARKERS = (

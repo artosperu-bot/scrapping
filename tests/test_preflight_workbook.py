@@ -17,13 +17,13 @@ def test_preflight_exposes_products_and_excel_actions():
     assert any(a["action"] == "DEJAR VACÍO / PROTEGER" for a in attributes)
 
 
-def test_seller_fields_keep_only_seller_sku_as_part_number_output():
+def test_seller_fields_are_visible_but_never_research_targets():
     root = Path(__file__).resolve().parents[1]
     template = root / "examples" / "ProductCreationTemplate_reference.xlsx"
     data = analyze_workbook(str(template))
     by_label = {str(a["label"]): a for a in data["attributes"]}
-    assert by_label["SKU del vendedor #29"]["action"] == "VALIDAR / COMPLETAR"
-    for label in ["QuantityFalabella #25", "PriceFalabella #52", "SalePriceFalabella #18"]:
+    for label in ["SKU del vendedor #29", "QuantityFalabella #25", "PriceFalabella #52", "SalePriceFalabella #18"]:
+        assert label in by_label
         assert by_label[label]["action"] == "DEJAR VACÍO / PROTEGER"
 
 

@@ -4,7 +4,7 @@ from product_intelligence.models import ProductIdentity
 from product_intelligence.price_adapters import parse_vtex_payload
 from product_intelligence.price_identity import dedupe_offers
 from product_intelligence.price_models import PriceOffer
-from product_intelligence import price_workflow
+from product_intelligence import price_peru_coverage, price_workflow
 
 
 PLAZAVEA_EXACT_PAYLOAD = [
@@ -111,3 +111,14 @@ def test_peru_offer_is_displayed_before_foreign_fallback_even_when_foreign_numer
     rows = dedupe_offers([foreign, peru])
 
     assert [row.channel for row in rows] == ["PlazaVea", "Tcsgrenada"]
+
+
+def test_general_retail_queries_cover_every_strong_identifier():
+    identity = ProductIdentity(
+        brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM",
+        ean="0050036382366", upc="050036382366",
+    )
+    joined = "\n".join(price_peru_coverage._general_retail_queries(identity))
+    assert "JBLQ350WLBLKAM" in joined
+    assert "0050036382366" in joined
+    assert "050036382366" in joined

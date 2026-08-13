@@ -26,6 +26,25 @@ def test_targeted_peru_discovery_queries_priority_domains(monkeypatch):
     assert any("simple.ripley.com.pe" in u for u in urls)
 
 
+def test_targeted_peru_discovery_retries_with_product_page_hints(monkeypatch):
+    seen = []
+
+    def fake_query(identity, query, limit=6, timeout=12):
+        seen.append(query)
+        if "falabella.com.pe/falabella-pe/product" in query:
+            return ["https://www.falabella.com.pe/falabella-pe/product/121511774/Audifonos-Gamer-JBL-Quantum-350-Wireless-Negro-JBLQ350WLBLKAM/121511775"]
+        if "simple.ripley.com.pe" in query and "pmp" in query.lower():
+            return ["https://simple.ripley.com.pe/audifonos-gamer-inalambricos-quantum-350-wireless-jblq350wlblkam-pmp00003308882"]
+        return []
+
+    monkeypatch.setattr("product_intelligence.price_discovery.search_web_query", fake_query)
+    urls = discover_targeted_peru_sources(_identity(), limit_per_domain=3)
+    assert any("falabella.com.pe/falabella-pe/product" in q for q in seen)
+    assert any("simple.ripley.com.pe" in q and "pmp" in q.lower() for q in seen)
+    assert any("falabella.com.pe/falabella-pe/product" in u for u in urls)
+    assert any("pmp00003308882" in u for u in urls)
+
+
 def test_targeted_peru_discovery_rejects_category_pages_even_if_they_mention_mpn(monkeypatch):
     def fake_query(identity, query, limit=6, timeout=12):
         if "falabella.com.pe" in query:
@@ -58,6 +77,25 @@ def test_category_page_cannot_be_accepted_as_price_offer():
         "https://linio.falabella.com.pe/linio-pe/category/cat12940610/Audifonos-gamer?f.product.brandName=jbl",
         _identity(),
         channel="Falabella",
+    )
+    assert rows == []
+
+
+def test_sodimac_coupon_only_is_not_treated_as_product_price():
+    html = """
+    <html><head><title>Audifonos Gamer JBL Quantum 350 Wireless Negro JBLQ350WLBLKAM | Sodimac Perú</title></head>
+    <body>
+      <h1>Audifonos Gamer JBL Quantum 350 Wireless Negro JBLQ350WLBLKAM</h1>
+      <div>Vendido por technopshops</div>
+      <div>TECHNOSHOPS PERU S.A.C.</div><div>RUC 20605145486</div>
+      <div>Abre tu CMR y ahorra S/100</div>
+    </body></html>
+    """
+    rows = extract_page_offers(
+        html,
+        "https://www.sodimac.com.pe/sodimac-pe/articulo/121511774/Audifonos-Gamer-JBL-Quantum-350-Wireless-Negro-JBLQ350WLBLKAM/121511775",
+        _identity(),
+        channel="Sodimac",
     )
     assert rows == []
 

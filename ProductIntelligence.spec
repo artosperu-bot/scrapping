@@ -6,7 +6,7 @@ root = Path(SPECPATH)
 datas=[]; binaries=[]; hiddenimports=['product_intelligence.isolated_desktop','product_intelligence.pdf_desktop']
 
 # Playwright ships runtime resources that PyInstaller does not always discover
-automatically. Keep collect_all only for this capability; normal libraries
+# automatically. Keep collect_all only for this capability; normal libraries
 # rely on PyInstaller's standard hooks/import graph.
 try:
     d,b,h=collect_all('playwright')

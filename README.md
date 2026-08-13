@@ -40,7 +40,7 @@ El motor entiende `bluetooth` como el concepto a demostrar y devuelve exactament
 
 ## Lo que nunca se inventa por scraping
 
-Los campos comerciales/operativos del vendedor se preservan pero no se buscan en Internet para sustituirlos:
+Los campos comerciales/operativos del vendedor se preservan pero no se buscan en Internet para sustituirlos dentro del flujo que completa el Excel:
 
 - SKU del vendedor;
 - cantidad/stock de Falabella;
@@ -51,6 +51,8 @@ Los campos comerciales/operativos del vendedor se preservan pero no se buscan en
 - otros campos comerciales equivalentes.
 
 La categoría/condición del marketplace también se mantiene separada de las especificaciones técnicas cuando corresponde.
+
+> La pestaña independiente **8. Precios y competencia** sí recopila precios, stock y sellers como inteligencia comercial; esos datos no contaminan automáticamente la plantilla técnica.
 
 ## Flujo de producto
 
@@ -80,37 +82,50 @@ resolver únicamente los objetivos del contrato Excel
 
 **No encontrado / no demostrado = vacío.** Una fuente parecida o una variante cercana nunca autoriza a inventar el dato.
 
-## Imágenes
+## Imágenes para Excel
 
 Las columnas `Imagen principal`, `Imagen2`…`ImagenN` determinan cuántos slots de media necesita la plantilla. Si existen 8 columnas, la capa de Media Intelligence debe intentar recuperar hasta 8 imágenes válidas de la variante exacta.
 
 La galería se busca en JSON-LD, JSON/JavaScript, `src/srcset`, atributos lazy/zoom, `<picture>`, sliders y endpoints XHR/API. Se eliminan logos, banners, relacionados, otras variantes y duplicados, conservando preferentemente la mayor resolución.
 
-## Fotos y videos — proceso independiente
+## 7. Fotos y videos — proceso independiente
 
-El escritorio incluye la pestaña **7. Fotos y videos**. Este flujo no modifica la plantilla ni llama al proceso que genera el Excel.
+La pestaña **7. Fotos y videos** trabaja separada del proceso que genera el Excel.
 
 Para cada producto usa esta prioridad:
 
 ```text
-URLs manuales del producto
+Part Number / identidad exacta
   ↓
-búsqueda web por Part Number / identificador / modelo
+URL oficial o búsqueda web automática
   ↓
 fabricante y fuentes oficiales primero
   ↓
-JSON-LD / JSON embebido / Open Graph / HTML / recursos de red
+JSON-LD / JSON embebido / Open Graph / HTML
   ↓
-Playwright y activación de media lazy cuando hace falta
+Playwright + scroll + recursos de red + media lazy
   ↓
-validación del modelo
+validación del producto
+  ↓
+galería oficial completa / video
+  ↓
+filtro físico + confianza + deduplicación
   ↓
 descarga + miniatura en vivo + metadata
 ```
 
-En este proceso multimedia el **color no bloquea** una imagen si corresponde al mismo modelo validado. Las diferencias que pueden indicar otro producto, como capacidad o variante materialmente distinta, siguen protegidas.
+### Reglas de multimedia
 
-Las imágenes y los videos directos se guardan físicamente. Videos externos de YouTube/Vimeo y streams HLS se conservan como enlace/metadata cuando no existe un archivo directo descargable.
+- En una **página oficial validada** se intenta recuperar la galería completa y sus versiones de alta resolución.
+- URLs de miniaturas/CDN con transformaciones de tamaño pueden promoverse a la versión grande del **mismo asset** antes de descargar.
+- Se rechazan imágenes pequeñas: ancho `< 300 px`, alto `< 300 px` o área `< 120000 px²`.
+- Logos, íconos, badges, banners, productos relacionados y assets de navegación no se aceptan como fotos del producto.
+- En resultados externos se exige normalmente **confianza >= 0.95**.
+- En páginas oficiales validadas se permite una política más flexible solo para media perteneciente a la galería/video del producto.
+- El color no bloquea una imagen si corresponde al mismo modelo validado; capacidad o variante materialmente distinta siguen protegidas.
+- Videos directos (`mp4`, `webm`, etc.) se descargan físicamente.
+- YouTube/Vimeo/HLS se guardan como enlace + metadata cuando no existe un archivo directo descargable.
+- El flujo es **official-first con fallback confiable**: si la página oficial valida el producto pero no expone un asset descargable, puede usar otra fuente con evidencia suficiente.
 
 La salida queda separada por identificador:
 
@@ -125,11 +140,70 @@ La salida queda separada por identificador:
     metadata.json
 ```
 
-Las miniaturas aparecen en la pestaña a medida que se descargan. Un doble clic abre el archivo local; si el video es externo, abre su URL.
+`metadata.json` conserva, cuando aplica, URL original, URL final, fuente, página origen, rol de media, confianza, dimensiones, hash, índice de galería y método de extracción.
+
+### Progreso visual
+
+La pestaña mantiene progreso real por etapas y global por productos. Incluye una animación GIF ligera mientras trabaja, sin sustituir las barras de progreso.
+
+Estados representativos:
+
+```text
+pendiente → buscando → validando → extrayendo → descargando → guardando → completado
+```
+
+El 100% significa que todos los productos seleccionados terminaron su procesamiento; los errores se reportan por separado y no se ocultan.
+
+## 8. Precios y competencia — proceso independiente
+
+La pestaña **8. Precios y competencia** parte del Part Number/modelo y descubre ofertas automáticamente, sin exigir URLs manuales.
+
+```text
+Part Number / modelo
+  ↓
+identidad canónica
+  ↓
+MercadoLibre / VTEX cuando corresponda
+  ↓
+discovery web y detección de plataforma
+  ↓
+JSON / API / XHR / JSON-LD / HTML / Playwright
+  ↓
+validación del producto exacto
+  ↓
+extraer ofertas
+  ↓
+canal ≠ vendedor
+  ↓
+normalizar precio / moneda / stock / URL
+  ↓
+deduplicar + score de confianza
+  ↓
+histórico
+```
+
+Características:
+
+- prioridad comercial inicial para Perú: Falabella, Ripley, MercadoLibre Perú, PlazaVea y Oechsle;
+- fallback a otras fuentes cuando no existe evidencia local suficiente;
+- distingue **canal/marketplace** de **seller/vendedor**;
+- conserva razón social/RUC solo cuando una fuente verificable lo expone;
+- maneja PEN, USD, CLP y otras monedas sin comparar importes de monedas distintas como si fueran equivalentes;
+- guarda precio actual, precio lista, stock, moneda, seller, URL, timestamp y confianza cuando están disponibles;
+- no acepta un producto parecido solo porque tenga precio: primero valida identidad.
+
+Histórico:
+
+```text
+<salida>/price_intelligence/
+  latest.json
+  history.jsonl
+  sellers.json
+```
 
 ## Salidas
 
-Cada ejecución batch genera:
+Cada ejecución batch del Excel genera:
 
 - `template_contract.json` — qué pide realmente la plantilla;
 - `json/<identificador>.json` — producto y evidencia;
@@ -137,7 +211,10 @@ Cada ejecución batch genera:
 - `resumen.json` — estado global;
 - `<plantilla>_completado.xlsx`.
 
-El proceso independiente de multimedia genera además las carpetas `multimedia/fotos/` y `multimedia/videos/` descritas arriba.
+Los procesos independientes generan además:
+
+- `multimedia/fotos/` y `multimedia/videos/`;
+- `price_intelligence/` para precios, sellers e histórico.
 
 ## Arquitectura y reglas
 
@@ -177,7 +254,23 @@ Salida esperada:
 dist\ProductIntelligence\ProductIntelligence.exe
 ```
 
-El build ejecuta regresiones antes de publicar el ejecutable.
+GitHub Actions también construye el paquete de Windows y publica el artifact **`ProductIntelligence-Windows`**. El build ejecuta las regresiones, instala Chromium empaquetado, construye con PyInstaller y verifica que `ProductIntelligence.exe` exista antes de publicar el artifact.
+
+### Build verificado 2026-08-12
+
+Código de aplicación verificado: `e9a375fea74c300de559fdac0a0df9cd368bf2e4`.
+
+Workflow **Build Windows EXE #130**:
+
+```text
+regresión Windows       PASS
+Chromium empaquetado    PASS
+PyInstaller             PASS
+ProductIntelligence.exe PASS
+artifact Windows        PASS
+```
+
+Artifact publicado: `ProductIntelligence-Windows` (~423 MB).
 
 ## Desarrollo
 
@@ -186,4 +279,4 @@ pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-Los tests unitarios no bastan para declarar terminado el scraper. Las mejoras de extracción deben validarse también con part numbers reales, plantilla real, trazabilidad y control de variante.
+Los tests unitarios no bastan para declarar terminado el scraper. Las mejoras de extracción deben validarse también con Part Numbers reales, páginas reales, trazabilidad y control de variante. El módulo multimedia tiene además un smoke test real que verifica productos concretos, filtrado de imágenes pequeñas y funcionamiento del fallback de fuentes.

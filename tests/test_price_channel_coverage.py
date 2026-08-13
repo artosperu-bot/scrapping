@@ -75,3 +75,19 @@ def test_individual_retailer_discovery_falls_back_to_brand_model_without_weakeni
     urls = price_peru_coverage.discover_general_peru_retailers(identity, limit=5)
     assert urls == ["https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless"]
     assert any(mpn is None and "site:bigmarketperu.com" in query for mpn, query in calls)
+
+
+def test_target_channel_discovery_does_not_run_alias_when_exact_query_found_pdp(monkeypatch):
+    identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
+    calls = []
+
+    def fake_search(search_identity, query, **_kwargs):
+        calls.append((search_identity.mpn, query))
+        if search_identity.mpn == "JBLQ350WLBLKAM":
+            return ["https://www.falabella.com.pe/falabella-pe/product/1/JBLQ350WLBLKAM/1"]
+        raise AssertionError("alias fallback should not run after exact PDP discovery")
+
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    urls = price_peru_coverage.discover_additional_peru_pdps(identity, domains=("falabella.com.pe",), limit_per_domain=3)
+    assert urls == ["https://www.falabella.com.pe/falabella-pe/product/1/JBLQ350WLBLKAM/1"]
+    assert all(mpn == "JBLQ350WLBLKAM" for mpn, _query in calls)

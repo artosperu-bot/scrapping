@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin
@@ -13,6 +15,9 @@ from .normalize import key_norm
 from .web_fetch import UA
 
 _DOCUMENT_HINTS=("pdf","datasheet","data sheet","spec sheet","specification","manual","ficha tecnica","ficha técnica","technical sheet","hoja tecnica","hoja técnica")
+_pdf_enabled: ContextVar[bool]=ContextVar("pdf_enabled",default=True)
+_pdf_output_root: ContextVar[str|None]=ContextVar("pdf_output_root",default=None)
+_pdf_event_sink: ContextVar[object|None]=ContextVar("pdf_event_sink",default=None)
 
 @dataclass(frozen=True)
 class PdfCandidate:
@@ -64,6 +69,26 @@ def validate_pdf_identity(identity:ProductIdentity,text:str,url:str="")->PdfIden
     if model and model in hay:
         return PdfIdentityMatch(True,.86,"model")
     return PdfIdentityMatch(False,.0,"identity_not_confirmed")
+
+def pdf_evidence_enabled()->bool:
+    return bool(_pdf_enabled.get())
+
+def pdf_output_root()->str|None:
+    return _pdf_output_root.get()
+
+def emit_pdf_event(stage:str,**payload):
+    sink=_pdf_event_sink.get()
+    if callable(sink):
+        try: sink({"stage":stage,**payload})
+        except Exception: pass
+
+@contextmanager
+def pdf_evidence_scope(enabled:bool=True,output_root:str|None=None,event_sink=None):
+    t1=_pdf_enabled.set(bool(enabled)); t2=_pdf_output_root.set(output_root); t3=_pdf_event_sink.set(event_sink)
+    try:
+        yield
+    finally:
+        _pdf_event_sink.reset(t3); _pdf_output_root.reset(t2); _pdf_enabled.reset(t1)
 
 def download_pdf(url:str,destination:str|Path,timeout:int=35)->Path:
     r=requests.get(url,timeout=timeout,headers={"User-Agent":UA,"Accept":"application/pdf,*/*;q=0.8"})

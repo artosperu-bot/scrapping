@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 def part_number_from_event(event: dict) -> str:
     identity = event.get("identity") or {}
-    return str(event.get("part_number") or identity.get("mpn") or identity.get("ean") or identity.get("upc") or identity.get("gtin") or identity.get("model") or "-")
+    return str(event.get("part_number") or identity.get("mpn") or identity.get("ean") or identity.get("upc") or identity.get("gtin") or identity.get("model") or event.get("product_label") or "-")
 
 
 def normalize_event(module: str, event: dict) -> dict:
@@ -39,3 +39,23 @@ def format_event(module: str, event: dict) -> str:
     source = f" [{row['source']}]" if row["source"] else ""
     url = f" {row['url']}" if row["url"] else ""
     return f"[{row['module']}] {row['part_number']} · {row['status']}{source} · {row['detail']}{url}"
+
+
+class AuditedQueue:
+    """Queue proxy that preserves existing consumers and mirrors events to master log."""
+
+    def __init__(self, inner, log_queue, module: str):
+        self.inner = inner
+        self.log_queue = log_queue
+        self.module = module
+
+    def put(self, item, block=True, timeout=None):
+        if isinstance(item, dict):
+            self.log_queue.put(format_event(self.module, item))
+        return self.inner.put(item, block=block, timeout=timeout)
+
+    def get_nowait(self):
+        return self.inner.get_nowait()
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)

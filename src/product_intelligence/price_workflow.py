@@ -14,10 +14,6 @@ from .price_models import PriceOffer
 from .price_peru_coverage import discover_additional_peru_pdps
 from .web_fetch import fetch_page
 
-
-# Structured storefront endpoints queried directly by exact Part Number before any
-# search engine. A storefront that does not expose VTEX simply contributes zero rows;
-# targeted PDP discovery still runs afterward.
 PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
     ("Falabella", "https://www.falabella.com.pe"),
     ("PlazaVea", "https://www.plazavea.com.pe"),
@@ -31,38 +27,38 @@ def _query(identity: ProductIdentity) -> str:
 
 def _channel_from_url(url: str) -> str:
     host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
-    names = {
-        "falabella": "Falabella",
-        "ripley": "Ripley",
-        "plazavea": "PlazaVea",
-        "oechsle": "Oechsle",
-        "mercadolibre": "MercadoLibre",
-        "sodimac": "Sodimac",
-        "jbl": "JBL Perú",
-    }
+    names = {"falabella":"Falabella","ripley":"Ripley","plazavea":"PlazaVea","oechsle":"Oechsle","mercadolibre":"MercadoLibre","sodimac":"Sodimac","jbl":"JBL Perú"}
     for key, name in names.items():
         if key in host:
             return name
     return (host.split(".")[0] if host else "Web").replace("-", " ").title()
 
 
+def _mercadolibre_queries(identity: ProductIdentity) -> list[str]:
+    values = [
+        _query(identity),
+        " ".join(v for v in (identity.brand, identity.model or identity.product_name) if v).strip(),
+        str(identity.model or identity.product_name or "").strip(),
+    ]
+    return list(dict.fromkeys(v for v in values if v))
+
+
 def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[PriceOffer]:
-    q = _query(identity)
-    if not q:
-        return []
-    url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}&limit=50"
-    response = requests.get(url, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
-    response.raise_for_status()
-    return parse_mercadolibre_payload(response.json(), identity)
+    rows: list[PriceOffer] = []
+    for q in _mercadolibre_queries(identity):
+        url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}&limit=50"
+        response = requests.get(url, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
+        response.raise_for_status()
+        rows.extend(parse_mercadolibre_payload(response.json(), identity))
+    # Preserve independently published listings; final workflow dedupe uses
+    # publication_id/seller rather than collapsing the whole marketplace.
+    return dedupe_offers(rows)
 
 
 def _try_vtex(url: str, identity: ProductIdentity, channel: str, timeout: int = 12) -> list[PriceOffer]:
     parsed = urlparse(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
-    endpoint = (
-        f"{origin}/api/catalog_system/pub/products/search?ft={quote_plus(_query(identity))}"
-        "&_from=0&_to=49"
-    )
+    endpoint = f"{origin}/api/catalog_system/pub/products/search?ft={quote_plus(_query(identity))}&_from=0&_to=49"
     response = requests.get(endpoint, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
     if response.status_code != 200:
         return []
@@ -97,13 +93,7 @@ def _merge_sources(*groups: list[str], limit: int) -> list[str]:
     return merged
 
 
-def run_price_product(
-    identity: ProductIdentity,
-    output_root: str | Path,
-    *,
-    on_event=None,
-    max_sources: int = 40,
-) -> list[PriceOffer]:
+def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_event=None, max_sources: int = 40) -> list[PriceOffer]:
     def emit(event_type: str, **payload):
         if on_event:
             on_event({"type": event_type, "identity": identity.model_dump(), **payload})
@@ -129,10 +119,7 @@ def run_price_product(
     additional: list[str] = []
     base_sources: list[str] = []
     try:
-        additional = discover_additional_peru_pdps(
-            identity,
-            limit_per_domain=max(4, min(8, max_sources // 5 or 4)),
-        )
+        additional = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(8, max_sources // 5 or 4)))
     except Exception as exc:
         emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
     try:
@@ -140,10 +127,7 @@ def run_price_product(
     except Exception as exc:
         emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
 
-    # Directed marketplace PDPs are fetched first; generic Peru discovery fills the
-    # remaining budget. Multiple PDPs from the same channel are intentionally kept.
     sources = _merge_sources(additional, base_sources, limit=max_sources)
-
     emit("status", stage="validating", message=f"Revisando {len(sources)} publicaciones web de Perú")
     for pos, url in enumerate(sources, 1):
         channel = _channel_from_url(url)
@@ -152,7 +136,6 @@ def run_price_product(
             fetched = fetch_page(url, timeout=25, browser_fallback=True, activate_lazy_media=False)
             final_url = str(getattr(fetched, "final_url", None) or url)
             html = str(getattr(fetched, "html", "") or "")
-
             if "vtex" in html.lower() or "vteximg" in html.lower() or "/api/catalog_system/" in html.lower():
                 try:
                     vtex_rows = _try_vtex(final_url, identity, channel)
@@ -161,7 +144,6 @@ def run_price_product(
                         emit("offer", channel=channel, count=len(vtex_rows), method="vtex")
                 except Exception as exc:
                     emit("source", channel=channel, status="error", error=f"vtex: {type(exc).__name__}: {exc}")
-
             page_rows = extract_page_offers(html, final_url, identity, channel=channel)
             offers.extend(page_rows)
             emit("page", url=final_url, channel=channel, status="parsed", offers=len(page_rows))
@@ -169,20 +151,10 @@ def run_price_product(
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
 
     deduped = dedupe_offers(offers)
-    valid = [
-        row
-        for row in deduped
-        if is_peru_offer(row) and row.confidence >= 0.70 and row.selling_price > 0
-    ]
+    valid = [row for row in deduped if is_peru_offer(row) and row.confidence >= 0.70 and row.selling_price > 0]
     emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas peruanas validadas")
     save_price_run(output_root, valid)
     for row in valid:
         emit("offer", offer=row.to_dict())
-    emit(
-        "done",
-        offers=len(valid),
-        channels=len({r.channel for r in valid}),
-        sellers=len({(r.channel, r.seller_display_name) for r in valid}),
-        best_by_currency=_best_by_currency(valid),
-    )
+    emit("done", offers=len(valid), channels=len({r.channel for r in valid}), sellers=len({(r.channel, r.seller_display_name) for r in valid}), best_by_currency=_best_by_currency(valid))
     return valid

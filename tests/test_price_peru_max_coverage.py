@@ -1,7 +1,5 @@
-from types import SimpleNamespace
-
 from product_intelligence.models import ProductIdentity
-from product_intelligence import price_discovery, price_workflow
+from product_intelligence import price_peru_coverage, price_workflow
 from product_intelligence.price_adapters import parse_vtex_payload
 
 
@@ -50,14 +48,14 @@ def test_targeted_discovery_covers_all_supported_peru_marketplaces(monkeypatch):
         "sodimac.com.pe",
         "jbl.com.pe",
     }
-    assert expected_domains.issubset(set(price_discovery.TARGETED_PERU_DOMAINS))
+    assert expected_domains.issubset(set(price_peru_coverage.PERU_MARKETPLACE_DOMAINS))
 
     seen_queries = []
     def fake_search(_identity, query, **_kwargs):
         seen_queries.append(query)
         return []
-    monkeypatch.setattr(price_discovery, "search_web_query", fake_search)
-    price_discovery.discover_targeted_peru_sources(IDENTITY, limit_per_domain=4)
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    price_peru_coverage.discover_additional_peru_pdps(IDENTITY, limit_per_domain=4)
     for domain in expected_domains:
         assert any(f"site:{domain}" in query for query in seen_queries), domain
 
@@ -84,11 +82,11 @@ def test_targeted_discovery_preserves_multiple_pdp_urls_from_same_marketplace(mo
         "https://www.falabella.com.pe/falabella-pe/product/3/jblq350wlblkam/33",
     ]
     monkeypatch.setattr(
-        price_discovery,
+        price_peru_coverage,
         "search_web_query",
         lambda _identity, query, **_kwargs: urls if "falabella.com.pe" in query else [],
     )
-    rows = price_discovery.discover_targeted_peru_sources(
+    rows = price_peru_coverage.discover_additional_peru_pdps(
         IDENTITY,
         limit_per_domain=5,
         domains=("falabella.com.pe",),

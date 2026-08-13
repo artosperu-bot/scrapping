@@ -22,6 +22,9 @@ class App(PriceApp):
         s=self.process_registry.start(kind,label,total); self._add_log_tab(s.session_id,f'{kind} #{s.session_id.rsplit("-",1)[-1]}'); return s.session_id
     def emit(self,msg):
         self.q.put(str(msg))
+    def _build_run_tab(self):
+        super()._build_run_tab(); tab=self.runbtn.master.master; box=ttk.LabelFrame(tab,text='Estado del proceso',padding=8); box.pack(fill='x',pady=(8,0),before=self.runbtn.master)
+        self.excel_state_gif=AnimatedStateGif(box); self.excel_state_gif.pack(side='right',padx=(12,0)); left=ttk.Frame(box); left.pack(side='left',fill='both',expand=True); self.excel_process_status=tk.StringVar(value='Listo para ejecutar'); ttk.Label(left,textvariable=self.excel_process_status,font=('Segoe UI Semibold',10)).pack(anchor='w'); self.excel_process_bar=ttk.Progressbar(left,mode='indeterminate'); self.excel_process_bar.pack(fill='x',pady=(8,0)); self.excel_state_gif.set_state('idle')
     def run(self):
         return super().run()
     def _drain_process_events(self):
@@ -45,6 +48,9 @@ class App(PriceApp):
             valid=[i for i in indices if self._identity_for_index(i) is not None]
             if valid:self._media_session_id=self.start_process_session('Multimedia',f'{len(valid)} producto(s)',len(valid))
         return super()._start_media_indices(indices)
+    def _build_price_tab(self):
+        super()._build_price_tab(); progress=self.price_product_progress.master.master; box=ttk.LabelFrame(self.price_tab,text='Resumen y estado',padding=8); box.pack(fill='x',pady=(8,0),before=progress)
+        self.price_state_gif=AnimatedStateGif(box); self.price_state_gif.pack(side='right',padx=(12,0)); left=ttk.Frame(box); left.pack(side='left',fill='both',expand=True); self.price_metric=tk.StringVar(value='Sin resultados todavía'); ttk.Label(left,textvariable=self.price_metric,font=('Segoe UI Semibold',10)).pack(anchor='w'); ttk.Label(left,text='Mejor precio · ofertas · canales objetivo · tiendas individuales').pack(anchor='w',pady=(3,0)); self.price_state_gif.set_state('idle')
     def _start_price_indices(self,indices):
         if not self._price_running:
             valid=[i for i in indices if self._identity_for_index(i) is not None]

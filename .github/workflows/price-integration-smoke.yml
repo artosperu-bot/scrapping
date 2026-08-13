@@ -38,10 +38,16 @@ jobs:
           events = []
           offers = run_price_product(identity, Path('price_smoke_output'), on_event=events.append, max_sources=40)
           foreign = [o for o in offers if not is_peru_offer(o)]
+          ambiguous = [o for o in offers if o.source_method == 'html' and o.channel in {'Falabella','Ripley','PlazaVea','Oechsle','MercadoLibre','Sodimac','JBL Perú'}]
           if foreign:
               raise SystemExit('Foreign offer leaked into Peru-only output: ' + json.dumps([o.to_dict() for o in foreign], ensure_ascii=False))
+          if ambiguous:
+              raise SystemExit('Ambiguous generic HTML marketplace price leaked: ' + json.dumps([o.to_dict() for o in ambiguous], ensure_ascii=False))
+          for event in events:
+              if event.get('type') in {'source','page'}:
+                  print('EVENT', json.dumps(event, ensure_ascii=False))
           for offer in offers:
-              print(json.dumps(offer.to_dict(), ensure_ascii=False))
+              print('OFFER', json.dumps(offer.to_dict(), ensure_ascii=False))
           print('Q350_VALIDATED_PERU_OFFERS=', len(offers))
           print('Q350_CHANNELS=', sorted({o.channel for o in offers}))
           print('Q350_SELLERS=', sorted({f'{o.channel}:{o.seller_display_name}' for o in offers}))

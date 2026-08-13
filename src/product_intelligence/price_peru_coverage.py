@@ -17,13 +17,45 @@ PERU_MARKETPLACE_DOMAINS: tuple[str, ...] = (
     "jbl.com.pe",
 )
 
+# Seed domains are not exclusive sources. They are high-value Peru retailers found
+# to expose exact product identifiers and prices on public PDPs. Generic Peru retail
+# discovery below still searches beyond this list for every new product.
+PERU_RETAIL_HINT_DOMAINS: tuple[str, ...] = (
+    "infiniti.com.pe",
+    "perudataconsult.net",
+    "arteus.pe",
+    "baetech.pe",
+    "panacompu.com",
+)
+
+_LISTING_MARKERS = (
+    "/category/",
+    "/categoria/",
+    "/search/",
+    "/buscar/",
+    "/landing/",
+    "/collections/",
+    "/pages/",
+)
+_PRODUCT_MARKERS = (
+    "/product/",
+    "/products/",
+    "/shop/",
+    "/informacion-producto/",
+    "/product-information/",
+)
+
 
 def _compact(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
+def _host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower().removeprefix("www.")
+
+
 def _host_matches(url: str, domain: str) -> bool:
-    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    host = _host(url)
     return host == domain or host.endswith("." + domain)
 
 
@@ -33,7 +65,7 @@ def _strong(identity: ProductIdentity) -> str:
 
 def _is_pdp(url: str, domain: str, strong: str) -> bool:
     path = (urlparse(url).path or "").lower()
-    if any(marker in path for marker in ("/category/", "/categoria/", "/search/", "/buscar/", "/landing/")):
+    if any(marker in path for marker in _LISTING_MARKERS):
         return False
     if domain == "falabella.com.pe":
         return "/product/" in path
@@ -51,11 +83,7 @@ def _is_pdp(url: str, domain: str, strong: str) -> bool:
 
 
 def _deterministic_pdps(identity: ProductIdentity) -> list[str]:
-    """Safe official-store URLs whose route is a documented product identifier pattern.
-
-    These are only discovery candidates. They still have to fetch successfully and pass
-    the same identity/price validation as every search-discovered page.
-    """
+    """Safe official-store URLs whose route is based on a public product identifier."""
     rows: list[str] = []
     if _compact(identity.brand) == "jbl" and identity.mpn:
         rows.append(f"https://www.jbl.com.pe/{str(identity.mpn).strip()}.html")
@@ -115,12 +143,7 @@ def discover_additional_peru_pdps(
     limit_per_domain: int = 10,
     domains: tuple[str, ...] = PERU_MARKETPLACE_DOMAINS,
 ) -> list[str]:
-    """Return multiple PDP candidates per Peru marketplace.
-
-    This layer maximizes coverage only. Every candidate is fetched and must still
-    pass the normal product-identity and price-evidence checks before becoming an
-    offer.
-    """
+    """Return multiple PDP candidates per Peru marketplace."""
     strong = _strong(identity)
     if not strong:
         return []
@@ -159,3 +182,75 @@ def discover_additional_peru_pdps(
                 seen_all.add(rows[index])
                 merged.append(rows[index])
     return merged
+
+
+def _is_peru_retail_candidate(url: str, strong: str) -> bool:
+    parsed = urlparse(url)
+    host = _host(url)
+    path = (parsed.path or "").lower()
+    if not host or any(marker in path for marker in _LISTING_MARKERS):
+        return False
+    if any(_host_matches(url, domain) for domain in PERU_MARKETPLACE_DOMAINS):
+        return False
+
+    cc_peru = host.endswith(".pe") or host.endswith(".com.pe")
+    hinted = any(_host_matches(url, domain) for domain in PERU_RETAIL_HINT_DOMAINS)
+    peru_path = "/peru/" in path or path.startswith("/peru")
+    if not (cc_peru or hinted or peru_path):
+        return False
+
+    strong_in_url = bool(_compact(strong) and _compact(strong) in _compact(url))
+    productish = any(marker in path for marker in _PRODUCT_MARKERS)
+    return strong_in_url or productish
+
+
+def _general_retail_queries(identity: ProductIdentity) -> list[str]:
+    strong = _strong(identity)
+    model = str(identity.model or identity.product_name or "").strip()
+    brand = str(identity.brand or "").strip()
+    queries = [
+        f'"{strong}" precio Perú',
+        f'"{strong}" "S/" Perú',
+        f'"{strong}" tienda Perú',
+        f'"{strong}" comprar Perú',
+    ]
+    if model:
+        queries.extend([
+            f'"{strong}" "{model}" Perú',
+            f'"{model}" "{strong}" {brand} Perú'.strip(),
+        ])
+    for domain in PERU_RETAIL_HINT_DOMAINS:
+        queries.append(f'"{strong}" site:{domain}')
+    return list(dict.fromkeys(q for q in queries if q.strip()))
+
+
+def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 20) -> list[str]:
+    """Discover exact-product PDPs from Peru retailers beyond the big marketplaces.
+
+    Discovery is intentionally broad; acceptance is intentionally strict. A URL found
+    here still has to pass the normal exact identity/structured-offer validation before
+    it can become a saved price offer.
+    """
+    strong = _strong(identity)
+    if not strong or limit <= 0:
+        return []
+
+    rows: list[str] = []
+    seen: set[str] = set()
+    per_query = max(6, min(20, limit * 2))
+    for query in _general_retail_queries(identity):
+        try:
+            found = search_web_query(identity, query, limit=per_query, timeout=12)
+        except Exception:
+            found = []
+        for raw in found:
+            url = str(raw or "").strip()
+            if not url.startswith(("http://", "https://")) or url in seen:
+                continue
+            if not _is_peru_retail_candidate(url, strong):
+                continue
+            seen.add(url)
+            rows.append(url)
+            if len(rows) >= limit:
+                return rows
+    return rows

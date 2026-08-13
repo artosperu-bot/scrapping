@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from product_intelligence.models import ProductIdentity
 from product_intelligence.price_adapters import parse_vtex_payload
+from product_intelligence.price_identity import dedupe_offers
+from product_intelligence.price_models import PriceOffer
 from product_intelligence import price_workflow
 
 
@@ -90,3 +92,22 @@ def test_run_price_product_probes_peru_structured_sources_even_when_web_discover
     assert rows[0].channel == "PlazaVea"
     assert rows[0].selling_price == 469.0
     assert rows[0].currency == "PEN"
+
+
+def test_peru_offer_is_displayed_before_foreign_fallback_even_when_foreign_numeric_price_is_lower():
+    peru = PriceOffer(
+        part_number="JBLQ350WLBLKAM", brand="JBL", model="JBLQ350WLBLKAM",
+        channel="PlazaVea", seller_display_name="Plaza Vea", selling_price=469.0,
+        currency="PEN", url="https://www.plazavea.com.pe/producto/p", confidence=1.0,
+        identity_match="EXACT_MPN", source_type="api", source_method="vtex_catalog",
+    )
+    foreign = PriceOffer(
+        part_number="JBLQ350WLBLKAM", brand="JBL", model="JBLQ350WLBLKAM",
+        channel="Tcsgrenada", seller_display_name="The Computer Store (Gda) Ltd.", selling_price=180.0,
+        currency="XCD", url="https://tcsgrenada.net/product", confidence=1.0,
+        identity_match="EXACT_MPN", source_type="web", source_method="jsonld",
+    )
+
+    rows = dedupe_offers([foreign, peru])
+
+    assert [row.channel for row in rows] == ["PlazaVea", "Tcsgrenada"]

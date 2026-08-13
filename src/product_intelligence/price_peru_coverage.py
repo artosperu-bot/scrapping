@@ -128,17 +128,19 @@ def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain
         for seed in _deterministic_pdps(identity):
             if _host_matches(seed, domain) and _is_pdp(seed, domain, strong):
                 seen.add(seed); found.append(seed)
-        for query in _queries(identity, domain):
-            try: urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
-            except Exception: urls = []
-            for raw in urls:
-                url = str(raw or "").strip()
-                if not url.startswith(("http://", "https://")) or url in seen: continue
-                if not _host_matches(url, domain) or not _is_pdp(url, domain, strong): continue
-                seen.add(url); found.append(url)
-                if len(found) >= limit_per_domain: break
-            if len(found) >= limit_per_domain: break
-        if len(found) < limit_per_domain and model:
+        if not found:
+            for query in _queries(identity, domain):
+                try: urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
+                except Exception: urls = []
+                for raw in urls:
+                    url = str(raw or "").strip()
+                    if not url.startswith(("http://", "https://")) or url in seen: continue
+                    if not _host_matches(url, domain) or not _is_pdp(url, domain, strong): continue
+                    seen.add(url); found.append(url)
+                    if len(found) >= limit_per_domain: break
+                if found:
+                    break
+        if not found and model:
             for query in _alias_queries(identity, domain):
                 try: urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12)
                 except Exception: urls = []
@@ -148,7 +150,8 @@ def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain
                     if not _host_matches(url, domain) or not _is_pdp(url, domain, model): continue
                     seen.add(url); found.append(url)
                     if len(found) >= limit_per_domain: break
-                if len(found) >= limit_per_domain: break
+                if found:
+                    break
         per_domain.append(found)
     merged, seen_all = [], set()
     for index in range(limit_per_domain):

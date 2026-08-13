@@ -45,7 +45,7 @@ jobs:
           for identity in products:
               print('\n===', identity.mpn, '===')
               events = []
-              offers = run_price_product(identity, root, on_event=events.append, max_sources=24)
+              offers = run_price_product(identity, root, on_event=events.append, max_sources=40)
               foreign = [o for o in offers if not is_peru_offer(o)]
               if foreign:
                   raise SystemExit('Foreign offer leaked into Peru-only output: ' + json.dumps([o.to_dict() for o in foreign], ensure_ascii=False))
@@ -62,8 +62,8 @@ jobs:
           print('Q350_SELLERS=', sorted({f'{o.channel}:{o.seller_display_name}' for o in q350}))
           if total < 1:
               raise SystemExit('No validated Peru price offer found for the 3 real JBL products')
-          if len(q350) < 2:
-              raise SystemExit('Q350 did not produce at least two independently validated Peru offers')
+          if len(q350) < 4:
+              raise SystemExit('Q350 coverage did not improve beyond the previous 3 validated Peru offers')
           PY
       - uses: actions/upload-artifact@v4
         if: always()

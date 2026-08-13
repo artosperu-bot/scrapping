@@ -1,10 +1,20 @@
 from product_intelligence.models import ProductIdentity
+from product_intelligence import price_identity
 from product_intelligence.price_identity import dedupe_offers, score_offer_identity
 from product_intelligence.price_models import PriceOffer, format_money
 
 
 def identity():
     return ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM", ean="6925281993226")
+
+
+def offer(channel, seller, price, url, source_type="structured", source_method="jsonld", publication_id=None):
+    return PriceOffer(
+        part_number="JBLQ350WLBLKAM", brand="JBL", model="Quantum 350 Wireless",
+        channel=channel, seller_display_name=seller, selling_price=price,
+        currency="PEN", url=url, confidence=1.0, identity_match="EXACT_MPN",
+        source_type=source_type, source_method=source_method, publication_id=publication_id,
+    )
 
 
 def test_exact_mpn_is_max_confidence():
@@ -49,3 +59,38 @@ def test_money_format_respects_currency():
     assert format_money(29936, "CLP") == "CLP 29,936"
     assert format_money(49.9, "USD") == "US$ 49.90"
     assert format_money(None, "PEN") == ""
+
+
+def test_bigmarket_pen_offer_is_recognized_as_peru_market():
+    row = offer(
+        "Big Market", "Big Market", 479,
+        "https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless",
+    )
+    assert price_identity.is_peru_offer(row)
+
+
+def test_market_outlier_filter_rejects_absurd_price_but_keeps_real_range():
+    fn = getattr(price_identity, "filter_market_outliers", None)
+    assert callable(fn), "market outlier filter is required"
+    prices = [233.50, 276.90, 299, 349, 355, 359, 399, 399, 479, 4.99]
+    rows = [offer(f"Store{i}", f"Seller{i}", p, f"https://store{i}.com.pe/p") for i, p in enumerate(prices)]
+    kept, rejected = fn(rows)
+    assert [r.selling_price for r in rejected] == [4.99]
+    assert {r.selling_price for r in kept} >= {233.50, 276.90, 299, 349, 355, 359, 399, 479}
+
+
+def test_same_real_seller_has_same_competitor_key_across_channels():
+    fn = getattr(price_identity, "competitor_key", None)
+    assert callable(fn), "seller competitor identity is required"
+    falabella = offer("Falabella", "TECHNOSHOPS PERU S.A.C.", 299, "https://falabella.com.pe/product/1")
+    ripley = offer("Ripley", "TECHNOSHOPS PERU S.A.C.", 299, "https://simple.ripley.com.pe/pmp1")
+    assert fn(falabella) == fn(ripley)
+
+
+def test_dedupe_prefers_api_over_structured_representation_of_same_url():
+    url = "https://arteus.pe/products/jbl-quantum-350-wireless"
+    jsonld = offer("Arteus", None, 355, url, "structured", "jsonld")
+    api = offer("Arteus", "Arteus", 355, url, "api", "shopify_product_json", "9016")
+    rows = dedupe_offers([jsonld, api])
+    assert len(rows) == 1
+    assert rows[0].source_type == "api"

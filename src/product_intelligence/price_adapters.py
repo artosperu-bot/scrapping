@@ -170,3 +170,73 @@ def parse_vtex_payload(payload: list[dict] | dict, identity: ProductIdentity, *,
                     evidence=evidence,
                 ))
     return out
+
+
+def _shopify_money(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, str) and any(marker in value for marker in (".", ",")):
+        try:
+            return float(value.replace(",", ""))
+        except ValueError:
+            return None
+    amount = _float(value)
+    if amount is None:
+        return None
+    return amount / 100.0
+
+
+def parse_shopify_product_payload(
+    payload: dict,
+    identity: ProductIdentity,
+    *,
+    channel: str,
+    source_url: str,
+) -> list[PriceOffer]:
+    """Parse Shopify's public product JSON endpoint using exact SKU/barcode evidence."""
+    if not isinstance(payload, dict):
+        return []
+    title = str(payload.get("title") or "").strip()
+    vendor = str(payload.get("vendor") or "").strip() or None
+    expected_mpn = _norm(identity.mpn)
+    out: list[PriceOffer] = []
+    for variant in payload.get("variants", []) or []:
+        if not isinstance(variant, dict):
+            continue
+        sku = str(variant.get("sku") or "").strip()
+        barcode = str(variant.get("barcode") or "").strip()
+        evidence = {
+            "mpn": identity.mpn if expected_mpn and _norm(sku) == expected_mpn else None,
+            "gtin": barcode or None,
+            "brand": vendor,
+            "model": title,
+            "title": title,
+        }
+        score, match, conflicts = score_offer_identity(identity, evidence)
+        if score < 0.70 or conflicts:
+            continue
+        price = _shopify_money(variant.get("price"))
+        if price is None or price <= 0:
+            continue
+        compare = _shopify_money(variant.get("compare_at_price"))
+        available = variant.get("available")
+        out.append(PriceOffer(
+            part_number=identity.mpn,
+            brand=identity.brand,
+            model=identity.model or identity.product_name,
+            channel=channel,
+            seller_display_name=channel,
+            selling_price=price,
+            list_price=compare if compare and compare >= price else None,
+            currency="PEN",
+            availability=("available" if available else "unavailable") if available is not None else None,
+            url=source_url,
+            confidence=score,
+            identity_match=match,
+            source_type="api",
+            source_method="shopify_product_json",
+            publication_id=str(payload.get("id") or "") or None,
+            sku=sku or (str(variant.get("id") or "") or None),
+            evidence=evidence,
+        ))
+    return out

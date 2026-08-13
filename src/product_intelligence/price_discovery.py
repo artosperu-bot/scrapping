@@ -150,7 +150,6 @@ def discover_targeted_peru_sources(
                 break
         per_domain.append(clean_rows)
 
-    # Interleave channels so one marketplace cannot consume the entire fetch order.
     urls: list[str] = []
     seen: set[str] = set()
     for index in range(limit_per_domain):
@@ -167,8 +166,6 @@ def discover_price_sources(
     *,
     priority_domains: tuple[str, ...] = PERU_PRICE_DOMAINS,
 ) -> list[str]:
-    # Preserve all high-value targeted PDPs first. The generic limit applies to the
-    # overall fetch budget only after those deterministic marketplace candidates.
     per_domain = max(3, min(5, max(1, limit // 4)))
     targeted = discover_targeted_peru_sources(identity, limit_per_domain=per_domain)
     candidates = search_web(identity, limit=max(limit * 3, 24))
@@ -192,8 +189,6 @@ def discover_price_sources(
         generic.append(url)
     generic.sort(key=lambda value: _priority_rank(value, priority_domains))
 
-    # Never truncate already discovered priority PDPs merely because the generic
-    # fallback budget is small. Add generic Peru pages only up to the remaining cap.
     remaining = max(0, limit - len(urls))
     urls.extend(generic[:remaining])
     return urls
@@ -326,11 +321,17 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
 
     soup = BeautifulSoup(html or "", "lxml")
     page_text = soup.get_text(" ", strip=True)[:500000]
+    title_text = soup.title.get_text(" ", strip=True) if soup.title else ""
+    h1 = soup.find("h1")
+    h1_text = h1.get_text(" ", strip=True) if h1 else ""
+    primary_identity_text = f"{url} {title_text} {h1_text}".strip()
+    primary_lower = primary_identity_text.lower()
+    observed_model = h1_text or title_text or page_text[:250]
     base_evidence = {
-        "mpn": identity.mpn if identity.mpn and identity.mpn.lower() in (html or "").lower() else None,
-        "brand": identity.brand if identity.brand and identity.brand.lower() in page_text.lower() else None,
-        "model": identity.model if identity.model and identity.model.lower() in page_text.lower() else page_text[:250],
-        "title": soup.title.get_text(" ", strip=True) if soup.title else page_text[:250],
+        "mpn": identity.mpn if identity.mpn and identity.mpn.lower() in primary_lower else None,
+        "brand": identity.brand if identity.brand and identity.brand.lower() in primary_lower else None,
+        "model": observed_model,
+        "title": title_text or h1_text or page_text[:250],
     }
     default_channel = channel or _channel(url)
 

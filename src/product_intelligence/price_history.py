@@ -66,6 +66,14 @@ def save_price_run(output_root: str | Path, offers: list[PriceOffer]) -> None:
     sellers_path.write_text(json.dumps(sellers, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def save_channel_coverage(output_root: str | Path, report: dict) -> Path:
+    path = _base(output_root) / "channel_coverage.json"
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
 def load_latest(output_root: str | Path) -> list[dict]:
     path = _base(output_root) / "latest.json"
     if not path.exists():

@@ -85,6 +85,8 @@ def test_vtex_keeps_multiple_sellers_for_same_exact_product():
 def test_price_workflow_returns_only_peru_offers(monkeypatch, tmp_path):
     monkeypatch.setattr(price_workflow, "PERU_STRUCTURED_SOURCES", ())
     monkeypatch.setattr(price_workflow, "_try_mercadolibre", lambda identity: [])
+    monkeypatch.setattr(price_workflow, "discover_additional_peru_pdps", lambda *_a, **_k: [])
+    monkeypatch.setattr(price_workflow, "discover_general_peru_retailers", lambda *_a, **_k: [])
     monkeypatch.setattr(price_workflow, "discover_price_sources", lambda identity, limit=12: ["https://shop.example.com/item"])
     monkeypatch.setattr(
         price_workflow,

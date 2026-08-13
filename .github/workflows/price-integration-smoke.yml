@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: price-intelligence-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   live-price-smoke:
     runs-on: ubuntu-24.04

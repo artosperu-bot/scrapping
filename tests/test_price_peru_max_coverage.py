@@ -124,3 +124,8 @@ def test_non_pe_domain_can_be_peru_market_when_domain_or_path_is_explicitly_peru
     assert price_identity.is_peru_offer(peru_data)
     assert price_identity.is_peru_offer(pana)
     assert not price_identity.is_peru_offer(foreign)
+
+
+def test_observed_q350_retail_seed_domains_are_retained():
+    expected = {"memorykings.pe", "estuyo.pe", "bigmarketperu.com", "efe.com.pe"}
+    assert expected.issubset(set(price_peru_coverage.PERU_RETAIL_HINT_DOMAINS))

@@ -15,6 +15,9 @@ def test_price_workflow_isolated_from_excel_and_media_engines():
 def test_price_workflow_survives_adapter_failure_and_emits_done(tmp_path, monkeypatch):
     identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
     events = []
+    # This test verifies the generic fallback path in isolation. Deterministic Peru
+    # probes are covered separately by test_price_peru_structured_first.py.
+    monkeypatch.setattr(price_workflow, "PERU_STRUCTURED_SOURCES", ())
     monkeypatch.setattr(price_workflow, "_try_mercadolibre", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("blocked")))
     monkeypatch.setattr(price_workflow, "discover_price_sources", lambda *_a, **_k: ["https://shop.example/q350"])
     monkeypatch.setattr(price_workflow, "fetch_page", lambda *_a, **_k: SimpleNamespace(final_url="https://shop.example/q350", html="<html>ok</html>"))
@@ -26,7 +29,12 @@ def test_price_workflow_survives_adapter_failure_and_emits_done(tmp_path, monkey
     monkeypatch.setattr(price_workflow, "save_price_run", lambda *_a, **_k: None)
 
     rows = price_workflow.run_price_product(identity, tmp_path, on_event=events.append)
-    assert rows == rows_from_page
+    # Currency groups may be reordered by the presentation policy. Verify the
+    # same validated offers are preserved without assuming CLP vs PEN ordering.
+    assert {(r.channel, r.currency, r.selling_price) for r in rows} == {
+        ("Shop", "PEN", 299),
+        ("Chile", "CLP", 29936),
+    }
     assert any(e.get("type") == "source" and e.get("channel") == "MercadoLibre" and e.get("status") == "error" for e in events)
     assert events[-1]["type"] == "done"
     assert events[-1]["best_by_currency"] == {"PEN": 299, "CLP": 29936}

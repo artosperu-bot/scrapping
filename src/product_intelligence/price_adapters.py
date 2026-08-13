@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import urljoin
 
 from .models import ProductIdentity
 from .price_identity import score_offer_identity
@@ -23,6 +25,16 @@ def _int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _first(value: Any) -> Any:
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
 
 
 def _identity_evidence_from_ml(row: dict) -> dict:
@@ -72,21 +84,38 @@ def parse_mercadolibre_payload(payload: dict, identity: ProductIdentity) -> list
     return out
 
 
+def _vtex_evidence(product: dict, identity: ProductIdentity) -> dict:
+    product_name = str(product.get("productName") or product.get("productTitle") or "")
+    declared_model = _first(product.get("Modelo") or product.get("Model") or product.get("model"))
+    expected_mpn = _norm(identity.mpn)
+    candidates = [declared_model, product_name, product.get("productTitle"), product.get("linkText"), product.get("productReference"), product.get("productReferenceCode")]
+    exact_mpn = None
+    if expected_mpn:
+        for candidate in candidates:
+            normalized = _norm(candidate)
+            if normalized and expected_mpn in normalized:
+                exact_mpn = identity.mpn
+                break
+    return {
+        "mpn": exact_mpn,
+        "brand": product.get("brand"),
+        "model": declared_model or product_name,
+        "title": product_name,
+    }
+
+
 def parse_vtex_payload(payload: list[dict] | dict, identity: ProductIdentity, *, channel: str, source_url: str) -> list[PriceOffer]:
     products = payload if isinstance(payload, list) else [payload]
     out: list[PriceOffer] = []
     for product in products:
         if not isinstance(product, dict):
             continue
-        evidence = {
-            "mpn": product.get("productReference") or product.get("referenceId"),
-            "brand": product.get("brand"),
-            "model": product.get("productName"),
-            "title": product.get("productName"),
-        }
+        evidence = _vtex_evidence(product, identity)
         score, match, conflicts = score_offer_identity(identity, evidence)
         if score < 0.70 or conflicts:
             continue
+        product_url = str(product.get("link") or "").strip()
+        product_url = urljoin(source_url.rstrip("/") + "/", product_url) if product_url else source_url
         for item in product.get("items", []) or []:
             if not isinstance(item, dict):
                 continue
@@ -98,6 +127,9 @@ def parse_vtex_payload(payload: list[dict] | dict, identity: ProductIdentity, *,
                 price = _float(offer.get("Price"))
                 if price is None or price <= 0:
                     continue
+                stock = _int(offer.get("AvailableQuantity"))
+                is_available = offer.get("IsAvailable")
+                available = bool(is_available) if is_available is not None else (stock or 0) > 0
                 out.append(PriceOffer(
                     part_number=identity.mpn,
                     brand=identity.brand,
@@ -107,9 +139,9 @@ def parse_vtex_payload(payload: list[dict] | dict, identity: ProductIdentity, *,
                     selling_price=price,
                     list_price=_float(offer.get("ListPrice")),
                     currency="PEN",
-                    stock=_int(offer.get("AvailableQuantity")),
-                    availability="available" if (_int(offer.get("AvailableQuantity")) or 0) > 0 else "unavailable",
-                    url=source_url,
+                    stock=stock,
+                    availability="available" if available else "unavailable",
+                    url=product_url,
                     confidence=score,
                     identity_match=match,
                     source_type="api",

@@ -64,6 +64,19 @@ def _canonical_url(url: str) -> str:
     return urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), "", ""))
 
 
+_PERU_CHANNELS = {"plazavea", "oechsle", "mercadolibre", "falabella", "ripley"}
+
+
+def _market_rank(row: PriceOffer) -> int:
+    channel = _norm(row.channel)
+    if channel in _PERU_CHANNELS:
+        return 0
+    host = (urlsplit(row.url).hostname or "").lower()
+    if host == "mercadolibre.com.pe" or host.endswith(".com.pe") or host.endswith(".pe"):
+        return 0
+    return 1
+
+
 def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:
     best: dict[tuple, PriceOffer] = {}
     for row in offers:
@@ -78,4 +91,10 @@ def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:
             row.confidence == current.confidence and row.source_type == "api" and current.source_type != "api"
         ):
             best[key] = row
-    return sorted(best.values(), key=lambda x: (-x.confidence, x.selling_price, x.channel.lower()))
+
+    # Local Peru offers are presented first. Price is only compared after currency,
+    # so XCD 180 is never treated as numerically "cheaper" than PEN 469 for ordering.
+    return sorted(
+        best.values(),
+        key=lambda x: (_market_rank(x), -x.confidence, str(x.currency or "").upper(), x.selling_price, x.channel.lower()),
+    )

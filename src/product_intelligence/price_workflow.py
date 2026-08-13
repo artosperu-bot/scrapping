@@ -14,6 +14,15 @@ from .price_models import PriceOffer
 from .web_fetch import fetch_page
 
 
+# Structured storefront endpoints that can be queried directly by exact Part Number.
+# They are intentionally attempted before search-engine discovery so local sources
+# are not dependent on what Google/Bing happened to index that day.
+PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
+    ("PlazaVea", "https://www.plazavea.com.pe"),
+    ("Oechsle", "https://www.oechsle.pe"),
+)
+
+
 def _query(identity: ProductIdentity) -> str:
     return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
 
@@ -37,7 +46,7 @@ def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[Pric
     return parse_mercadolibre_payload(response.json(), identity)
 
 
-def _try_vtex(url: str, identity: ProductIdentity, channel: str, timeout: int = 15) -> list[PriceOffer]:
+def _try_vtex(url: str, identity: ProductIdentity, channel: str, timeout: int = 12) -> list[PriceOffer]:
     parsed = urlparse(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     endpoint = f"{origin}/api/catalog_system/pub/products/search?ft={quote_plus(_query(identity))}"
@@ -47,7 +56,7 @@ def _try_vtex(url: str, identity: ProductIdentity, channel: str, timeout: int = 
     data = response.json()
     if not isinstance(data, (list, dict)):
         return []
-    return parse_vtex_payload(data, identity, channel=channel, source_url=url)
+    return parse_vtex_payload(data, identity, channel=channel, source_url=origin)
 
 
 def _best_by_currency(offers: list[PriceOffer]) -> dict[str, float]:
@@ -72,8 +81,19 @@ def run_price_product(
             on_event({"type": event_type, "identity": identity.model_dump(), **payload})
 
     offers: list[PriceOffer] = []
-    emit("status", stage="searching", message="Consultando fuentes estructuradas")
+    emit("status", stage="searching", message="Consultando APIs y fuentes estructuradas de Perú")
 
+    # Deterministic local structured probes first. A search engine is not allowed to
+    # decide whether PlazaVea/Oechsle are consulted.
+    for channel, base_url in PERU_STRUCTURED_SOURCES:
+        try:
+            rows = _try_vtex(base_url, identity, channel)
+            offers.extend(rows)
+            emit("source", channel=channel, status="ok", offers=len(rows), method="structured_direct")
+        except Exception as exc:
+            emit("source", channel=channel, status="error", error=f"structured: {type(exc).__name__}: {exc}")
+
+    # MercadoLibre Peru is another direct structured source.
     try:
         ml = _try_mercadolibre(identity)
         offers.extend(ml)
@@ -81,13 +101,14 @@ def run_price_product(
     except Exception as exc:
         emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
 
+    # General discovery is additive fallback, not the gate for local structured APIs.
     try:
         sources = discover_price_sources(identity, limit=max_sources)
     except Exception as exc:
         sources = []
         emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
 
-    emit("status", stage="validating", message=f"Revisando {len(sources)} fuentes web")
+    emit("status", stage="validating", message=f"Revisando {len(sources)} fuentes web adicionales")
     for pos, url in enumerate(sources, 1):
         channel = _channel_from_url(url)
         try:
@@ -96,7 +117,7 @@ def run_price_product(
             final_url = str(getattr(fetched, "final_url", None) or url)
             html = str(getattr(fetched, "html", "") or "")
 
-            # VTEX is attempted only after real page evidence is observed.
+            # For newly discovered VTEX storefronts, reuse the same structured parser.
             if "vtex" in html.lower() or "vteximg" in html.lower() or "/api/catalog_system/" in html.lower():
                 try:
                     vtex_rows = _try_vtex(final_url, identity, channel)

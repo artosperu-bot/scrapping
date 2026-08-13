@@ -16,6 +16,8 @@ def test_price_desktop_adds_tab_8_and_independent_controls():
     assert "after(" in source
 
 
-def test_exe_entrypoint_uses_price_desktop_extension():
+def test_exe_entrypoint_uses_modern_shell_over_price_extension():
     source = (ROOT / "run_desktop.py").read_text(encoding="utf-8")
-    assert "from product_intelligence.price_desktop import main" in source
+    assert "from product_intelligence.modern_desktop import main" in source
+    modern_source = (ROOT / "src" / "product_intelligence" / "modern_desktop.py").read_text(encoding="utf-8")
+    assert "from .price_desktop import App as PriceApp" in modern_source

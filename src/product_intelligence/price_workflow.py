@@ -20,15 +20,8 @@ PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
     ("Oechsle", "https://www.oechsle.pe"),
 )
 
-STRICT_MARKETPLACE_CHANNELS = {
-    "falabella",
-    "ripley",
-    "plazavea",
-    "oechsle",
-    "mercadolibre",
-    "sodimac",
-    "jblperu",
-}
+STRICT_MARKETPLACE_CHANNELS = {"falabella","ripley","plazavea","oechsle","mercadolibre","sodimac","jblperu"}
+BROWSER_PRICE_CHANNELS = {"Ripley", "MercadoLibre", "JBL Perú"}
 
 
 def _query(identity: ProductIdentity) -> str:
@@ -51,8 +44,6 @@ def _channel_key(value: str | None) -> str:
 def _is_trusted_final_offer(row: PriceOffer) -> bool:
     if not is_peru_offer(row) or row.confidence < 0.70 or row.selling_price <= 0:
         return False
-    # Known marketplaces must provide a site-specific parser or structured/API
-    # price. A generic first-S/ regex can be a coupon, installment or placeholder.
     if _channel_key(row.channel) in STRICT_MARKETPLACE_CHANNELS and row.source_method == "html":
         return False
     return True
@@ -69,12 +60,20 @@ def _mercadolibre_queries(identity: ProductIdentity) -> list[str]:
 
 def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[PriceOffer]:
     rows: list[PriceOffer] = []
+    errors: list[Exception] = []
     for q in _mercadolibre_queries(identity):
-        url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}&limit=50"
-        response = requests.get(url, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
-        response.raise_for_status()
-        rows.extend(parse_mercadolibre_payload(response.json(), identity))
-    return dedupe_offers(rows)
+        try:
+            url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}&limit=50"
+            response = requests.get(url, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
+            response.raise_for_status()
+            rows.extend(parse_mercadolibre_payload(response.json(), identity))
+        except Exception as exc:
+            errors.append(exc)
+    if rows:
+        return dedupe_offers(rows)
+    if errors and len(errors) == len(_mercadolibre_queries(identity)):
+        raise errors[0]
+    return []
 
 
 def _try_vtex(url: str, identity: ProductIdentity, channel: str, timeout: int = 12) -> list[PriceOffer]:
@@ -115,6 +114,25 @@ def _merge_sources(*groups: list[str], limit: int) -> list[str]:
     return merged
 
 
+def _parse_page_with_dynamic_retry(url: str, identity: ProductIdentity, channel: str, emit) -> tuple[str, list[PriceOffer]]:
+    fetched = fetch_page(url, timeout=25, browser_fallback=True, activate_lazy_media=False)
+    final_url = str(getattr(fetched, "final_url", None) or url)
+    html = str(getattr(fetched, "html", "") or "")
+    page_rows = extract_page_offers(html, final_url, identity, channel=channel)
+    if not page_rows and channel in BROWSER_PRICE_CHANNELS and getattr(fetched, "method", "") != "playwright":
+        try:
+            rendered = fetch_page(url, timeout=35, browser_fallback=True, prefer_browser=True, activate_lazy_media=False)
+            rendered_url = str(getattr(rendered, "final_url", None) or final_url)
+            rendered_html = str(getattr(rendered, "html", "") or "")
+            rendered_rows = extract_page_offers(rendered_html, rendered_url, identity, channel=channel)
+            emit("page", url=rendered_url, channel=channel, status="browser_retry", offers=len(rendered_rows), method=getattr(rendered, "method", None))
+            if rendered_rows:
+                return rendered_html, rendered_rows
+        except Exception as exc:
+            emit("page", url=url, channel=channel, status="browser_error", error=f"{type(exc).__name__}: {exc}")
+    return html, page_rows
+
+
 def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_event=None, max_sources: int = 40) -> list[PriceOffer]:
     def emit(event_type: str, **payload):
         if on_event:
@@ -141,7 +159,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     additional: list[str] = []
     base_sources: list[str] = []
     try:
-        additional = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(8, max_sources // 5 or 4)))
+        additional = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
         emit("source", channel="peru_directed", status="ok", offers=0, urls=len(additional), method="targeted_pdp")
     except Exception as exc:
         emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
@@ -157,18 +175,16 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         channel = _channel_from_url(url)
         try:
             emit("page", url=url, channel=channel, position=pos, total=len(sources), status="fetching")
-            fetched = fetch_page(url, timeout=25, browser_fallback=True, activate_lazy_media=False)
-            final_url = str(getattr(fetched, "final_url", None) or url)
-            html = str(getattr(fetched, "html", "") or "")
+            html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
+            final_url = url
             if "vtex" in html.lower() or "vteximg" in html.lower() or "/api/catalog_system/" in html.lower():
                 try:
-                    vtex_rows = _try_vtex(final_url, identity, channel)
+                    vtex_rows = _try_vtex(url, identity, channel)
                     offers.extend(vtex_rows)
                     if vtex_rows:
                         emit("offer", channel=channel, count=len(vtex_rows), method="vtex")
                 except Exception as exc:
                     emit("source", channel=channel, status="error", error=f"vtex: {type(exc).__name__}: {exc}")
-            page_rows = extract_page_offers(html, final_url, identity, channel=channel)
             offers.extend(page_rows)
             emit("page", url=final_url, channel=channel, status="parsed", offers=len(page_rows))
         except Exception as exc:

@@ -20,6 +20,16 @@ PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
     ("Oechsle", "https://www.oechsle.pe"),
 )
 
+STRICT_MARKETPLACE_CHANNELS = {
+    "falabella",
+    "ripley",
+    "plazavea",
+    "oechsle",
+    "mercadolibre",
+    "sodimac",
+    "jblperu",
+}
+
 
 def _query(identity: ProductIdentity) -> str:
     return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
@@ -32,6 +42,20 @@ def _channel_from_url(url: str) -> str:
         if key in host:
             return name
     return (host.split(".")[0] if host else "Web").replace("-", " ").title()
+
+
+def _channel_key(value: str | None) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _is_trusted_final_offer(row: PriceOffer) -> bool:
+    if not is_peru_offer(row) or row.confidence < 0.70 or row.selling_price <= 0:
+        return False
+    # Known marketplaces must provide a site-specific parser or structured/API
+    # price. A generic first-S/ regex can be a coupon, installment or placeholder.
+    if _channel_key(row.channel) in STRICT_MARKETPLACE_CHANNELS and row.source_method == "html":
+        return False
+    return True
 
 
 def _mercadolibre_queries(identity: ProductIdentity) -> list[str]:
@@ -50,8 +74,6 @@ def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[Pric
         response = requests.get(url, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
         response.raise_for_status()
         rows.extend(parse_mercadolibre_payload(response.json(), identity))
-    # Preserve independently published listings; final workflow dedupe uses
-    # publication_id/seller rather than collapsing the whole marketplace.
     return dedupe_offers(rows)
 
 
@@ -120,10 +142,12 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     base_sources: list[str] = []
     try:
         additional = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(8, max_sources // 5 or 4)))
+        emit("source", channel="peru_directed", status="ok", offers=0, urls=len(additional), method="targeted_pdp")
     except Exception as exc:
         emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
     try:
         base_sources = discover_price_sources(identity, limit=max_sources)
+        emit("source", channel="web", status="ok", offers=0, urls=len(base_sources), method="generic_peru")
     except Exception as exc:
         emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
 
@@ -151,7 +175,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
 
     deduped = dedupe_offers(offers)
-    valid = [row for row in deduped if is_peru_offer(row) and row.confidence >= 0.70 and row.selling_price > 0]
+    valid = [row for row in deduped if _is_trusted_final_offer(row)]
     emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas peruanas validadas")
     save_price_run(output_root, valid)
     for row in valid:

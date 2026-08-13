@@ -22,9 +22,6 @@ PERU_PRICE_DOMAINS = (
     "jbl.com.pe",
 )
 
-# These channels do not currently have a stable public structured endpoint in the
-# engine, so they receive deterministic domain-targeted discovery before generic web
-# discovery. The query is still built from the exact product identity, never a fixed SKU.
 TARGETED_PERU_DOMAINS = (
     "falabella.com.pe",
     "simple.ripley.com.pe",
@@ -74,23 +71,34 @@ def discover_targeted_peru_sources(
     limit_per_domain: int = 5,
     domains: tuple[str, ...] = TARGETED_PERU_DOMAINS,
 ) -> list[str]:
-    """Discover exact-product pages in priority Peru channels independently of generic ranking."""
+    """Discover exact-product pages in priority Peru channels, interleaved by channel."""
     strong = _identity_query(identity)
     if not strong:
         return []
-    urls: list[str] = []
-    seen: set[str] = set()
+    per_domain: list[list[str]] = []
     for domain in domains:
         query = f'"{strong}" site:{domain}'
         try:
             found = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
         except Exception:
             found = []
+        clean_rows: list[str] = []
+        seen_local: set[str] = set()
         for url in found:
             clean = str(url or "").strip()
-            if clean.startswith(("http://", "https://")) and _host_matches(clean, domain) and clean not in seen:
-                seen.add(clean)
-                urls.append(clean)
+            if clean.startswith(("http://", "https://")) and _host_matches(clean, domain) and clean not in seen_local:
+                seen_local.add(clean)
+                clean_rows.append(clean)
+        per_domain.append(clean_rows)
+
+    # Round-robin prevents five Falabella listings from hiding Ripley/JBL/Sodimac.
+    urls: list[str] = []
+    seen: set[str] = set()
+    for index in range(limit_per_domain):
+        for rows in per_domain:
+            if index < len(rows) and rows[index] not in seen:
+                seen.add(rows[index])
+                urls.append(rows[index])
     return urls
 
 
@@ -100,17 +108,25 @@ def discover_price_sources(
     *,
     priority_domains: tuple[str, ...] = PERU_PRICE_DOMAINS,
 ) -> list[str]:
-    # Ask the existing discovery engine for a wider pool, then bias price discovery
-    # toward the target market without dropping valid generic/foreign fallbacks.
+    # Deterministic domain-targeted Peru discovery comes first. Generic discovery is
+    # additive fallback rather than the mechanism that decides whether a key channel
+    # gets checked at all.
+    targeted = discover_targeted_peru_sources(identity, limit_per_domain=max(2, min(5, limit)))
     candidates = search_web(identity, limit=max(limit * 3, 24))
     urls: list[str] = []
     seen: set[str] = set()
+    for url in targeted:
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    generic: list[str] = []
     for candidate in candidates:
         url = str(getattr(candidate, "url", "") or "").strip()
         if url.startswith(("http://", "https://")) and url not in seen:
             seen.add(url)
-            urls.append(url)
-    urls.sort(key=lambda value: _priority_rank(value, priority_domains))
+            generic.append(url)
+    generic.sort(key=lambda value: _priority_rank(value, priority_domains))
+    urls.extend(generic)
     return urls[:limit]
 
 
@@ -181,8 +197,6 @@ def _peru_marketplace_html_offer(
         selling = _money(internet.group(1)) if internet else None
         list_price = _money(normal.group(1)) if normal else None
     elif "falabella.com.pe" in host or "sodimac.com.pe" in host:
-        # Marketplace PDPs place seller/legal identity immediately before the active
-        # price block. Restrict parsing to that block to avoid coupons/navigation prices.
         lower = page_text.lower()
         start = lower.find("vendido por")
         segment = page_text[start : start + 1200] if start >= 0 else page_text[:2500]
@@ -230,7 +244,6 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
     }
     default_channel = channel or _channel(url)
 
-    # Marketplace-specific HTML is often richer than JSON-LD for seller identity.
     marketplace_rows = _peru_marketplace_html_offer(page_text, url, identity, default_channel, base_evidence)
     if marketplace_rows:
         return marketplace_rows

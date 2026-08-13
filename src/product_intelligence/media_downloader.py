@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from PIL import Image
 
 from .models import ProductIdentity
 
@@ -26,6 +27,10 @@ _VIDEO_EXTENSIONS = {
     "video/webm": ".webm",
     "video/quicktime": ".mov",
 }
+
+MIN_IMAGE_WIDTH = 300
+MIN_IMAGE_HEIGHT = 300
+MIN_IMAGE_AREA = 120_000
 
 
 def safe_product_key(identity: ProductIdentity) -> str:
@@ -71,6 +76,12 @@ def _extension_for(content_type: str, url: str, media_type: str) -> str | None:
     return suffix if suffix in allowed else None
 
 
+def _image_dimensions(path: Path) -> tuple[int, int]:
+    with Image.open(path) as image:
+        image.load()
+        return int(image.width), int(image.height)
+
+
 def download_media_item(
     item: dict,
     identity: ProductIdentity,
@@ -96,6 +107,7 @@ def download_media_item(
         return result
 
     client = session or requests.Session()
+    temp_path: Path | None = None
     try:
         response = client.get(
             url,
@@ -131,6 +143,33 @@ def download_media_item(
             temp_path.unlink(missing_ok=True)
             result["reason"] = "empty_response"
             return result
+
+        dimensions: dict[str, int] = {}
+        if media_type == "image":
+            try:
+                width, height = _image_dimensions(temp_path)
+            except Exception as exc:
+                temp_path.unlink(missing_ok=True)
+                result.update({
+                    "content_type": content_type,
+                    "bytes": total,
+                    "reason": "invalid_image",
+                    "error": str(exc),
+                })
+                return result
+            pixel_area = width * height
+            dimensions = {"width": width, "height": height, "pixel_area": pixel_area}
+            result.update(dimensions)
+            if width < MIN_IMAGE_WIDTH or height < MIN_IMAGE_HEIGHT or pixel_area < MIN_IMAGE_AREA:
+                temp_path.unlink(missing_ok=True)
+                result.update({
+                    "content_type": content_type,
+                    "bytes": total,
+                    "sha256": digest.hexdigest(),
+                    "reason": "image_too_small",
+                })
+                return result
+
         temp_path.replace(final_path)
         result.update(
             {
@@ -140,10 +179,13 @@ def download_media_item(
                 "content_type": content_type,
                 "bytes": total,
                 "sha256": digest.hexdigest(),
+                **dimensions,
             }
         )
         return result
     except Exception as exc:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
         result["reason"] = f"download_error:{type(exc).__name__}"
         result["error"] = str(exc)
         return result

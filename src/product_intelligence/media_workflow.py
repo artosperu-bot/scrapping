@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from .discovery import search_web
 from .media_discovery import discover_media
 from .media_downloader import download_media_item, write_media_metadata
+from .media_url_quality import promote_image_url
 from .models import ProductIdentity
 from .web_fetch import fetch_page
 
@@ -39,6 +40,15 @@ def _page_matches_identity(html: str, url: str, identity: ProductIdentity) -> bo
     return model_ok and brand_ok
 
 
+def _is_official_product_page(url: str, identity: ProductIdentity, discovery_source: str) -> bool:
+    """Identify manufacturer/brand PDPs without a hardcoded domain allowlist."""
+    if discovery_source == "official_search":
+        return True
+    host = _norm(urlparse(url).hostname or "")
+    brand = _norm(identity.brand or identity.manufacturer)
+    return bool(brand and len(brand) >= 2 and brand in host)
+
+
 def _candidate_urls(identity: ProductIdentity, manual_urls: list[str], auto_search: bool, max_pages: int) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -60,18 +70,53 @@ def _candidate_urls(identity: ProductIdentity, manual_urls: list[str], auto_sear
     return out[:max_pages]
 
 
-def _eligible_media(row: dict) -> bool:
-    if str(row.get("media_type") or "").lower() not in {"image", "video"}:
+def _looks_like_official_catalog_asset(row: dict) -> bool:
+    """Recognize product-catalog assets from validated manufacturer PDPs.
+
+    Some Salesforce Commerce Cloud/Demandware storefronts expose product gallery
+    images through master-catalog URLs without useful DOM gallery classes or alt
+    text. This deliberately does not match generic CDN/page assets.
+    """
+    hay = " ".join(
+        str(row.get(key) or "")
+        for key in ("url", "source", "alt")
+    ).lower()
+    return bool(
+        re.search(
+            r"sites[-_/ ]mastercatalog|sites[-_/ ]master[-_/ ]catalog|demandware\.static.*master|/mastercatalog/|/master[-_/]catalog/",
+            hay,
+            re.I,
+        )
+    )
+
+
+def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
+    """Apply stricter confidence off-site while preserving validated official galleries."""
+    media_type = str(row.get("media_type") or "").lower()
+    if media_type not in {"image", "video"}:
         return False
     if row.get("conflict_reasons"):
         return False
-    if str(row.get("role") or "") == "page_asset":
+    role = str(row.get("role") or "")
+    if role in {"page_asset", "related_product"}:
         return False
     scope = str(row.get("scope") or "")
+    if scope not in {"EXACT_VARIANT", "EXACT_PRODUCT", "PRODUCT_FAMILY"}:
+        return False
     confidence = float(row.get("confidence") or 0.0)
-    return bool(row.get("autofill_eligible")) or (
-        scope in {"EXACT_VARIANT", "EXACT_PRODUCT", "PRODUCT_FAMILY"} and confidence >= 0.80
-    )
+
+    if official_page and role in {"product_gallery", "product_video"}:
+        return confidence >= 0.84
+
+    if (
+        official_page
+        and media_type == "image"
+        and role == "unknown_image"
+        and _looks_like_official_catalog_asset(row)
+    ):
+        return confidence >= 0.84
+
+    return confidence >= 0.95
 
 
 def run_media_product(
@@ -101,6 +146,7 @@ def run_media_product(
                 page_url,
                 timeout=30,
                 browser_fallback=True,
+                prefer_browser=True,
                 activate_lazy_media=True,
             )
             final_url = str(getattr(fetched, "final_url", None) or page_url)
@@ -109,7 +155,8 @@ def run_media_product(
                 emit("page", url=final_url, source=discovery_source, status="rejected_identity")
                 continue
 
-            emit("page", url=final_url, source=discovery_source, status="validated")
+            official_page = _is_official_product_page(final_url, relaxed_identity, discovery_source)
+            emit("page", url=final_url, source=discovery_source, status="validated", official_page=official_page)
             discovered = discover_media(
                 html,
                 final_url,
@@ -118,19 +165,44 @@ def run_media_product(
                 page_is_validated=True,
             )
             for item in discovered:
-                media_url = str(item.get("url") or "").strip()
-                if not media_url or media_url in seen_media_urls or not _eligible_media(item):
+                original_url = str(item.get("url") or "").strip()
+                if not original_url:
+                    continue
+                if not _eligible_media(item, official_page=official_page):
+                    emit(
+                        "media_filtered",
+                        url=original_url,
+                        role=item.get("role"),
+                        scope=item.get("scope"),
+                        confidence=item.get("confidence"),
+                        source=item.get("source"),
+                    )
+                    continue
+
+                media_url = promote_image_url(original_url) if str(item.get("media_type") or "").lower() == "image" else original_url
+                if not media_url or media_url in seen_media_urls:
                     continue
                 seen_media_urls.add(media_url)
                 enriched = {
                     **item,
+                    "url": media_url,
+                    "original_media_url": original_url if media_url != original_url else None,
                     "page_url": final_url,
                     "page_discovery_source": discovery_source,
+                    "official_page": official_page,
                     "fetch_method": getattr(fetched, "method", None),
                 }
                 saved = download_media_item(enriched, identity, output_root)
-                results.append(saved)
-                emit("media", item=saved)
+                if saved.get("downloaded") or saved.get("metadata_only"):
+                    results.append(saved)
+                    emit("media", item=saved)
+                else:
+                    emit(
+                        "media_rejected",
+                        url=media_url,
+                        reason=str(saved.get("reason") or "not_saved"),
+                        item=saved,
+                    )
         except Exception as exc:
             emit("error", url=page_url, error=f"{type(exc).__name__}: {exc}")
 

@@ -3,8 +3,12 @@ from __future__ import annotations
 import math
 import queue
 import re
+import sys
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk
+
+from PIL import Image, ImageSequence, ImageTk
 
 from .media_desktop import App as MediaApp
 from .media_progress import BatchProgress
@@ -28,12 +32,15 @@ class App(MediaApp):
         self._progress = BatchProgress(total=0)
         self._wolf_frame = 0
         self._wolf_state = "idle"
+        self._wolf_gif_frames: list[ImageTk.PhotoImage] = []
+        self._wolf_gif_index = 0
         super().__init__()
+        self._load_wolf_gif()
         # Mirror future worker events so the existing media UI and this progress UI
         # can consume the same facts independently.
         self.media_events = _MirrorQueue(self._progress_events)
         self.after(150, self._drain_progress_events)
-        self.after(180, self._animate_wolf)
+        self.after(160, self._animate_wolf)
 
     def _build_media_tab(self):
         super()._build_media_tab()
@@ -67,11 +74,31 @@ class App(MediaApp):
         self.media_progress_detail = tk.StringVar(value="0 productos completados")
         ttk.Label(left, textvariable=self.media_progress_detail).pack(anchor="w", pady=(4, 0))
 
-        self.wolf_canvas = tk.Canvas(right, width=180, height=92, highlightthickness=0)
+        self.wolf_canvas = tk.Canvas(right, width=190, height=96, highlightthickness=0)
         self.wolf_canvas.pack()
         self.wolf_caption = tk.StringVar(value="El lobo está listo para buscar")
         ttk.Label(right, textvariable=self.wolf_caption, anchor="center").pack(fill="x")
         self._draw_wolf(0, "idle")
+
+    @staticmethod
+    def _wolf_asset_path() -> Path:
+        if getattr(sys, "_MEIPASS", None):
+            return Path(sys._MEIPASS) / "product_intelligence" / "assets" / "wolf_search.gif"
+        return Path(__file__).resolve().parent / "assets" / "wolf_search.gif"
+
+    def _load_wolf_gif(self):
+        """Load all GIF frames once; retain PhotoImage refs to prevent Tk GC."""
+        self._wolf_gif_frames = []
+        path = self._wolf_asset_path()
+        try:
+            with Image.open(path) as image:
+                for frame in ImageSequence.Iterator(image):
+                    rgba = frame.convert("RGBA")
+                    rgba.thumbnail((180, 88))
+                    self._wolf_gif_frames.append(ImageTk.PhotoImage(rgba.copy()))
+        except Exception:
+            self._wolf_gif_frames = []
+        self._wolf_gif_index = 0
 
     def _start_media_indices(self, indices: list[int]):
         valid_count = sum(1 for index in indices if self._identity_for_index(index) is not None)
@@ -117,6 +144,9 @@ class App(MediaApp):
         elif event_type == "media":
             self._progress.set_stage("downloading")
             self._wolf_state = "downloading"
+        elif event_type == "media_rejected":
+            self._progress.set_stage("validating")
+            self._wolf_state = "searching"
         elif event_type == "done":
             self._progress.set_stage("finalizing")
             self._set_progress_ui()
@@ -157,17 +187,41 @@ class App(MediaApp):
             "queued": "pendiente",
             "searching": "buscando fuentes",
             "validating": "validando producto",
-            "extracting": "revisando galería",
+            "extracting": "revisando galería y videos",
             "downloading": "descargando multimedia",
             "finalizing": "guardando resultados",
             "done": "completado",
             "error": "con error",
         }.get(stage, stage)
 
+    def _set_wolf_caption(self, state: str):
+        if not hasattr(self, "wolf_caption"):
+            return
+        self.wolf_caption.set({
+            "searching": "Buscando pistas del producto…",
+            "found": "¡Producto encontrado! Revisando galería…",
+            "downloading": "Guardando fotos y videos…",
+            "done": "¡Búsqueda completada!",
+            "error": "Encontré un problema; revisa el log",
+            "idle": "El lobo está listo para buscar",
+        }.get(state, "Buscando…"))
+
     def _animate_wolf(self):
         self._wolf_frame = (self._wolf_frame + 1) % 24
-        self._draw_wolf(self._wolf_frame, self._wolf_state)
-        self.after(180, self._animate_wolf)
+        if hasattr(self, "wolf_canvas") and self._wolf_gif_frames:
+            self.wolf_canvas.delete("all")
+            frame = self._wolf_gif_frames[self._wolf_gif_index % len(self._wolf_gif_frames)]
+            self._wolf_gif_index = (self._wolf_gif_index + 1) % len(self._wolf_gif_frames)
+            self.wolf_canvas.create_image(95, 46, image=frame)
+            if self._wolf_state == "done":
+                self.wolf_canvas.create_text(166, 16, text="✓", font=("Segoe UI", 18, "bold"))
+            elif self._wolf_state == "error":
+                self.wolf_canvas.create_text(166, 16, text="!", font=("Segoe UI", 18, "bold"))
+            self._set_wolf_caption(self._wolf_state)
+        else:
+            # Safe fallback if the asset is missing/corrupt or Pillow cannot decode it.
+            self._draw_wolf(self._wolf_frame, self._wolf_state)
+        self.after(160, self._animate_wolf)
 
     def _draw_wolf(self, frame: int, state: str):
         if not hasattr(self, "wolf_canvas"):
@@ -178,14 +232,11 @@ class App(MediaApp):
         x = 72 + (math.sin(frame * 0.35) * 8 if state == "searching" else 0)
         y = 46 + bounce
 
-        # Tail and body
         c.create_line(x - 34, y + 12, x - 48, y + 2, x - 42, y - 8, width=7, smooth=True)
         c.create_oval(x - 35, y - 8, x + 28, y + 27, fill="#6f7782", outline="#31363d", width=2)
-        # Legs
         leg = 3 if frame % 2 else -2
         c.create_line(x - 18, y + 22, x - 22 + leg, y + 38, width=5)
         c.create_line(x + 12, y + 22, x + 17 - leg, y + 38, width=5)
-        # Head, ears and muzzle
         c.create_polygon(x + 12, y - 10, x + 19, y - 34, x + 31, y - 13, fill="#6f7782", outline="#31363d")
         c.create_polygon(x + 30, y - 12, x + 42, y - 32, x + 48, y - 5, fill="#6f7782", outline="#31363d")
         c.create_oval(x + 8, y - 18, x + 55, y + 18, fill="#7d8691", outline="#31363d", width=2)
@@ -194,27 +245,20 @@ class App(MediaApp):
         c.create_oval(x + 35, y - 7, x + 40, y - 2, fill="#111", outline="")
 
         if state == "searching":
-            # Moving magnifying glass gives the visual cue without extra image assets.
             mx = 132 + math.sin(frame * 0.55) * 6
             my = 32 + math.cos(frame * 0.55) * 3
             c.create_oval(mx - 10, my - 10, mx + 10, my + 10, outline="#3a70a8", width=3)
             c.create_line(mx + 7, my + 7, mx + 18, my + 18, fill="#3a70a8", width=4)
-            self.wolf_caption.set("Buscando pistas del producto…")
         elif state == "found":
             c.create_text(142, 26, text="✓", font=("Segoe UI", 24, "bold"), fill="#2d7d46")
-            self.wolf_caption.set("¡Producto encontrado!")
         elif state == "downloading":
             c.create_rectangle(127, 24, 159, 48, outline="#3a70a8", width=2)
             c.create_polygon(131, 44, 140, 34, 146, 40, 152, 31, 157, 44, fill="#aeb5bc", outline="")
-            self.wolf_caption.set("Guardando fotos y videos…")
         elif state == "done":
             c.create_text(142, 28, text="★", font=("Segoe UI", 22, "bold"), fill="#b58a26")
-            self.wolf_caption.set("¡Búsqueda completada!")
         elif state == "error":
             c.create_text(142, 28, text="!", font=("Segoe UI", 22, "bold"), fill="#9b3434")
-            self.wolf_caption.set("Encontré un problema; revisa el log")
-        else:
-            self.wolf_caption.set("El lobo está listo para buscar")
+        self._set_wolf_caption(state)
 
 
 def main():

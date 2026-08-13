@@ -1,4 +1,7 @@
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image
 
 from product_intelligence.media_downloader import (
     download_media_item,
@@ -31,6 +34,12 @@ class FakeSession:
         return self.response
 
 
+def _large_jpeg() -> bytes:
+    buf = BytesIO()
+    Image.new("RGB", (800, 800)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 def test_safe_product_key_prefers_mpn_and_sanitizes():
     identity = ProductIdentity(mpn="JBL Q350/WL:BLKAM", model="Quantum 350")
     assert safe_product_key(identity) == "JBL_Q350_WL_BLKAM"
@@ -39,16 +48,18 @@ def test_safe_product_key_prefers_mpn_and_sanitizes():
 def test_download_image_routes_to_fotos_and_hashes(tmp_path: Path):
     identity = ProductIdentity(mpn="JBLQ350WLBLKAM", model="Quantum 350")
     item = {"url": "https://cdn.example.com/product", "media_type": "image", "source": "jsonld:Product.image", "confidence": 0.95}
+    payload = _large_jpeg()
     result = download_media_item(
         item,
         identity,
         tmp_path,
-        session=FakeSession(FakeResponse(b"fake-image-bytes", "image/jpeg")),
+        session=FakeSession(FakeResponse(payload, "image/jpeg")),
     )
     assert result["downloaded"] is True
     assert result["local_path"].replace("\\", "/").endswith("multimedia/fotos/JBLQ350WLBLKAM/01.jpg")
     assert result["sha256"]
-    assert Path(result["local_path"]).read_bytes() == b"fake-image-bytes"
+    assert result["width"] == 800 and result["height"] == 800
+    assert Path(result["local_path"]).read_bytes() == payload
 
 
 def test_download_direct_video_routes_to_videos(tmp_path: Path):

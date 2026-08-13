@@ -63,6 +63,8 @@ def test_progress_panel_is_packed_before_expandable_gallery_and_keeps_requested_
 
 def test_exe_preserves_progress_desktop_extension():
     source = (ROOT / "run_desktop.py").read_text(encoding="utf-8")
-    assert "from product_intelligence.price_desktop import main" in source
+    assert "from product_intelligence.modern_desktop import main" in source
+    modern_source = (ROOT / "src" / "product_intelligence" / "modern_desktop.py").read_text(encoding="utf-8")
+    assert "from .price_desktop import App as PriceApp" in modern_source
     price_source = (ROOT / "src" / "product_intelligence" / "price_desktop.py").read_text(encoding="utf-8")
     assert "from .media_progress_desktop import App as MediaProgressApp" in price_source

@@ -11,12 +11,13 @@ from .price_discovery import discover_price_sources, extract_page_offers
 from .price_history import save_price_run
 from .price_identity import dedupe_offers, is_peru_offer
 from .price_models import PriceOffer
+from .price_peru_coverage import discover_additional_peru_pdps
 from .web_fetch import fetch_page
 
 
 # Structured storefront endpoints queried directly by exact Part Number before any
-# search engine. If one storefront does not expose VTEX at runtime, it simply
-# contributes zero rows and its targeted PDP discovery still runs afterward.
+# search engine. A storefront that does not expose VTEX simply contributes zero rows;
+# targeted PDP discovery still runs afterward.
 PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
     ("Falabella", "https://www.falabella.com.pe"),
     ("PlazaVea", "https://www.plazavea.com.pe"),
@@ -49,7 +50,7 @@ def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[Pric
     q = _query(identity)
     if not q:
         return []
-    url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}"
+    url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}&limit=50"
     response = requests.get(url, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
     response.raise_for_status()
     return parse_mercadolibre_payload(response.json(), identity)
@@ -58,7 +59,10 @@ def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[Pric
 def _try_vtex(url: str, identity: ProductIdentity, channel: str, timeout: int = 12) -> list[PriceOffer]:
     parsed = urlparse(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
-    endpoint = f"{origin}/api/catalog_system/pub/products/search?ft={quote_plus(_query(identity))}"
+    endpoint = (
+        f"{origin}/api/catalog_system/pub/products/search?ft={quote_plus(_query(identity))}"
+        "&_from=0&_to=49"
+    )
     response = requests.get(endpoint, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
     if response.status_code != 200:
         return []
@@ -78,12 +82,27 @@ def _best_by_currency(offers: list[PriceOffer]) -> dict[str, float]:
     return best
 
 
+def _merge_sources(*groups: list[str], limit: int) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for url in group:
+            clean = str(url or "").strip()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            merged.append(clean)
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
 def run_price_product(
     identity: ProductIdentity,
     output_root: str | Path,
     *,
     on_event=None,
-    max_sources: int = 24,
+    max_sources: int = 40,
 ) -> list[PriceOffer]:
     def emit(event_type: str, **payload):
         if on_event:
@@ -107,13 +126,25 @@ def run_price_product(
     except Exception as exc:
         emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
 
+    additional: list[str] = []
+    base_sources: list[str] = []
     try:
-        sources = discover_price_sources(identity, limit=max_sources)
+        additional = discover_additional_peru_pdps(
+            identity,
+            limit_per_domain=max(4, min(8, max_sources // 5 or 4)),
+        )
     except Exception as exc:
-        sources = []
+        emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
+    try:
+        base_sources = discover_price_sources(identity, limit=max_sources)
+    except Exception as exc:
         emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
 
-    emit("status", stage="validating", message=f"Revisando {len(sources)} fuentes web adicionales de Perú")
+    # Directed marketplace PDPs are fetched first; generic Peru discovery fills the
+    # remaining budget. Multiple PDPs from the same channel are intentionally kept.
+    sources = _merge_sources(additional, base_sources, limit=max_sources)
+
+    emit("status", stage="validating", message=f"Revisando {len(sources)} publicaciones web de Perú")
     for pos, url in enumerate(sources, 1):
         channel = _channel_from_url(url)
         try:

@@ -56,36 +56,58 @@ def _queries(identity: ProductIdentity, domain: str) -> list[str]:
     brand = str(identity.brand or "").strip()
     queries = [f'"{strong}" site:{domain}']
     if model:
-        queries.append(f'"{strong}" "{model}" site:{domain}')
-        queries.append(f'"{model}" {brand} site:{domain}'.strip())
+        queries.extend([
+            f'"{strong}" "{model}" site:{domain}',
+            f'"{model}" {brand} site:{domain}'.strip(),
+        ])
     if domain == "falabella.com.pe":
-        queries.append(f'"{strong}" site:falabella.com.pe/falabella-pe/product')
-        queries.append(f'"{strong}" "Vendido por" site:falabella.com.pe')
+        queries.extend([
+            f'"{strong}" site:falabella.com.pe/falabella-pe/product',
+            f'"{strong}" "Vendido por" site:falabella.com.pe',
+            f'"{strong}" "Modelo" site:falabella.com.pe/falabella-pe/product',
+        ])
     elif domain == "simple.ripley.com.pe":
-        queries.append(f'"{strong}" site:simple.ripley.com.pe pmp')
+        queries.extend([
+            f'"{strong}" site:simple.ripley.com.pe pmp',
+            f'"{strong}" "Vendido por" site:simple.ripley.com.pe',
+            f'"{strong}" "Internet" site:simple.ripley.com.pe',
+            f'"{model}" "Internet" site:simple.ripley.com.pe pmp' if model else "",
+        ])
     elif domain == "mercadolibre.com.pe":
-        queries.append(f'"{strong}" site:mercadolibre.com.pe/p')
-        queries.append(f'"{strong}" site:mercadolibre.com.pe/up')
+        queries.extend([
+            f'"{strong}" site:mercadolibre.com.pe/p',
+            f'"{strong}" site:mercadolibre.com.pe/up',
+            f'"{strong}" "Modelo alfanumérico" site:mercadolibre.com.pe',
+            f'"{strong}" "Modelo detallado" site:mercadolibre.com.pe',
+        ])
     elif domain == "plazavea.com.pe":
-        queries.append(f'"{strong}" site:plazavea.com.pe "/p"')
+        queries.extend([
+            f'"{strong}" site:plazavea.com.pe "/p"',
+            f'"{strong}" "Vendido por" site:plazavea.com.pe',
+        ])
     elif domain == "oechsle.pe":
-        queries.append(f'"{strong}" site:oechsle.pe "/p"')
+        queries.extend([
+            f'"{strong}" site:oechsle.pe "/p"',
+            f'"{strong}" "Vendido por" site:oechsle.pe',
+        ])
     elif domain == "sodimac.com.pe":
         queries.append(f'"{strong}" site:sodimac.com.pe/sodimac-pe/articulo')
+    elif domain == "jbl.com.pe" and model:
+        queries.append(f'"{model}" site:jbl.com.pe')
     return list(dict.fromkeys(q for q in queries if q.strip()))
 
 
 def discover_additional_peru_pdps(
     identity: ProductIdentity,
     *,
-    limit_per_domain: int = 8,
+    limit_per_domain: int = 10,
     domains: tuple[str, ...] = PERU_MARKETPLACE_DOMAINS,
 ) -> list[str]:
-    """Return multiple validated-PDP candidates per Peru marketplace.
+    """Return multiple PDP candidates per Peru marketplace.
 
-    This is intentionally a coverage layer, not an identity decision layer. Every URL
-    is still fetched and validated later by the normal price parsers before becoming
-    an offer.
+    This layer maximizes coverage only. Every candidate is fetched and must still
+    pass the normal product-identity and price-evidence checks before becoming an
+    offer.
     """
     strong = _strong(identity)
     if not strong:
@@ -113,7 +135,6 @@ def discover_additional_peru_pdps(
                 break
         per_domain.append(found_domain)
 
-    # Interleave domains so Falabella/ML cannot consume the full page-fetch budget.
     merged: list[str] = []
     seen_all: set[str] = set()
     for index in range(limit_per_domain):

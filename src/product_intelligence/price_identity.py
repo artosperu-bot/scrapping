@@ -100,7 +100,6 @@ _PERU_PATH_HOSTS = {
 
 
 def is_peru_offer(row: PriceOffer) -> bool:
-    """Return True only for offers evidenced as belonging to the Peru market."""
     channel = _norm(row.channel)
     if channel in _PERU_CHANNELS:
         return True
@@ -145,11 +144,14 @@ def competitor_key(row: PriceOffer) -> str:
 def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:
     best: dict[tuple, PriceOffer] = {}
     for row in offers:
+        canonical = _canonical_url(row.url)
+        specific_pdp = bool((urlsplit(row.url).path or "").strip("/"))
+        locator = canonical if specific_pdp else (row.publication_id or row.sku or canonical)
         key = (
             _norm(row.channel),
             _norm(row.seller_display_name),
             _norm(row.part_number or row.model),
-            row.publication_id or row.sku or _canonical_url(row.url),
+            locator,
         )
         current = best.get(key)
         if current is None or row.confidence > current.confidence or (

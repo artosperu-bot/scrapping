@@ -190,6 +190,14 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
     return out[:limit]
 
 
+def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=12)->list[str]:
+    """Run an explicit query through the free providers while retaining identity validation."""
+    if not str(query or "").strip():
+        return []
+    ranked=_rank_candidates(_provider_search(str(query).strip(),timeout),identity,max(limit*2,limit))
+    return [row.url for row in ranked[:limit]]
+
+
 def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[SearchCandidate]:
     q=build_query(identity)
     if not q:return []

@@ -35,6 +35,9 @@ def test_discovery_prioritizes_peru_marketplaces_without_dropping_generic_source
         SimpleNamespace(url="https://simple.ripley.com.pe/jblq350wlblkam"),
         SimpleNamespace(url="https://another.example/jblq350wlblkam"),
     ]
+    # Isolate the legacy generic-ranking behavior. Directed Peru discovery has its
+    # own tests and must not make this unit test perform live targeted searches.
+    monkeypatch.setattr(price_discovery, "discover_targeted_peru_sources", lambda *_a, **_k: [])
     monkeypatch.setattr(price_discovery, "search_web", lambda *_a, **_k: candidates)
     urls = discover_price_sources(identity, limit=4)
     assert urls[:2] == [

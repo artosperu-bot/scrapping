@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, ui-modernization-v1 ]
     paths:
       - 'src/**'
       - 'tests/**'

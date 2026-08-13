@@ -4,6 +4,7 @@ import re
 from rapidfuzz import fuzz
 from .models import Evidence
 from .normalize import key_norm
+from .pdf_attribute_alignment import labels_compatible
 
 
 def _phrase(value: str) -> str:
@@ -16,17 +17,15 @@ def extract_target_evidence(text: str, targets: list[str] | None, source_url: st
                             match_level: str, confidence: float) -> list[Evidence]:
     """Extract label/value evidence only for fields the Excel explicitly asks for.
 
-    This does not invent category vocabulary. It compares page labels against arbitrary target
-    names produced by the workbook contract, so a future template can request a field that this
-    code has never seen before.
+    PDF sources additionally use the generic document-label alignment vocabulary. HTML behavior
+    remains unchanged so existing page extraction keeps its established precision contract.
     """
     wanted=[(str(t),_phrase(str(t))) for t in (targets or []) if len(_phrase(str(t)))>=3]
     if not wanted:
         return []
     lines=[re.sub(r'\s+',' ',x).strip() for x in (text or '').splitlines() if x.strip()]
-    out=[]; seen=set()
+    out=[]; seen=set(); is_pdf='pdf' in str(source_type or '').lower()
     for i,line in enumerate(lines):
-        # Explicit separators are safest for generic, previously unseen attributes.
         m=re.match(r'^(.{2,120}?)(?:\s*[:=]\s+|\s{2,})(.{1,300})$',line)
         left=m.group(1).strip() if m else line
         right=m.group(2).strip() if m else None
@@ -34,13 +33,13 @@ def extract_target_evidence(text: str, targets: list[str] | None, source_url: st
         for original,target in wanted:
             score=fuzz.ratio(nl,target)/100
             contained=(target in nl or nl in target) and min(len(nl),len(target))>=4
-            if score < .86 and not contained:
+            semantic_pdf=is_pdf and labels_compatible(original,left)
+            if score < .86 and not contained and not semantic_pdf:
                 continue
             value=right
-            selector='target_label_value'
-            if not value and score>=.94 and i+1<len(lines):
+            selector='target_pdf_alias' if semantic_pdf and score < .86 and not contained else 'target_label_value'
+            if not value and (score>=.94 or semantic_pdf) and i+1<len(lines):
                 nxt=lines[i+1]
-                # Do not use the next line when it itself looks like another short label.
                 if len(nxt)<=300 and not re.fullmatch(r'[\w áéíóúñÁÉÍÓÚÑ()/#.-]{2,80}:?',nxt):
                     value=nxt; selector='target_next_line'
                 elif re.search(r'\d|sí|si|yes|no|true|false|bluetooth|usb|ip\d',nxt,re.I):

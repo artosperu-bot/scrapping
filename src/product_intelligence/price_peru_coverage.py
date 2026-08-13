@@ -50,6 +50,18 @@ def _is_pdp(url: str, domain: str, strong: str) -> bool:
     return False
 
 
+def _deterministic_pdps(identity: ProductIdentity) -> list[str]:
+    """Safe official-store URLs whose route is a documented product identifier pattern.
+
+    These are only discovery candidates. They still have to fetch successfully and pass
+    the same identity/price validation as every search-discovered page.
+    """
+    rows: list[str] = []
+    if _compact(identity.brand) == "jbl" and identity.mpn:
+        rows.append(f"https://www.jbl.com.pe/{str(identity.mpn).strip()}.html")
+    return rows
+
+
 def _queries(identity: ProductIdentity, domain: str) -> list[str]:
     strong = _strong(identity)
     model = str(identity.model or identity.product_name or "").strip()
@@ -116,6 +128,10 @@ def discover_additional_peru_pdps(
     for domain in domains:
         found_domain: list[str] = []
         seen: set[str] = set()
+        for seed in _deterministic_pdps(identity):
+            if _host_matches(seed, domain) and _is_pdp(seed, domain, strong):
+                seen.add(seed)
+                found_domain.append(seed)
         for query in _queries(identity, domain):
             try:
                 urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12)

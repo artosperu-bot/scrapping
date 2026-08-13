@@ -7,8 +7,9 @@ import requests
 
 from .models import ProductIdentity
 from .price_adapters import parse_mercadolibre_payload, parse_shopify_product_payload, parse_vtex_payload
+from .price_channel_registry import build_channel_coverage, target_spec_for_url
 from .price_discovery import discover_price_sources, extract_page_offers
-from .price_history import save_price_run
+from .price_history import save_channel_coverage, save_price_run
 from .price_identity import competitor_key, dedupe_offers, filter_market_outliers, is_peru_offer
 from .price_models import PriceOffer
 from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
@@ -21,7 +22,7 @@ PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
 )
 
 STRICT_MARKETPLACE_CHANNELS = {"falabella","ripley","plazavea","oechsle","mercadolibre","sodimac","jblperu"}
-BROWSER_PRICE_CHANNELS = {"Ripley", "MercadoLibre", "JBL Perú"}
+BROWSER_PRICE_CHANNELS = {"Ripley", "MercadoLibre", "Mercado Libre", "JBL Perú"}
 
 
 def _query(identity: ProductIdentity) -> str:
@@ -29,12 +30,14 @@ def _query(identity: ProductIdentity) -> str:
 
 
 def _channel_from_url(url: str) -> str:
+    target = target_spec_for_url(url)
+    if target:
+        return target.label
     host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
     names = {
-        "falabella":"Falabella","ripley":"Ripley","plazavea":"PlazaVea","oechsle":"Oechsle",
-        "mercadolibre":"MercadoLibre","sodimac":"Sodimac","jbl":"JBL Perú","infiniti":"Infiniti",
-        "perudataconsult":"Peru Data","arteus":"Arteus","baetech":"BaeTech","panacompu":"Pana Compu",
-        "memorykings":"Memory Kings","estuyo":"EsTuyo","bigmarket":"Big Market","efe":"Efe",
+        "jbl":"JBL Perú","infiniti":"Infiniti","perudataconsult":"Peru Data","arteus":"Arteus",
+        "baetech":"BaeTech","panacompu":"Pana Compu","memorykings":"Memory Kings","estuyo":"EsTuyo",
+        "bigmarket":"Big Market",
     }
     for key, name in names.items():
         if key in host:
@@ -194,7 +197,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
     try:
         retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2))
-        emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="exact_identifier_retail")
+        emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
     except Exception as exc:
         emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
     try:
@@ -235,8 +238,12 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     valid, rejected_outliers = filter_market_outliers(trusted)
     if rejected_outliers:
         emit("quality", rejected_outliers=len(rejected_outliers), prices=[r.selling_price for r in rejected_outliers])
+
+    coverage = build_channel_coverage(valid)
     emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas peruanas validadas")
     save_price_run(output_root, valid)
+    save_channel_coverage(output_root, coverage)
+    emit("coverage", report=coverage)
     for row in valid:
         emit("offer", offer=row.to_dict())
     emit(
@@ -244,6 +251,8 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         offers=len(valid),
         channels=len({r.channel for r in valid}),
         sellers=len({competitor_key(r) for r in valid}),
+        target_channels_found=sum(1 for row in coverage["channels"] if row["status"] == "FOUND"),
+        individual_stores=coverage["individual_store_count"],
         best_by_currency=_best_by_currency(valid),
     )
     return valid

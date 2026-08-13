@@ -15,12 +15,33 @@ def _tokens(value: str | None) -> list[str]:
     return [t.lower() for t in re.findall(r"[A-Za-z]+|\d+", value or "") if len(t) > 1]
 
 
+def _model_generation_conflict(identity: ProductIdentity, evidence: dict) -> bool:
+    """Reject a declared exact identifier when the visible model generation contradicts it.
+
+    Marketplace data can be wrong: an offer may carry the requested MPN in one
+    attribute while its title/model clearly names another generation. Numeric model
+    tokens are a strong, general signal for that contradiction (e.g. Quantum 350 vs
+    Quantum 910). We only apply this when both sides expose numeric model tokens.
+    """
+    expected_model = identity.model or identity.product_name or ""
+    observed = " ".join(
+        str(evidence.get(key) or "")
+        for key in ("model", "title", "product_name")
+        if evidence.get(key)
+    )
+    expected_numbers = {t for t in _tokens(expected_model) if t.isdigit()}
+    observed_numbers = {t for t in _tokens(observed) if t.isdigit()}
+    return bool(expected_numbers and observed_numbers and not expected_numbers.issubset(observed_numbers))
+
+
 def score_offer_identity(identity: ProductIdentity, evidence: dict) -> tuple[float, str, list[str]]:
     conflicts: list[str] = []
     expected_mpn = _norm(identity.mpn)
     got_mpn = _norm(str(evidence.get("mpn") or evidence.get("part_number") or ""))
     if expected_mpn and got_mpn:
         if expected_mpn == got_mpn:
+            if _model_generation_conflict(identity, evidence):
+                return 0.0, "CONFLICT", ["model_generation_conflict"]
             return 1.0, "EXACT_MPN", []
         conflicts.append("mpn_conflict")
         return 0.0, "CONFLICT", conflicts
@@ -29,6 +50,8 @@ def score_offer_identity(identity: ProductIdentity, evidence: dict) -> tuple[flo
     got_ids = {_norm(str(evidence.get(k) or "")) for k in ("ean", "upc", "gtin") if evidence.get(k)}
     if expected_ids and got_ids:
         if expected_ids & got_ids:
+            if _model_generation_conflict(identity, evidence):
+                return 0.0, "CONFLICT", ["model_generation_conflict"]
             return 0.98, "EXACT_GTIN", []
         conflicts.append("gtin_conflict")
         return 0.0, "CONFLICT", conflicts
@@ -64,17 +87,28 @@ def _canonical_url(url: str) -> str:
     return urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), "", ""))
 
 
-_PERU_CHANNELS = {"plazavea", "oechsle", "mercadolibre", "falabella", "ripley"}
+_PERU_CHANNELS = {
+    "plazavea",
+    "oechsle",
+    "mercadolibre",
+    "falabella",
+    "ripley",
+    "sodimac",
+    "jblper",
+}
+
+
+def is_peru_offer(row: PriceOffer) -> bool:
+    """Return True only for offers evidenced as belonging to the Peru market."""
+    channel = _norm(row.channel)
+    if channel in _PERU_CHANNELS:
+        return True
+    host = (urlsplit(row.url).hostname or "").lower().removeprefix("www.")
+    return host.endswith(".pe") or host.endswith(".com.pe")
 
 
 def _market_rank(row: PriceOffer) -> int:
-    channel = _norm(row.channel)
-    if channel in _PERU_CHANNELS:
-        return 0
-    host = (urlsplit(row.url).hostname or "").lower()
-    if host == "mercadolibre.com.pe" or host.endswith(".com.pe") or host.endswith(".pe"):
-        return 0
-    return 1
+    return 0 if is_peru_offer(row) else 1
 
 
 def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:
@@ -92,8 +126,6 @@ def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:
         ):
             best[key] = row
 
-    # Local Peru offers are presented first. Price is only compared after currency,
-    # so XCD 180 is never treated as numerically "cheaper" than PEN 469 for ordering.
     return sorted(
         best.values(),
         key=lambda x: (_market_rank(x), -x.confidence, str(x.currency or "").upper(), x.selling_price, x.channel.lower()),

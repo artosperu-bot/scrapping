@@ -27,21 +27,22 @@ def test_jsonld_wrong_mpn_is_rejected():
     assert extract_page_offers(html, "https://shop.example/q360", identity) == []
 
 
-def test_discovery_prioritizes_peru_marketplaces_without_dropping_generic_sources(monkeypatch):
+def test_discovery_keeps_peru_sources_and_drops_foreign_generic_results(monkeypatch):
     identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
     candidates = [
         SimpleNamespace(url="https://stereoplus.ca/jblq350wlblkam"),
         SimpleNamespace(url="https://www.falabella.com.pe/product/jblq350wlblkam"),
         SimpleNamespace(url="https://simple.ripley.com.pe/jblq350wlblkam"),
         SimpleNamespace(url="https://another.example/jblq350wlblkam"),
+        SimpleNamespace(url="https://tienda-local.com.pe/jblq350wlblkam"),
     ]
-    # Isolate the legacy generic-ranking behavior. Directed Peru discovery has its
-    # own tests and must not make this unit test perform live targeted searches.
     monkeypatch.setattr(price_discovery, "discover_targeted_peru_sources", lambda *_a, **_k: [])
     monkeypatch.setattr(price_discovery, "search_web", lambda *_a, **_k: candidates)
-    urls = discover_price_sources(identity, limit=4)
-    assert urls[:2] == [
+    urls = discover_price_sources(identity, limit=5)
+    assert urls == [
         "https://www.falabella.com.pe/product/jblq350wlblkam",
         "https://simple.ripley.com.pe/jblq350wlblkam",
+        "https://tienda-local.com.pe/jblq350wlblkam",
     ]
-    assert "https://stereoplus.ca/jblq350wlblkam" in urls
+    assert "https://stereoplus.ca/jblq350wlblkam" not in urls
+    assert "https://another.example/jblq350wlblkam" not in urls

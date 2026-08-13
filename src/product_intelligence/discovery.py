@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -15,6 +16,7 @@ from .normalize import key_norm
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36"
 SEARCH_PROVIDER_DOMAINS={"google.com","bing.com","duckduckgo.com","brave.com","mojeek.com","yahoo.com"}
 MARKETPLACE_HINTS={"amazon.","ebay.","mercadolibre.","falabella.","ripley.","walmart.","bestbuy."}
+SEARCH_PROVIDER_WORKERS=3
 
 @dataclass
 class SearchCandidate:
@@ -154,9 +156,13 @@ def _descriptive_model(identity:ProductIdentity)->str:
 
 
 def _provider_search(query:str,timeout:int)->list[tuple[str,str,str]]:
+    providers=(_search_ddg,_search_bing,_search_bing_rss,_search_brave,_search_mojeek,_search_yahoo)
+    workers=max(1,min(SEARCH_PROVIDER_WORKERS,len(providers)))
+    with ThreadPoolExecutor(max_workers=workers,thread_name_prefix="search-provider") as pool:
+        batches=list(pool.map(lambda fn: fn(query,timeout),providers))
     rows=[]
-    rows.extend(_search_ddg(query,timeout));rows.extend(_search_bing(query,timeout));rows.extend(_search_bing_rss(query,timeout))
-    rows.extend(_search_brave(query,timeout));rows.extend(_search_mojeek(query,timeout));rows.extend(_search_yahoo(query,timeout))
+    for batch in batches:
+        rows.extend(batch)
     return rows
 
 

@@ -27,6 +27,22 @@ def test_jsonld_wrong_mpn_is_rejected():
     assert extract_page_offers(html, "https://shop.example/q360", identity) == []
 
 
+def test_generic_html_does_not_inherit_identity_from_recommendation_text():
+    identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
+    html = '''
+    <html><head>
+      <title>AURICULAR Gaming LENOVO LEGION H510 7.1 RGB - Memory Kings</title>
+      <meta property="product:price:amount" content="182.32">
+      <meta property="product:price:currency" content="PEN">
+    </head><body>
+      <h1>AURICULAR Gaming LENOVO LEGION H510 7.1 RGB</h1>
+      <section class="recommendations">También te puede gustar JBL Quantum 350 Wireless JBLQ350WLBLKAM</section>
+    </body></html>
+    '''
+    rows = extract_page_offers(html, "https://www.memorykings.pe/producto/371798/auricular-gaming-lenovo-legion-h510-7-1-rgb", identity, channel="Memory Kings")
+    assert rows == []
+
+
 def test_discovery_keeps_peru_sources_and_drops_foreign_generic_results(monkeypatch):
     identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
     candidates = [

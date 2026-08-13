@@ -11,7 +11,7 @@ from .price_discovery import discover_price_sources, extract_page_offers
 from .price_history import save_price_run
 from .price_identity import dedupe_offers, is_peru_offer
 from .price_models import PriceOffer
-from .price_peru_coverage import discover_additional_peru_pdps
+from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
 from .web_fetch import fetch_page
 
 PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
@@ -30,7 +30,7 @@ def _query(identity: ProductIdentity) -> str:
 
 def _channel_from_url(url: str) -> str:
     host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
-    names = {"falabella":"Falabella","ripley":"Ripley","plazavea":"PlazaVea","oechsle":"Oechsle","mercadolibre":"MercadoLibre","sodimac":"Sodimac","jbl":"JBL Perú"}
+    names = {"falabella":"Falabella","ripley":"Ripley","plazavea":"PlazaVea","oechsle":"Oechsle","mercadolibre":"MercadoLibre","sodimac":"Sodimac","jbl":"JBL Perú","infiniti":"Infiniti","perudataconsult":"Peru Data","arteus":"Arteus","baetech":"BaeTech","panacompu":"Pana Compu"}
     for key, name in names.items():
         if key in host:
             return name
@@ -61,7 +61,8 @@ def _mercadolibre_queries(identity: ProductIdentity) -> list[str]:
 def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[PriceOffer]:
     rows: list[PriceOffer] = []
     errors: list[Exception] = []
-    for q in _mercadolibre_queries(identity):
+    queries = _mercadolibre_queries(identity)
+    for q in queries:
         try:
             url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}&limit=50"
             response = requests.get(url, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
@@ -71,7 +72,7 @@ def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[Pric
             errors.append(exc)
     if rows:
         return dedupe_offers(rows)
-    if errors and len(errors) == len(_mercadolibre_queries(identity)):
+    if errors and len(errors) == len(queries):
         raise errors[0]
     return []
 
@@ -100,11 +101,15 @@ def _best_by_currency(offers: list[PriceOffer]) -> dict[str, float]:
 
 
 def _merge_sources(*groups: list[str], limit: int) -> list[str]:
+    """Interleave source families so one marketplace cannot consume the fetch budget."""
     merged: list[str] = []
     seen: set[str] = set()
-    for group in groups:
-        for url in group:
-            clean = str(url or "").strip()
+    max_len = max((len(group) for group in groups), default=0)
+    for index in range(max_len):
+        for group in groups:
+            if index >= len(group):
+                continue
+            clean = str(group[index] or "").strip()
             if not clean or clean in seen:
                 continue
             seen.add(clean)
@@ -133,7 +138,7 @@ def _parse_page_with_dynamic_retry(url: str, identity: ProductIdentity, channel:
     return html, page_rows
 
 
-def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_event=None, max_sources: int = 40) -> list[PriceOffer]:
+def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_event=None, max_sources: int = 48) -> list[PriceOffer]:
     def emit(event_type: str, **payload):
         if on_event:
             on_event({"type": event_type, "identity": identity.model_dump(), **payload})
@@ -156,27 +161,32 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     except Exception as exc:
         emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
 
-    additional: list[str] = []
+    marketplace_sources: list[str] = []
+    retail_sources: list[str] = []
     base_sources: list[str] = []
     try:
-        additional = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
-        emit("source", channel="peru_directed", status="ok", offers=0, urls=len(additional), method="targeted_pdp")
+        marketplace_sources = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
+        emit("source", channel="peru_directed", status="ok", offers=0, urls=len(marketplace_sources), method="targeted_pdp")
     except Exception as exc:
         emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
+    try:
+        retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2))
+        emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="exact_mpn_retail")
+    except Exception as exc:
+        emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
     try:
         base_sources = discover_price_sources(identity, limit=max_sources)
         emit("source", channel="web", status="ok", offers=0, urls=len(base_sources), method="generic_peru")
     except Exception as exc:
         emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
 
-    sources = _merge_sources(additional, base_sources, limit=max_sources)
+    sources = _merge_sources(marketplace_sources, retail_sources, base_sources, limit=max_sources)
     emit("status", stage="validating", message=f"Revisando {len(sources)} publicaciones web de Perú")
     for pos, url in enumerate(sources, 1):
         channel = _channel_from_url(url)
         try:
             emit("page", url=url, channel=channel, position=pos, total=len(sources), status="fetching")
             html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
-            final_url = url
             if "vtex" in html.lower() or "vteximg" in html.lower() or "/api/catalog_system/" in html.lower():
                 try:
                     vtex_rows = _try_vtex(url, identity, channel)
@@ -186,7 +196,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
                 except Exception as exc:
                     emit("source", channel=channel, status="error", error=f"vtex: {type(exc).__name__}: {exc}")
             offers.extend(page_rows)
-            emit("page", url=final_url, channel=channel, status="parsed", offers=len(page_rows))
+            emit("page", url=url, channel=channel, status="parsed", offers=len(page_rows))
         except Exception as exc:
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
 

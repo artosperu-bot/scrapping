@@ -57,3 +57,12 @@ def test_modern_shell_has_global_status_and_dashboard_state():
     assert "Productos detectados" in source
     assert "Archivo de trabajo" in source
     assert "Carpeta de salida" in source
+
+
+def test_windows_build_smokes_the_actual_modern_shell_before_packaging():
+    workflow = (ROOT / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
+    assert "Smoke modern desktop shell" in workflow
+    assert "from product_intelligence.modern_desktop import App" in workflow
+    assert "app._active_workspace == 'dashboard'" in workflow
+    assert "app._workspace_tabs" in workflow
+    assert "app.destroy()" in workflow

@@ -90,10 +90,9 @@ _PERU_CHANNELS = {
     "jblper",
 }
 
-# Some Peru retailers use a global/non-.pe hostname. Treat those as Peru only when
-# there is additional market evidence (PEN and/or an explicit /peru/ route).
 _PERU_RETAIL_HOSTS = {
     "perudataconsult.net",
+    "bigmarketperu.com",
 }
 _PERU_PATH_HOSTS = {
     "panacompu.com",
@@ -119,6 +118,28 @@ def is_peru_offer(row: PriceOffer) -> bool:
 
 def _market_rank(row: PriceOffer) -> int:
     return 0 if is_peru_offer(row) else 1
+
+
+def _seller_key(value: str | None) -> str:
+    key = _norm(value)
+    for suffix in ("perusac", "perueirl", "perusrl", "sac", "eirl", "srl"):
+        if key.endswith(suffix) and len(key) > len(suffix) + 2:
+            return key[:-len(suffix)]
+    return key
+
+
+def competitor_key(row: PriceOffer) -> str:
+    tax_id = _norm(row.seller_tax_id)
+    if tax_id:
+        return f"tax:{tax_id}"
+    for value in (row.seller_legal_name, row.seller_display_name):
+        key = _seller_key(value)
+        if key:
+            return f"seller:{key}"
+    channel = _seller_key(row.channel)
+    if channel:
+        return f"channel:{channel}"
+    return f"url:{_canonical_url(row.url)}"
 
 
 def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:

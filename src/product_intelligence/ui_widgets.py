@@ -3,6 +3,7 @@ from pathlib import Path
 from tkinter import ttk
 from PIL import Image,ImageSequence,ImageTk
 from .ui_status import StatusCard
+from .ui_logs import LogNotebook
 
 def desktop_asset_path(name,*,frozen_root=None):
     root=frozen_root or getattr(sys,'_MEIPASS',None)
@@ -28,4 +29,7 @@ class AnimatedStateGif(ttk.Label):
         f=self.frames[self.i%len(self.frames)]; self.i+=1; self.configure(image=f,text=''); self.image=f; self.job=self.after(90,self._tick)
 
 class ProcessStatusCard(StatusCard):
+    pass
+
+class SessionLogNotebook(LogNotebook):
     pass

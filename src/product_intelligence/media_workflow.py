@@ -71,16 +71,8 @@ def _candidate_urls(identity: ProductIdentity, manual_urls: list[str], auto_sear
 
 
 def _looks_like_official_catalog_asset(row: dict) -> bool:
-    """Recognize product-catalog assets from validated manufacturer PDPs.
-
-    Some Salesforce Commerce Cloud/Demandware storefronts expose product gallery
-    images through master-catalog URLs without useful DOM gallery classes or alt
-    text. This deliberately does not match generic CDN/page assets.
-    """
-    hay = " ".join(
-        str(row.get(key) or "")
-        for key in ("url", "source", "alt")
-    ).lower()
+    """Recognize product-catalog assets from validated manufacturer PDPs."""
+    hay = " ".join(str(row.get(key) or "") for key in ("url", "source", "alt")).lower()
     return bool(
         re.search(
             r"sites[-_/ ]mastercatalog|sites[-_/ ]master[-_/ ]catalog|demandware\.static.*master|/mastercatalog/|/master[-_/]catalog/",
@@ -108,12 +100,7 @@ def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
     if official_page and role in {"product_gallery", "product_video"}:
         return confidence >= 0.84
 
-    if (
-        official_page
-        and media_type == "image"
-        and role == "unknown_image"
-        and _looks_like_official_catalog_asset(row)
-    ):
+    if official_page and media_type == "image" and role == "unknown_image" and _looks_like_official_catalog_asset(row):
         return confidence >= 0.84
 
     return confidence >= 0.95
@@ -142,11 +129,13 @@ def run_media_product(
     for page_url, discovery_source in urls:
         try:
             emit("page", url=page_url, source=discovery_source, status="fetching")
+            # Request/HTML first preserves complete catalog markup on sites such as
+            # Salesforce Commerce Cloud. Playwright remains available as fallback
+            # when the normal request path cannot fetch the page.
             fetched = fetch_page(
                 page_url,
                 timeout=30,
                 browser_fallback=True,
-                prefer_browser=True,
                 activate_lazy_media=True,
             )
             final_url = str(getattr(fetched, "final_url", None) or page_url)

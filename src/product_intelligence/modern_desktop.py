@@ -9,7 +9,7 @@ from .ui_widgets import AnimatedStateGif
 
 class App(PriceApp):
     def __init__(self):
-        self.process_registry=ProcessRegistry(); self.process_log_tabs={}; self._media_session_id=None; self._price_session_id=None; self._excel_session_id=None; self._excel_worker_thread=None; self._process_events=queue.Queue()
+        self.process_registry=ProcessRegistry(); self.process_log_tabs={}; self._media_session_id=None; self._price_session_id=None; self._excel_session_id=None; self._excel_worker_thread=None; self._process_events=queue.Queue(); self.price_state_gif=None; self.excel_state_gif=None
         super().__init__(); configure_business_theme(self); self.title('Product Intelligence'); self.geometry('1440x900'); self.after(120,self._drain_process_events)
     def _build_logs_tab(self):
         self.logs_tab=ttk.Frame(self.notebook,padding=10); self.notebook.add(self.logs_tab,text='6. Logs / auditoría')
@@ -20,6 +20,12 @@ class App(PriceApp):
         frame=ttk.Frame(self.log_notebook,padding=5); text=tk.Text(frame,wrap='word',font=('Consolas',9),relief='flat'); text.pack(fill='both',expand=True); self.log_notebook.add(frame,text=label); self.process_log_tabs[key]=text; return text
     def start_process_session(self,kind,label,total=1):
         s=self.process_registry.start(kind,label,total); self._add_log_tab(s.session_id,f'{kind} #{s.session_id.rsplit("-",1)[-1]}'); return s.session_id
+    def emit(self,msg):
+        self.q.put(str(msg))
+    def run(self):
+        return super().run()
+    def _drain_process_events(self):
+        self.after(120,self._drain_process_events)
     def _build_media_tab(self):
         MediaBaseApp._build_media_tab(self)
         gallery=self.media_canvas.master; gallery.pack_forget(); box=ttk.LabelFrame(self.media_tab,text='Proceso actual',padding=8); box.pack(fill='x',pady=(8,0))

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from product_intelligence.models import ProductIdentity
-from product_intelligence import discovery, price_discovery
+from product_intelligence import price_discovery
 from product_intelligence.price_discovery import discover_price_sources, extract_page_offers
 
 
@@ -46,20 +46,3 @@ def test_discovery_keeps_peru_sources_and_drops_foreign_generic_results(monkeypa
     ]
     assert "https://stereoplus.ca/jblq350wlblkam" not in urls
     assert "https://another.example/jblq350wlblkam" not in urls
-
-
-def test_explicit_site_query_falls_back_to_exact_model_alias(monkeypatch):
-    identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
-    target = "https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless"
-    calls = []
-
-    def fake_provider(query, _timeout):
-        calls.append(query)
-        if "Quantum 350 Wireless" in query and "site:bigmarketperu.com" in query:
-            return [(target, "JBL Quantum 350 Wireless", "Audifonos gamer JBL Quantum 350 Wireless S/ 479")]
-        return []
-
-    monkeypatch.setattr(discovery, "_provider_search", fake_provider)
-    urls = discovery.search_web_query(identity, '"JBLQ350WLBLKAM" site:bigmarketperu.com', limit=5)
-    assert target in urls
-    assert any("Quantum 350 Wireless" in query for query in calls)

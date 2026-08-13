@@ -1,3 +1,5 @@
+from product_intelligence.models import ProductIdentity
+from product_intelligence import price_peru_coverage
 from product_intelligence.price_channel_registry import (
     TARGET_CHANNELS,
     build_channel_coverage,
@@ -51,3 +53,19 @@ def test_channel_coverage_lists_each_individual_store_instead_of_boolean_yes():
     assert report["individual_stores"][0]["price"] == 233.5
     assert report["individual_stores"][0]["stock"] == 2
     assert report["individual_stores"][1]["price"] == 349
+
+
+def test_individual_retailer_discovery_falls_back_to_brand_model_without_weakening_final_identity(monkeypatch):
+    identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
+    calls = []
+
+    def fake_search(search_identity, query, **_kwargs):
+        calls.append((search_identity.mpn, query))
+        if search_identity.mpn is None and "site:bigmarketperu.com" in query and "Quantum 350 Wireless" in query:
+            return ["https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless"]
+        return []
+
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    urls = price_peru_coverage.discover_general_peru_retailers(identity, limit=5)
+    assert urls == ["https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless"]
+    assert any(mpn is None and "site:bigmarketperu.com" in query for mpn, query in calls)

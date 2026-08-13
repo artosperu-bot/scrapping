@@ -89,7 +89,7 @@ def test_same_real_seller_has_same_competitor_key_across_channels():
 
 def test_dedupe_prefers_api_over_structured_representation_of_same_url():
     url = "https://arteus.pe/products/jbl-quantum-350-wireless"
-    jsonld = offer("Arteus", "Arteus", 355, url, "structured", "jsonld")
+    jsonld = offer("Arteus", None, 355, url, "structured", "jsonld")
     api = offer("Arteus", "Arteus", 355, url, "api", "shopify_product_json", "9016")
     rows = dedupe_offers([jsonld, api])
     assert len(rows) == 1

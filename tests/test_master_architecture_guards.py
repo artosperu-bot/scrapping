@@ -3,6 +3,7 @@ from product_intelligence.identity import compare_identity
 from product_intelligence.models import Evidence, ProductIdentity
 from product_intelligence.record_builder import build_record_strict
 from product_intelligence.ui_process import ProcessRegistry
+from product_intelligence.ui_widgets import desktop_asset_path
 
 
 def ev(attribute, value, source="https://shop.example/product"):
@@ -62,3 +63,11 @@ def test_desktop_process_terminal_states_are_distinct():
     registry.apply(bad.session_id, {"type": "fatal", "error": "failure"})
     assert registry.get(ok.session_id).state == "complete"
     assert registry.get(bad.session_id).state == "error"
+
+
+def test_desktop_asset_paths_cover_source_and_frozen_modes(tmp_path):
+    source = desktop_asset_path("process_running.gif")
+    frozen = desktop_asset_path("process_complete.gif", frozen_root=tmp_path)
+    assert source.parent.name == "assets"
+    assert source.parent.parent.name == "product_intelligence"
+    assert frozen == tmp_path / "product_intelligence" / "assets" / "process_complete.gif"

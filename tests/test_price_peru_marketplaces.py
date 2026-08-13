@@ -26,6 +26,42 @@ def test_targeted_peru_discovery_queries_priority_domains(monkeypatch):
     assert any("simple.ripley.com.pe" in u for u in urls)
 
 
+def test_targeted_peru_discovery_rejects_category_pages_even_if_they_mention_mpn(monkeypatch):
+    def fake_query(identity, query, limit=6, timeout=12):
+        if "falabella.com.pe" in query:
+            return [
+                "https://linio.falabella.com.pe/linio-pe/category/cat12940610/Audifonos-gamer?f.product.brandName=jbl",
+                "https://www.falabella.com.pe/falabella-pe/product/121511774/Audifonos-Gamer-JBL-Quantum-350-Wireless-Negro-JBLQ350WLBLKAM/121511775",
+            ]
+        if "simple.ripley.com.pe" in query:
+            return [
+                "https://simple.ripley.com.pe/tecnologia/computacion-gamer/audifonos-gamer",
+                "https://simple.ripley.com.pe/audifonos-gamer-inalambricos-quantum-350-wireless-jblq350wlblkam-pmp00003308882",
+            ]
+        return []
+
+    monkeypatch.setattr("product_intelligence.price_discovery.search_web_query", fake_query)
+    urls = discover_targeted_peru_sources(_identity(), limit_per_domain=4)
+    assert not any("/category/" in u for u in urls)
+    assert not any("/tecnologia/computacion-gamer/audifonos-gamer" in u for u in urls)
+    assert any("/product/" in u for u in urls if "falabella.com.pe" in u)
+    assert any("pmp00003308882" in u for u in urls if "ripley.com.pe" in u)
+
+
+def test_category_page_cannot_be_accepted_as_price_offer():
+    html = """
+    <html><head><title>Audífonos gamer JBL | Linio Perú</title></head>
+    <body>JBLQ350WLBLKAM JBL Quantum 350 Wireless S/ 699.90</body></html>
+    """
+    rows = extract_page_offers(
+        html,
+        "https://linio.falabella.com.pe/linio-pe/category/cat12940610/Audifonos-gamer?f.product.brandName=jbl",
+        _identity(),
+        channel="Falabella",
+    )
+    assert rows == []
+
+
 def test_extract_falabella_marketplace_offer_with_seller_and_legal_identity():
     html = """
     <html><head><title>Audifonos Gamer JBL Quantum 350 Wireless JBLQ350WLBLKAM</title></head>

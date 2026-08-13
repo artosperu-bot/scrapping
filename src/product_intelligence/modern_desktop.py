@@ -9,7 +9,7 @@ from .ui_widgets import AnimatedStateGif
 
 class App(PriceApp):
     def __init__(self):
-        self.process_registry=ProcessRegistry(); self.process_log_tabs={}; self._media_session_id=None; self._price_session_id=None; self._excel_session_id=None; self._excel_worker_thread=None; self._process_events=queue.Queue(); self.price_state_gif=None; self.excel_state_gif=None
+        self.process_registry=ProcessRegistry(); self.process_log_tabs={}; self._media_session_id=None; self._price_session_id=None; self._excel_session_id=None; self._ui_thread=threading.get_ident(); self._session_logs=queue.Queue(); self._excel_error=False; self._last_price_status=''; self._last_media_status=''; self.price_state_gif=None; self.excel_state_gif=None
         super().__init__(); configure_business_theme(self); self.title('Product Intelligence'); self.geometry('1440x900'); self.after(120,self._drain_process_events)
     def _build_logs_tab(self):
         self.logs_tab=ttk.Frame(self.notebook,padding=10); self.notebook.add(self.logs_tab,text='6. Logs / auditoría')
@@ -21,12 +21,15 @@ class App(PriceApp):
     def start_process_session(self,kind,label,total=1):
         s=self.process_registry.start(kind,label,total); self._add_log_tab(s.session_id,f'{kind} #{s.session_id.rsplit("-",1)[-1]}'); return s.session_id
     def emit(self,msg):
-        self.q.put(str(msg))
+        text=str(msg); self.q.put(text); self._session_logs.put((threading.get_ident(),text))
     def _build_run_tab(self):
         super()._build_run_tab(); tab=self.runbtn.master.master; box=ttk.LabelFrame(tab,text='Estado del proceso',padding=8); box.pack(fill='x',pady=(8,0),before=self.runbtn.master)
         self.excel_state_gif=AnimatedStateGif(box); self.excel_state_gif.pack(side='right',padx=(12,0)); left=ttk.Frame(box); left.pack(side='left',fill='both',expand=True); self.excel_process_status=tk.StringVar(value='Listo para ejecutar'); ttk.Label(left,textvariable=self.excel_process_status,font=('Segoe UI Semibold',10)).pack(anchor='w'); self.excel_process_bar=ttk.Progressbar(left,mode='indeterminate'); self.excel_process_bar.pack(fill='x',pady=(8,0)); self.excel_state_gif.set_state('idle')
     def run(self):
-        return super().run()
+        result=super().run()
+        if str(self.runbtn.cget('state'))=='disabled' and self._excel_session_id is None:
+            total=max(1,len(self.product_rows)); self._excel_session_id=self.start_process_session('Excel',f'{total} producto(s)',total); self._excel_error=False; self.excel_process_status.set('Scraping y generación de Excel en proceso'); self.excel_process_bar.configure(mode='indeterminate'); self.excel_process_bar.start(10); self.excel_state_gif.set_state('running')
+        return result
     def _drain_process_events(self):
         self.after(120,self._drain_process_events)
     def _build_media_tab(self):

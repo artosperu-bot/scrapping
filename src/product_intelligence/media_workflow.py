@@ -70,6 +70,26 @@ def _candidate_urls(identity: ProductIdentity, manual_urls: list[str], auto_sear
     return out[:max_pages]
 
 
+def _looks_like_official_catalog_asset(row: dict) -> bool:
+    """Recognize product-catalog assets from validated manufacturer PDPs.
+
+    Some Salesforce Commerce Cloud/Demandware storefronts expose product gallery
+    images through master-catalog URLs without useful DOM gallery classes or alt
+    text. This deliberately does not match generic CDN/page assets.
+    """
+    hay = " ".join(
+        str(row.get(key) or "")
+        for key in ("url", "source", "alt")
+    ).lower()
+    return bool(
+        re.search(
+            r"sites[-_/ ]mastercatalog|sites[-_/ ]master[-_/ ]catalog|demandware\.static.*master|/mastercatalog/|/master[-_/]catalog/",
+            hay,
+            re.I,
+        )
+    )
+
+
 def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
     """Apply stricter confidence off-site while preserving validated official galleries."""
     media_type = str(row.get("media_type") or "").lower()
@@ -86,6 +106,14 @@ def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
     confidence = float(row.get("confidence") or 0.0)
 
     if official_page and role in {"product_gallery", "product_video"}:
+        return confidence >= 0.84
+
+    if (
+        official_page
+        and media_type == "image"
+        and role == "unknown_image"
+        and _looks_like_official_catalog_asset(row)
+    ):
         return confidence >= 0.84
 
     return confidence >= 0.95

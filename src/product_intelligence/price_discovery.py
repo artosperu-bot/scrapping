@@ -70,7 +70,6 @@ def _compact(value: str) -> str:
 
 
 def _is_target_product_detail_url(url: str, domain: str, strong: str) -> bool:
-    """Require a real PDP for directed marketplace discovery, never category/search pages."""
     parsed = urlparse(url)
     path = (parsed.path or "").lower()
     if any(marker in path for marker in ("/category/", "/categoria/", "/search/", "/buscar/")):
@@ -94,38 +93,51 @@ def _is_known_target_listing_url(url: str, identity: ProductIdentity) -> bool:
     return False
 
 
+def _targeted_queries(domain: str, strong: str) -> list[str]:
+    queries = [f'"{strong}" site:{domain}']
+    if domain == "falabella.com.pe":
+        queries.append(f'"{strong}" site:falabella.com.pe/falabella-pe/product')
+    elif domain == "simple.ripley.com.pe":
+        queries.append(f'"{strong}" site:simple.ripley.com.pe pmp')
+    elif domain == "sodimac.com.pe":
+        queries.append(f'"{strong}" site:sodimac.com.pe/sodimac-pe/articulo')
+    return queries
+
+
 def discover_targeted_peru_sources(
     identity: ProductIdentity,
     *,
     limit_per_domain: int = 5,
     domains: tuple[str, ...] = TARGETED_PERU_DOMAINS,
 ) -> list[str]:
-    """Discover exact-product PDPs in priority Peru channels, interleaved by channel."""
     strong = _identity_query(identity)
     if not strong:
         return []
     per_domain: list[list[str]] = []
     for domain in domains:
-        query = f'"{strong}" site:{domain}'
-        try:
-            found = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
-        except Exception:
-            found = []
         clean_rows: list[str] = []
         seen_local: set[str] = set()
-        for url in found:
-            clean = str(url or "").strip()
-            if (
-                clean.startswith(("http://", "https://"))
-                and _host_matches(clean, domain)
-                and _is_target_product_detail_url(clean, domain, strong)
-                and clean not in seen_local
-            ):
-                seen_local.add(clean)
-                clean_rows.append(clean)
+        for query in _targeted_queries(domain, strong):
+            try:
+                found = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
+            except Exception:
+                found = []
+            for url in found:
+                clean = str(url or "").strip()
+                if (
+                    clean.startswith(("http://", "https://"))
+                    and _host_matches(clean, domain)
+                    and _is_target_product_detail_url(clean, domain, strong)
+                    and clean not in seen_local
+                ):
+                    seen_local.add(clean)
+                    clean_rows.append(clean)
+                    if len(clean_rows) >= limit_per_domain:
+                        break
+            if len(clean_rows) >= limit_per_domain:
+                break
         per_domain.append(clean_rows)
 
-    # Round-robin prevents five Falabella listings from hiding Ripley/JBL/Sodimac.
     urls: list[str] = []
     seen: set[str] = set()
     for index in range(limit_per_domain):
@@ -155,7 +167,6 @@ def discover_price_sources(
         url = str(getattr(candidate, "url", "") or "").strip()
         if not url.startswith(("http://", "https://")) or url in seen:
             continue
-        # A known Peru marketplace listing/category must never become a price source.
         if _is_known_target_listing_url(url, identity):
             continue
         seen.add(url)
@@ -240,7 +251,7 @@ def _peru_marketplace_html_offer(
         normal = re.search(r"Normal\s*S\s*/\s*([0-9][0-9.,]*)", page_text, re.I)
         selling = _money(internet.group(1)) if internet else None
         list_price = _money(normal.group(1)) if normal else None
-    elif "falabella.com.pe" in host or "sodimac.com.pe" in host:
+    elif "falabella.com.pe" in host:
         lower = page_text.lower()
         start = lower.find("vendido por")
         segment = page_text[start : start + 1200] if start >= 0 else page_text[:2500]
@@ -249,6 +260,17 @@ def _peru_marketplace_html_offer(
         if values:
             selling = values[0]
             list_price = values[1] if len(values) > 1 and values[1] >= values[0] else None
+    elif "sodimac.com.pe" in host:
+        lower = page_text.lower()
+        start = lower.find("vendido por")
+        segment = page_text[start : start + 1200] if start >= 0 else page_text[:2500]
+        values = [_money(v) for v in re.findall(r"S\s*/\s*([0-9][0-9.,]*)", segment, re.I)]
+        values = [v for v in values if v and v > 0]
+        # Current Sodimac PDPs can expose only a CMR coupon amount (e.g. S/100)
+        # while omitting the product price. Never promote that lone amount to price.
+        if len(values) >= 2:
+            selling = values[0]
+            list_price = values[1] if values[1] >= values[0] else None
     elif "jbl.com.pe" in host:
         m = re.search(r"S\s*/\s*([0-9][0-9.,]*)", page_text, re.I)
         selling = _money(m.group(1)) if m else None
@@ -278,8 +300,6 @@ def _peru_marketplace_html_offer(
 
 
 def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel: str | None = None) -> list[PriceOffer]:
-    # Never parse a category/search/listing as a product offer, even if it happens to
-    # contain the exact Part Number in one of many cards.
     if _is_known_target_listing_url(url, identity):
         return []
 
@@ -369,5 +389,19 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
         match_price = re.search(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,6}(?:[.,][0-9]{1,2})?)", page_text, re.I)
         meta_price = _money(match_price.group(1)) if match_price else None
     if meta_price and meta_price > 0:
-        return [PriceOffer(part_number=identity.mpn, brand=identity.brand, model=identity.model or identity.product_name, channel=default_channel, seller_display_name=None, selling_price=meta_price, currency=meta_currency, url=url, confidence=min(score, 0.95), identity_match=match, source_type="web", source_method="html", evidence=base_evidence)]
+        return [PriceOffer(
+            part_number=identity.mpn,
+            brand=identity.brand,
+            model=identity.model or identity.product_name,
+            channel=default_channel,
+            seller_display_name=None,
+            selling_price=meta_price,
+            currency=meta_currency,
+            url=url,
+            confidence=min(score, 0.95),
+            identity_match=match,
+            source_type="web",
+            source_method="html",
+            evidence=base_evidence,
+        )]
     return []

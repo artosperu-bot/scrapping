@@ -6,7 +6,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
-from .discovery import search_web
+from .discovery import search_web, search_web_query
 from .models import ProductIdentity
 from .price_identity import score_offer_identity
 from .price_models import PriceOffer
@@ -14,15 +14,39 @@ from .price_models import PriceOffer
 
 PERU_PRICE_DOMAINS = (
     "falabella.com.pe",
-    "ripley.com.pe",
+    "simple.ripley.com.pe",
     "mercadolibre.com.pe",
     "plazavea.com.pe",
     "oechsle.pe",
+    "sodimac.com.pe",
+    "jbl.com.pe",
+)
+
+# These channels do not currently have a stable public structured endpoint in the
+# engine, so they receive deterministic domain-targeted discovery before generic web
+# discovery. The query is still built from the exact product identity, never a fixed SKU.
+TARGETED_PERU_DOMAINS = (
+    "falabella.com.pe",
+    "simple.ripley.com.pe",
+    "sodimac.com.pe",
+    "jbl.com.pe",
 )
 
 
 def _channel(url: str) -> str:
     host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
+    names = {
+        "falabella": "Falabella",
+        "ripley": "Ripley",
+        "plazavea": "PlazaVea",
+        "oechsle": "Oechsle",
+        "mercadolibre": "MercadoLibre",
+        "sodimac": "Sodimac",
+        "jbl": "JBL Perú",
+    }
+    for key, value in names.items():
+        if key in host:
+            return value
     first = host.split(".")[0] if host else "web"
     return first.replace("-", " ").title()
 
@@ -33,6 +57,41 @@ def _priority_rank(url: str, priority_domains: tuple[str, ...]) -> tuple[int, in
         if host == domain or host.endswith("." + domain):
             return (0, index)
     return (1, len(priority_domains))
+
+
+def _host_matches(url: str, domain: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == domain or host.endswith("." + domain)
+
+
+def _identity_query(identity: ProductIdentity) -> str:
+    return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
+
+
+def discover_targeted_peru_sources(
+    identity: ProductIdentity,
+    *,
+    limit_per_domain: int = 5,
+    domains: tuple[str, ...] = TARGETED_PERU_DOMAINS,
+) -> list[str]:
+    """Discover exact-product pages in priority Peru channels independently of generic ranking."""
+    strong = _identity_query(identity)
+    if not strong:
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for domain in domains:
+        query = f'"{strong}" site:{domain}'
+        try:
+            found = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
+        except Exception:
+            found = []
+        for url in found:
+            clean = str(url or "").strip()
+            if clean.startswith(("http://", "https://")) and _host_matches(clean, domain) and clean not in seen:
+                seen.add(clean)
+                urls.append(clean)
+    return urls
 
 
 def discover_price_sources(
@@ -78,6 +137,88 @@ def _money(value):
     return None
 
 
+def _seller_from_text(text: str) -> str | None:
+    patterns = [
+        r"Vendido\s+por\s*:\s*([A-Za-zÁÉÍÓÚÑáéíóúñ0-9._& -]{2,70}?)(?=\s+(?:Normal|Internet|Seller Info|Producto publicado|Realiza|Cumple|Ofrece|No existe|S/|Código|Cód\.|$))",
+        r"Vendido\s+por\s+([A-Za-zÁÉÍÓÚÑáéíóúñ0-9._& -]{2,70}?)(?=\s+(?:Seller Info|Producto publicado|Realiza|Cumple|Ofrece|No existe|S/|Código|Cód\.|$))",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.I)
+        if m:
+            return m.group(1).strip(" :-")
+    return None
+
+
+def _legal_identity_from_text(text: str) -> tuple[str | None, str | None]:
+    ruc_m = re.search(r"\bRUC\s*:?[ ]*(\d{11})\b", text, re.I)
+    legal_m = re.search(
+        r"\b([A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑ0-9 .&-]{2,80}?(?:S\.?A\.?C\.?|E\.?I\.?R\.?L\.?|S\.?R\.?L\.?))\b",
+        text,
+    )
+    return (legal_m.group(1).strip() if legal_m else None, ruc_m.group(1) if ruc_m else None)
+
+
+def _peru_marketplace_html_offer(
+    page_text: str,
+    url: str,
+    identity: ProductIdentity,
+    channel: str,
+    evidence: dict,
+) -> list[PriceOffer]:
+    score, match, conflicts = score_offer_identity(identity, evidence)
+    if score < 0.95 or conflicts:
+        return []
+
+    host = (urlparse(url).hostname or "").lower()
+    seller = _seller_from_text(page_text)
+    legal_name, tax_id = _legal_identity_from_text(page_text)
+    selling = None
+    list_price = None
+
+    if "ripley.com.pe" in host:
+        internet = re.search(r"Internet\s*S\s*/\s*([0-9][0-9.,]*)", page_text, re.I)
+        normal = re.search(r"Normal\s*S\s*/\s*([0-9][0-9.,]*)", page_text, re.I)
+        selling = _money(internet.group(1)) if internet else None
+        list_price = _money(normal.group(1)) if normal else None
+    elif "falabella.com.pe" in host or "sodimac.com.pe" in host:
+        # Marketplace PDPs place seller/legal identity immediately before the active
+        # price block. Restrict parsing to that block to avoid coupons/navigation prices.
+        lower = page_text.lower()
+        start = lower.find("vendido por")
+        segment = page_text[start : start + 1200] if start >= 0 else page_text[:2500]
+        values = [_money(v) for v in re.findall(r"S\s*/\s*([0-9][0-9.,]*)", segment, re.I)]
+        values = [v for v in values if v and v > 0]
+        if values:
+            selling = values[0]
+            list_price = values[1] if len(values) > 1 and values[1] >= values[0] else None
+    elif "jbl.com.pe" in host:
+        m = re.search(r"S\s*/\s*([0-9][0-9.,]*)", page_text, re.I)
+        selling = _money(m.group(1)) if m else None
+        seller = seller or "JBL Perú"
+
+    if not selling or selling <= 0:
+        return []
+
+    return [PriceOffer(
+        part_number=identity.mpn,
+        brand=identity.brand,
+        model=identity.model or identity.product_name,
+        channel=channel,
+        seller_display_name=seller,
+        seller_legal_name=legal_name,
+        seller_tax_id=tax_id,
+        selling_price=selling,
+        list_price=list_price,
+        currency="PEN",
+        url=url,
+        confidence=score,
+        identity_match=match,
+        source_type="web",
+        source_method="marketplace_html",
+        evidence=evidence,
+    )]
+
+
 def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel: str | None = None) -> list[PriceOffer]:
     soup = BeautifulSoup(html or "", "lxml")
     page_text = soup.get_text(" ", strip=True)[:500000]
@@ -88,8 +229,13 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
         "title": soup.title.get_text(" ", strip=True) if soup.title else page_text[:250],
     }
     default_channel = channel or _channel(url)
-    rows: list[PriceOffer] = []
 
+    # Marketplace-specific HTML is often richer than JSON-LD for seller identity.
+    marketplace_rows = _peru_marketplace_html_offer(page_text, url, identity, default_channel, base_evidence)
+    if marketplace_rows:
+        return marketplace_rows
+
+    rows: list[PriceOffer] = []
     for script in soup.find_all("script", attrs={"type": re.compile("ld\\+json", re.I)}):
         try:
             payload = json.loads(script.string or script.get_text() or "null")

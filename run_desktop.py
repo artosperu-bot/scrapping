@@ -1,4 +1,4 @@
-from product_intelligence.modern_desktop import main
+from product_intelligence.isolated_desktop import main
 
-# Final desktop entry point: modern presentation shell over the preserved engine.
+# Final desktop entry point: ordered independent workflows over the preserved engines.
 main()

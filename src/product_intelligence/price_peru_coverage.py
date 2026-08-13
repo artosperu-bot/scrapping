@@ -13,7 +13,7 @@ PERU_TARGET_DOMAINS: tuple[str, ...] = tuple(dict.fromkeys(
 PERU_MARKETPLACE_DOMAINS: tuple[str, ...] = PERU_TARGET_DOMAINS + ("jbl.com.pe",)
 PERU_RETAIL_HINT_DOMAINS: tuple[str, ...] = (
     "infiniti.com.pe", "perudataconsult.net", "arteus.pe", "baetech.pe",
-    "panacompu.com", "memorykings.pe", "estuyo.pe", "bigmarketperu.com",
+    "panacompu.com", "memorykings.pe", "estuyo.pe", "bigmarketperu.com", "efe.com.pe",
 )
 _LISTING_MARKERS = ("/category/", "/categoria/", "/search/", "/buscar/", "/landing/", "/collections/", "/pages/", "/lista/")
 # /product intentionally covers product/products/producto/productos.

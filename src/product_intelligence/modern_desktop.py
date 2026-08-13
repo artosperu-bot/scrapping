@@ -1,18 +1,23 @@
+import tkinter as tk
+from tkinter import ttk
 from .price_desktop import App as PriceApp
 from .ui_process import ProcessRegistry
 from .ui_theme import configure_business_theme
 
 class App(PriceApp):
     def __init__(self):
-        self.process_registry=ProcessRegistry()
-        super().__init__()
-        configure_business_theme(self)
-        self.title("Product Intelligence")
-        self.geometry("1440x900")
+        self.process_registry=ProcessRegistry(); self.process_log_tabs={}
+        super().__init__(); configure_business_theme(self); self.title('Product Intelligence'); self.geometry('1440x900')
+    def _build_logs_tab(self):
+        self.logs_tab=ttk.Frame(self.notebook,padding=10); self.notebook.add(self.logs_tab,text='6. Logs / auditoría')
+        ttk.Label(self.logs_tab,text='Logs / Auditoría',font=('Segoe UI Semibold',11)).pack(anchor='w')
+        ttk.Label(self.logs_tab,text='Todos los procesos y cada ejecución por separado.').pack(anchor='w',pady=(1,6))
+        self.log_notebook=ttk.Notebook(self.logs_tab); self.log_notebook.pack(fill='both',expand=True)
+        self.log=self._add_log_tab('__all__','Todos')
+        row=ttk.Frame(self.logs_tab); row.pack(fill='x',pady=(6,0)); ttk.Button(row,text='Limpiar Todos',command=lambda:self.log.delete('1.0','end')).pack(side='left'); ttk.Button(row,text='Abrir carpeta de salida',command=self.open_output_folder).pack(side='left',padx=8)
+    def _add_log_tab(self,key,label):
+        frame=ttk.Frame(self.log_notebook,padding=5); text=tk.Text(frame,wrap='word',font=('Consolas',9),relief='flat'); text.pack(fill='both',expand=True); self.log_notebook.add(frame,text=label); self.process_log_tabs[key]=text; return text
 
 
-def main():
-    App().mainloop()
-
-if __name__=="__main__":
-    main()
+def main():App().mainloop()
+if __name__=='__main__':main()

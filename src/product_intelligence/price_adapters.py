@@ -104,20 +104,39 @@ def _vtex_evidence(product: dict, identity: ProductIdentity) -> dict:
     }
 
 
+def _vtex_item_identity_evidence(product_evidence: dict, item: dict, identity: ProductIdentity) -> dict:
+    evidence = dict(product_evidence)
+    expected = _norm(identity.mpn)
+    candidates: list[Any] = [item.get("itemId"), item.get("name"), item.get("nameComplete"), item.get("complementName"), item.get("ean")]
+    reference = item.get("referenceId")
+    if isinstance(reference, list):
+        for entry in reference:
+            if isinstance(entry, dict):
+                candidates.extend((entry.get("Value"), entry.get("value"), entry.get("Key"), entry.get("key")))
+            else:
+                candidates.append(entry)
+    else:
+        candidates.append(reference)
+    if expected and any(expected in _norm(candidate) for candidate in candidates if candidate):
+        evidence["mpn"] = identity.mpn
+    return evidence
+
+
 def parse_vtex_payload(payload: list[dict] | dict, identity: ProductIdentity, *, channel: str, source_url: str) -> list[PriceOffer]:
     products = payload if isinstance(payload, list) else [payload]
     out: list[PriceOffer] = []
     for product in products:
         if not isinstance(product, dict):
             continue
-        evidence = _vtex_evidence(product, identity)
-        score, match, conflicts = score_offer_identity(identity, evidence)
-        if score < 0.70 or conflicts:
-            continue
+        product_evidence = _vtex_evidence(product, identity)
         product_url = str(product.get("link") or "").strip()
         product_url = urljoin(source_url.rstrip("/") + "/", product_url) if product_url else source_url
         for item in product.get("items", []) or []:
             if not isinstance(item, dict):
+                continue
+            evidence = _vtex_item_identity_evidence(product_evidence, item, identity)
+            score, match, conflicts = score_offer_identity(identity, evidence)
+            if score < 0.70 or conflicts:
                 continue
             sku = str(item.get("itemId") or item.get("referenceId") or "") or None
             for seller in item.get("sellers", []) or []:

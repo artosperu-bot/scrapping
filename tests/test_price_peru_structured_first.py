@@ -78,6 +78,8 @@ def test_run_price_product_probes_peru_structured_sources_even_when_web_discover
     monkeypatch.setattr(price_workflow.requests, "get", fake_get)
     monkeypatch.setattr(price_workflow, "_try_mercadolibre", lambda _identity: [])
     monkeypatch.setattr(price_workflow, "discover_price_sources", lambda _identity, limit=12: [])
+    monkeypatch.setattr(price_workflow, "discover_additional_peru_pdps", lambda *_a, **_k: [])
+    monkeypatch.setattr(price_workflow, "discover_general_peru_retailers", lambda *_a, **_k: [])
     monkeypatch.setattr(
         price_workflow,
         "PERU_STRUCTURED_SOURCES",
@@ -122,3 +124,20 @@ def test_general_retail_queries_cover_every_strong_identifier():
     assert "JBLQ350WLBLKAM" in joined
     assert "0050036382366" in joined
     assert "050036382366" in joined
+
+
+def test_seeded_retail_alias_search_can_discover_pdp_without_mpn_in_url(monkeypatch):
+    identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
+    target = "https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless"
+    calls = []
+
+    def fake_search(search_identity, query, **_kwargs):
+        calls.append((search_identity.mpn, query))
+        if search_identity.mpn is None and "bigmarketperu.com" in query and "Quantum 350 Wireless" in query:
+            return [target]
+        return []
+
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    rows = price_peru_coverage.discover_general_peru_retailers(identity, limit=20)
+    assert target in rows
+    assert any(mpn is None for mpn, _query in calls)

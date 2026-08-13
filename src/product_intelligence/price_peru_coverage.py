@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from .discovery import search_web_query
@@ -15,6 +16,7 @@ PERU_RETAIL_HINT_DOMAINS: tuple[str, ...] = (
     "infiniti.com.pe", "perudataconsult.net", "arteus.pe", "baetech.pe",
     "panacompu.com", "memorykings.pe", "estuyo.pe", "bigmarketperu.com", "efe.com.pe",
 )
+TARGET_DISCOVERY_WORKERS = 4
 _LISTING_MARKERS = ("/category/", "/categoria/", "/search/", "/buscar/", "/landing/", "/collections/", "/pages/", "/lista/")
 # /product intentionally covers product/products/producto/productos.
 _PRODUCT_MARKERS = ("/product", "/shop/", "/informacion-producto/", "/product-information/", "/articulo/")
@@ -117,46 +119,67 @@ def _alias_queries(identity: ProductIdentity, domain: str) -> list[str]:
     ]))
 
 
-def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain: int = 10, domains: tuple[str, ...] = PERU_MARKETPLACE_DOMAINS) -> list[str]:
+def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_domain: int) -> list[str]:
     strong = _strong(identity)
-    if not strong: return []
-    alias_identity = _alias_identity(identity)
     model = str(identity.model or identity.product_name or "").strip()
-    per_domain = []
-    for domain in domains:
-        found, seen = [], set()
-        for seed in _deterministic_pdps(identity):
-            if _host_matches(seed, domain) and _is_pdp(seed, domain, strong):
-                seen.add(seed); found.append(seed)
-        for query in _queries(identity, domain):
-            try: urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
-            except Exception: urls = []
+    alias_identity = _alias_identity(identity)
+    found: list[str] = []
+    seen: set[str] = set()
+    for seed in _deterministic_pdps(identity):
+        if _host_matches(seed, domain) and _is_pdp(seed, domain, strong):
+            seen.add(seed)
+            found.append(seed)
+    for query in _queries(identity, domain):
+        try:
+            urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
+        except Exception:
+            urls = []
+        for raw in urls:
+            url = str(raw or "").strip()
+            if not url.startswith(("http://", "https://")) or url in seen:
+                continue
+            if not _host_matches(url, domain) or not _is_pdp(url, domain, strong):
+                continue
+            seen.add(url)
+            found.append(url)
+            if len(found) >= limit_per_domain:
+                break
+        if found:
+            break
+    if not found and model:
+        for query in _alias_queries(identity, domain):
+            try:
+                urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12)
+            except Exception:
+                urls = []
             for raw in urls:
                 url = str(raw or "").strip()
-                if not url.startswith(("http://", "https://")) or url in seen: continue
-                if not _host_matches(url, domain) or not _is_pdp(url, domain, strong): continue
-                seen.add(url); found.append(url)
-                if len(found) >= limit_per_domain: break
+                if not url.startswith(("http://", "https://")) or url in seen:
+                    continue
+                if not _host_matches(url, domain) or not _is_pdp(url, domain, model):
+                    continue
+                seen.add(url)
+                found.append(url)
+                if len(found) >= limit_per_domain:
+                    break
             if found:
                 break
-        if not found and model:
-            for query in _alias_queries(identity, domain):
-                try: urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12)
-                except Exception: urls = []
-                for raw in urls:
-                    url = str(raw or "").strip()
-                    if not url.startswith(("http://", "https://")) or url in seen: continue
-                    if not _host_matches(url, domain) or not _is_pdp(url, domain, model): continue
-                    seen.add(url); found.append(url)
-                    if len(found) >= limit_per_domain: break
-                if found:
-                    break
-        per_domain.append(found)
+    return found
+
+
+def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain: int = 10, domains: tuple[str, ...] = PERU_MARKETPLACE_DOMAINS) -> list[str]:
+    strong = _strong(identity)
+    if not strong or not domains:
+        return []
+    workers = max(1, min(TARGET_DISCOVERY_WORKERS, len(domains)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="peru-channel") as pool:
+        per_domain = list(pool.map(lambda domain: _discover_target_domain(identity, domain, limit_per_domain), domains))
     merged, seen_all = [], set()
     for index in range(limit_per_domain):
         for rows in per_domain:
             if index < len(rows) and rows[index] not in seen_all:
-                seen_all.add(rows[index]); merged.append(rows[index])
+                seen_all.add(rows[index])
+                merged.append(rows[index])
     return merged
 
 

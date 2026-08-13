@@ -1,3 +1,4 @@
+import queue,threading
 import tkinter as tk
 from tkinter import ttk
 from .price_desktop import App as PriceApp
@@ -8,8 +9,8 @@ from .ui_widgets import AnimatedStateGif
 
 class App(PriceApp):
     def __init__(self):
-        self.process_registry=ProcessRegistry(); self.process_log_tabs={}; self._media_session_id=None; self._price_session_id=None
-        super().__init__(); configure_business_theme(self); self.title('Product Intelligence'); self.geometry('1440x900')
+        self.process_registry=ProcessRegistry(); self.process_log_tabs={}; self._media_session_id=None; self._price_session_id=None; self._excel_session_id=None; self._excel_worker_thread=None; self._process_events=queue.Queue()
+        super().__init__(); configure_business_theme(self); self.title('Product Intelligence'); self.geometry('1440x900'); self.after(120,self._drain_process_events)
     def _build_logs_tab(self):
         self.logs_tab=ttk.Frame(self.notebook,padding=10); self.notebook.add(self.logs_tab,text='6. Logs / auditoría')
         ttk.Label(self.logs_tab,text='Logs / Auditoría',font=('Segoe UI Semibold',11)).pack(anchor='w'); ttk.Label(self.logs_tab,text='Todos los procesos y cada ejecución por separado.').pack(anchor='w',pady=(1,6))

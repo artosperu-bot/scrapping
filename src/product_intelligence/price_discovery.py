@@ -65,13 +65,42 @@ def _identity_query(identity: ProductIdentity) -> str:
     return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
 
 
+def _compact(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _is_target_product_detail_url(url: str, domain: str, strong: str) -> bool:
+    """Require a real PDP for directed marketplace discovery, never category/search pages."""
+    parsed = urlparse(url)
+    path = (parsed.path or "").lower()
+    if any(marker in path for marker in ("/category/", "/categoria/", "/search/", "/buscar/")):
+        return False
+    if domain == "falabella.com.pe":
+        return "/product/" in path
+    if domain == "simple.ripley.com.pe":
+        return "pmp" in path or (_compact(strong) in _compact(path) and "/tecnologia/" not in path)
+    if domain == "sodimac.com.pe":
+        return "/articulo/" in path
+    if domain == "jbl.com.pe":
+        return bool(_compact(strong) and _compact(strong) in _compact(path))
+    return True
+
+
+def _is_known_target_listing_url(url: str, identity: ProductIdentity) -> bool:
+    strong = _identity_query(identity)
+    for domain in TARGETED_PERU_DOMAINS:
+        if _host_matches(url, domain):
+            return not _is_target_product_detail_url(url, domain, strong)
+    return False
+
+
 def discover_targeted_peru_sources(
     identity: ProductIdentity,
     *,
     limit_per_domain: int = 5,
     domains: tuple[str, ...] = TARGETED_PERU_DOMAINS,
 ) -> list[str]:
-    """Discover exact-product pages in priority Peru channels, interleaved by channel."""
+    """Discover exact-product PDPs in priority Peru channels, interleaved by channel."""
     strong = _identity_query(identity)
     if not strong:
         return []
@@ -86,7 +115,12 @@ def discover_targeted_peru_sources(
         seen_local: set[str] = set()
         for url in found:
             clean = str(url or "").strip()
-            if clean.startswith(("http://", "https://")) and _host_matches(clean, domain) and clean not in seen_local:
+            if (
+                clean.startswith(("http://", "https://"))
+                and _host_matches(clean, domain)
+                and _is_target_product_detail_url(clean, domain, strong)
+                and clean not in seen_local
+            ):
                 seen_local.add(clean)
                 clean_rows.append(clean)
         per_domain.append(clean_rows)
@@ -119,9 +153,13 @@ def discover_price_sources(
     generic: list[str] = []
     for candidate in candidates:
         url = str(getattr(candidate, "url", "") or "").strip()
-        if url.startswith(("http://", "https://")) and url not in seen:
-            seen.add(url)
-            generic.append(url)
+        if not url.startswith(("http://", "https://")) or url in seen:
+            continue
+        # A known Peru marketplace listing/category must never become a price source.
+        if _is_known_target_listing_url(url, identity):
+            continue
+        seen.add(url)
+        generic.append(url)
     generic.sort(key=lambda value: _priority_rank(value, priority_domains))
     urls.extend(generic)
     return urls[:limit]
@@ -160,8 +198,6 @@ def _seller_from_text(text: str) -> str | None:
         if not m:
             continue
         value = m.group(1).strip(" :-")
-        # Flattened marketplace HTML can concatenate the legal entity and RUC onto
-        # the seller display name. Split them without hardcoding any seller name.
         legal_boundary = re.search(
             r"\s+[A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑ0-9 .&-]{2,80}?(?:S\.?A\.?C\.?|E\.?I\.?R\.?L\.?|S\.?R\.?L\.?)\b",
             value,
@@ -242,6 +278,11 @@ def _peru_marketplace_html_offer(
 
 
 def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel: str | None = None) -> list[PriceOffer]:
+    # Never parse a category/search/listing as a product offer, even if it happens to
+    # contain the exact Part Number in one of many cards.
+    if _is_known_target_listing_url(url, identity):
+        return []
+
     soup = BeautifulSoup(html or "", "lxml")
     page_text = soup.get_text(" ", strip=True)[:500000]
     base_evidence = {

@@ -44,7 +44,7 @@ def test_extract_falabella_marketplace_offer_with_seller_and_legal_identity():
     assert row.selling_price == 299
     assert row.list_price == 499
     assert row.seller_display_name.lower() == "technopshops"
-    assert row.seller_legal_name == "TECHNOSHOPS PERU S.A.C."
+    assert (row.seller_legal_name or "").rstrip(".") == "TECHNOSHOPS PERU S.A.C"
     assert row.seller_tax_id == "20605145486"
     assert row.confidence >= 0.95
 

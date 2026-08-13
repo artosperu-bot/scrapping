@@ -108,9 +108,6 @@ def discover_price_sources(
     *,
     priority_domains: tuple[str, ...] = PERU_PRICE_DOMAINS,
 ) -> list[str]:
-    # Deterministic domain-targeted Peru discovery comes first. Generic discovery is
-    # additive fallback rather than the mechanism that decides whether a key channel
-    # gets checked at all.
     targeted = discover_targeted_peru_sources(identity, limit_per_domain=max(2, min(5, limit)))
     candidates = search_web(identity, limit=max(limit * 3, 24))
     urls: list[str] = []
@@ -155,13 +152,24 @@ def _money(value):
 
 def _seller_from_text(text: str) -> str | None:
     patterns = [
-        r"Vendido\s+por\s*:\s*([A-Za-zÁÉÍÓÚÑáéíóúñ0-9._& -]{2,70}?)(?=\s+(?:Normal|Internet|Seller Info|Producto publicado|Realiza|Cumple|Ofrece|No existe|S/|Código|Cód\.|$))",
-        r"Vendido\s+por\s+([A-Za-zÁÉÍÓÚÑáéíóúñ0-9._& -]{2,70}?)(?=\s+(?:Seller Info|Producto publicado|Realiza|Cumple|Ofrece|No existe|S/|Código|Cód\.|$))",
+        r"Vendido\s+por\s*:\s*([A-Za-zÁÉÍÓÚÑáéíóúñ0-9._& -]{2,120}?)(?=\s+(?:Normal|Internet|Seller Info|Producto publicado|Realiza|Cumple|Ofrece|No existe|S/|Código|Cód\.|$))",
+        r"Vendido\s+por\s+([A-Za-zÁÉÍÓÚÑáéíóúñ0-9._& -]{2,120}?)(?=\s+(?:Seller Info|Producto publicado|Realiza|Cumple|Ofrece|No existe|S/|Código|Cód\.|$))",
     ]
     for pattern in patterns:
         m = re.search(pattern, text, re.I)
-        if m:
-            return m.group(1).strip(" :-")
+        if not m:
+            continue
+        value = m.group(1).strip(" :-")
+        # Flattened marketplace HTML can concatenate the legal entity and RUC onto
+        # the seller display name. Split them without hardcoding any seller name.
+        legal_boundary = re.search(
+            r"\s+[A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑ0-9 .&-]{2,80}?(?:S\.?A\.?C\.?|E\.?I\.?R\.?L\.?|S\.?R\.?L\.?)\b",
+            value,
+        )
+        if legal_boundary:
+            value = value[: legal_boundary.start()].strip()
+        value = re.split(r"\s+RUC\s*:?\s*\d{0,11}\b", value, maxsplit=1, flags=re.I)[0].strip()
+        return value or None
     return None
 
 

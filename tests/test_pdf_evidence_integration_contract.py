@@ -8,6 +8,11 @@ def test_pdf_option_defaults_true():
     assert 'use_pdf_evidence' in text
 
 
+def test_pdf_run_analyzes_before_entering_pdf_aware_execution():
+    text=Path('src/product_intelligence/pdf_desktop.py').read_text(encoding='utf-8')
+    assert 'self.analyze_excel()' in text
+
+
 def test_entrypoint_uses_pdf_desktop_and_keeps_modern_contract():
     text=Path('run_desktop.py').read_text(encoding='utf-8')
     assert 'product_intelligence.modern_desktop import main' in text

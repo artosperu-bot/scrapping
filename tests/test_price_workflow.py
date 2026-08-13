@@ -25,6 +25,7 @@ def test_price_workflow_survives_adapter_failure_emits_done_and_filters_foreign(
     monkeypatch.setattr(price_workflow, "PERU_STRUCTURED_SOURCES", ())
     monkeypatch.setattr(price_workflow, "_try_mercadolibre", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("blocked")))
     monkeypatch.setattr(price_workflow, "discover_additional_peru_pdps", lambda *_a, **_k: [])
+    monkeypatch.setattr(price_workflow, "discover_general_peru_retailers", lambda *_a, **_k: [])
     monkeypatch.setattr(price_workflow, "discover_price_sources", lambda *_a, **_k: ["https://shop.com.pe/q350"])
     monkeypatch.setattr(price_workflow, "fetch_page", lambda *_a, **_k: SimpleNamespace(final_url="https://shop.com.pe/q350", html="<html>ok</html>"))
     rows_from_page = [

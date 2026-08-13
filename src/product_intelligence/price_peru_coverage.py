@@ -63,8 +63,24 @@ def _host_matches(url: str, domain: str) -> bool:
     return host == domain or host.endswith("." + domain)
 
 
+def _strong_identifiers(identity: ProductIdentity) -> list[str]:
+    values = [identity.mpn, identity.ean, identity.upc, identity.gtin]
+    rows: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        clean = str(value or "").strip()
+        key = _compact(clean)
+        if clean and key and key not in seen:
+            seen.add(key)
+            rows.append(clean)
+    return rows
+
+
 def _strong(identity: ProductIdentity) -> str:
-    return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
+    identifiers = _strong_identifiers(identity)
+    if identifiers:
+        return identifiers[0]
+    return str(identity.model or identity.product_name or "").strip()
 
 
 def _is_pdp(url: str, domain: str, strong: str) -> bool:
@@ -209,22 +225,27 @@ def _is_peru_retail_candidate(url: str, strong: str) -> bool:
 
 
 def _general_retail_queries(identity: ProductIdentity) -> list[str]:
-    strong = _strong(identity)
+    identifiers = _strong_identifiers(identity)
+    if not identifiers:
+        fallback = _strong(identity)
+        identifiers = [fallback] if fallback else []
     model = str(identity.model or identity.product_name or "").strip()
     brand = str(identity.brand or "").strip()
-    queries = [
-        f'"{strong}" precio Perú',
-        f'"{strong}" "S/" Perú',
-        f'"{strong}" tienda Perú',
-        f'"{strong}" comprar Perú',
-    ]
-    if model:
+    queries: list[str] = []
+    for strong in identifiers:
         queries.extend([
-            f'"{strong}" "{model}" Perú',
-            f'"{model}" "{strong}" {brand} Perú'.strip(),
+            f'"{strong}" precio Perú',
+            f'"{strong}" "S/" Perú',
+            f'"{strong}" tienda Perú',
+            f'"{strong}" comprar Perú',
         ])
-    for domain in PERU_RETAIL_HINT_DOMAINS:
-        queries.append(f'"{strong}" site:{domain}')
+        if model:
+            queries.extend([
+                f'"{strong}" "{model}" Perú',
+                f'"{model}" "{strong}" {brand} Perú'.strip(),
+            ])
+        for domain in PERU_RETAIL_HINT_DOMAINS:
+            queries.append(f'"{strong}" site:{domain}')
     return list(dict.fromkeys(q for q in queries if q.strip()))
 
 

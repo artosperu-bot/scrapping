@@ -4,6 +4,7 @@ import re
 from statistics import median
 from urllib.parse import urlsplit, urlunsplit
 from .models import ProductIdentity
+from .price_channel_registry import target_spec_for_name, target_spec_for_url
 from .price_models import PriceOffer
 
 
@@ -72,6 +73,8 @@ _PERU_PATH_HOSTS = {"panacompu.com"}
 
 
 def is_peru_offer(row: PriceOffer) -> bool:
+    if target_spec_for_name(row.channel) or target_spec_for_url(row.url):
+        return True
     if _norm(row.channel) in _PERU_CHANNELS:
         return True
     parsed = urlsplit(row.url)

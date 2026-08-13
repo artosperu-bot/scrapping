@@ -61,6 +61,10 @@ def _host_matches(url: str, domain: str) -> bool:
     return host == domain or host.endswith("." + domain)
 
 
+def _is_targeted_marketplace_url(url: str) -> bool:
+    return any(_host_matches(url, domain) for domain in TARGETED_PERU_DOMAINS)
+
+
 def _identity_query(identity: ProductIdentity) -> str:
     return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
 
@@ -266,8 +270,8 @@ def _peru_marketplace_html_offer(
         segment = page_text[start : start + 1200] if start >= 0 else page_text[:2500]
         values = [_money(v) for v in re.findall(r"S\s*/\s*([0-9][0-9.,]*)", segment, re.I)]
         values = [v for v in values if v and v > 0]
-        # Current Sodimac PDPs can expose only a CMR coupon amount (e.g. S/100)
-        # while omitting the product price. Never promote that lone amount to price.
+        # Sodimac can expose a CMR coupon amount while omitting the product price.
+        # A lone monetary value is ambiguous and must never be promoted to price.
         if len(values) >= 2:
             selling = values[0]
             list_price = values[1] if values[1] >= values[0] else None
@@ -370,6 +374,12 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
 
     if rows:
         return rows
+
+    # For targeted Peru retailers, site-specific parsing and JSON-LD are the trust
+    # boundary. Do not fall through to a generic first-S/ regex: that can convert a
+    # coupon, installment or unrelated promotion into a fake product price.
+    if _is_targeted_marketplace_url(url):
+        return []
 
     score, match, conflicts = score_offer_identity(identity, base_evidence)
     if score < 0.70 or conflicts:

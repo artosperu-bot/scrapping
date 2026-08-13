@@ -5,18 +5,19 @@ from urllib.parse import urlparse
 
 from .discovery import search_web_query
 from .models import ProductIdentity
+from .price_channel_registry import TARGET_CHANNELS
 
-PERU_MARKETPLACE_DOMAINS: tuple[str, ...] = (
-    "falabella.com.pe", "simple.ripley.com.pe", "mercadolibre.com.pe",
-    "plazavea.com.pe", "oechsle.pe", "sodimac.com.pe", "jbl.com.pe",
-)
+PERU_TARGET_DOMAINS: tuple[str, ...] = tuple(dict.fromkeys(
+    domain for spec in TARGET_CHANNELS for domain in spec.domains
+))
+PERU_MARKETPLACE_DOMAINS: tuple[str, ...] = PERU_TARGET_DOMAINS + ("jbl.com.pe",)
 PERU_RETAIL_HINT_DOMAINS: tuple[str, ...] = (
     "infiniti.com.pe", "perudataconsult.net", "arteus.pe", "baetech.pe",
-    "panacompu.com", "memorykings.pe", "estuyo.pe", "bigmarketperu.com", "efe.com.pe",
+    "panacompu.com", "memorykings.pe", "estuyo.pe", "bigmarketperu.com",
 )
-_LISTING_MARKERS = ("/category/", "/categoria/", "/search/", "/buscar/", "/landing/", "/collections/", "/pages/")
+_LISTING_MARKERS = ("/category/", "/categoria/", "/search/", "/buscar/", "/landing/", "/collections/", "/pages/", "/lista/")
 # /product intentionally covers product/products/producto/productos.
-_PRODUCT_MARKERS = ("/product", "/shop/", "/informacion-producto/", "/product-information/")
+_PRODUCT_MARKERS = ("/product", "/shop/", "/informacion-producto/", "/product-information/", "/articulo/")
 
 
 def _compact(value: str | None) -> str:
@@ -48,17 +49,25 @@ def _strong(identity: ProductIdentity) -> str:
     return ids[0] if ids else str(identity.model or identity.product_name or "").strip()
 
 
+def _alias_identity(identity: ProductIdentity) -> ProductIdentity:
+    """Discovery-only identity: retain semantics but remove strong IDs from search ranking."""
+    data = identity.model_dump()
+    for field in ("mpn", "ean", "upc", "gtin", "sku"):
+        data[field] = None
+    return ProductIdentity(**data)
+
+
 def _is_pdp(url: str, domain: str, strong: str) -> bool:
     path = (urlparse(url).path or "").lower()
     if any(marker in path for marker in _LISTING_MARKERS):
         return False
     if domain == "falabella.com.pe": return "/product/" in path
-    if domain == "simple.ripley.com.pe": return "pmp" in path or _compact(strong) in _compact(path)
+    if domain in {"simple.ripley.com.pe", "ripley.com.pe"}: return "pmp" in path or _compact(strong) in _compact(path)
     if domain == "mercadolibre.com.pe": return "/p/" in path or "/up/" in path
-    if domain in {"plazavea.com.pe", "oechsle.pe"}: return path.rstrip("/").endswith("/p")
+    if domain in {"plazavea.com.pe", "oechsle.pe", "realplaza.com", "tienda.claro.com.pe", "claro.com.pe"}: return path.rstrip("/").endswith("/p") or any(marker in path for marker in _PRODUCT_MARKERS)
     if domain == "sodimac.com.pe": return "/articulo/" in path
     if domain == "jbl.com.pe": return bool(_compact(strong) and _compact(strong) in _compact(path))
-    return False
+    return bool(any(marker in path for marker in _PRODUCT_MARKERS) or path.rstrip("/").endswith("/p") or path.endswith(".html"))
 
 
 def _deterministic_pdps(identity: ProductIdentity) -> list[str]:
@@ -97,9 +106,22 @@ def _queries(identity: ProductIdentity, domain: str) -> list[str]:
     return list(dict.fromkeys(x for x in q if x.strip()))
 
 
+def _alias_queries(identity: ProductIdentity, domain: str) -> list[str]:
+    model = str(identity.model or identity.product_name or "").strip()
+    brand = str(identity.brand or "").strip()
+    if not model:
+        return []
+    return list(dict.fromkeys([
+        f'"{model}" "{brand}" site:{domain}'.strip(),
+        f'"{model}" site:{domain}',
+    ]))
+
+
 def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain: int = 10, domains: tuple[str, ...] = PERU_MARKETPLACE_DOMAINS) -> list[str]:
     strong = _strong(identity)
     if not strong: return []
+    alias_identity = _alias_identity(identity)
+    model = str(identity.model or identity.product_name or "").strip()
     per_domain = []
     for domain in domains:
         found, seen = [], set()
@@ -116,6 +138,17 @@ def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain
                 seen.add(url); found.append(url)
                 if len(found) >= limit_per_domain: break
             if len(found) >= limit_per_domain: break
+        if len(found) < limit_per_domain and model:
+            for query in _alias_queries(identity, domain):
+                try: urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12)
+                except Exception: urls = []
+                for raw in urls:
+                    url = str(raw or "").strip()
+                    if not url.startswith(("http://", "https://")) or url in seen: continue
+                    if not _host_matches(url, domain) or not _is_pdp(url, domain, model): continue
+                    seen.add(url); found.append(url)
+                    if len(found) >= limit_per_domain: break
+                if len(found) >= limit_per_domain: break
         per_domain.append(found)
     merged, seen_all = [], set()
     for index in range(limit_per_domain):
@@ -148,6 +181,16 @@ def _general_retail_queries(identity: ProductIdentity) -> list[str]:
     return list(dict.fromkeys(x for x in q if x.strip()))
 
 
+def _general_alias_queries(identity: ProductIdentity) -> list[str]:
+    model = str(identity.model or identity.product_name or "").strip()
+    brand = str(identity.brand or "").strip()
+    if not model:
+        return []
+    queries = [f'"{model}" "{brand}" precio Perú'.strip(), f'"{model}" "{brand}" tienda Perú'.strip()]
+    queries += [f'"{model}" "{brand}" site:{domain}'.strip() for domain in PERU_RETAIL_HINT_DOMAINS]
+    return list(dict.fromkeys(queries))
+
+
 def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 20) -> list[str]:
     strong = _strong(identity)
     if not strong or limit <= 0: return []
@@ -162,4 +205,17 @@ def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 2
             if not _is_peru_retail_candidate(url, strong): continue
             seen.add(url); rows.append(url)
             if len(rows) >= limit: return rows
+
+    model = str(identity.model or identity.product_name or "").strip()
+    if model and len(rows) < limit:
+        alias_identity = _alias_identity(identity)
+        for query in _general_alias_queries(identity):
+            try: found = search_web_query(alias_identity, query, limit=per_query, timeout=12)
+            except Exception: found = []
+            for raw in found:
+                url = str(raw or "").strip()
+                if not url.startswith(("http://", "https://")) or url in seen: continue
+                if not _is_peru_retail_candidate(url, model): continue
+                seen.add(url); rows.append(url)
+                if len(rows) >= limit: return rows
     return rows

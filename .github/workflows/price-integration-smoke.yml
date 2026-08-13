@@ -25,12 +25,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - name: Run real price discovery for JBL fixtures
+      - name: Run real Peru multiseller discovery for JBL fixtures
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
           from product_intelligence.models import ProductIdentity
+          from product_intelligence.price_identity import is_peru_offer
           from product_intelligence.price_workflow import run_price_product
 
           products = [
@@ -40,17 +41,29 @@ jobs:
           ]
           root = Path('price_smoke_output')
           total = 0
+          q350 = []
           for identity in products:
               print('\n===', identity.mpn, '===')
               events = []
-              offers = run_price_product(identity, root, on_event=events.append, max_sources=6)
+              offers = run_price_product(identity, root, on_event=events.append, max_sources=24)
+              foreign = [o for o in offers if not is_peru_offer(o)]
+              if foreign:
+                  raise SystemExit('Foreign offer leaked into Peru-only output: ' + json.dumps([o.to_dict() for o in foreign], ensure_ascii=False))
               total += len(offers)
-              for offer in offers[:10]:
+              if identity.mpn == 'JBLQ350WLBLKAM':
+                  q350 = offers
+              for offer in offers:
                   print(json.dumps(offer.to_dict(), ensure_ascii=False))
-              print('offers=', len(offers), 'events=', len(events))
-          print('TOTAL_VALIDATED_OFFERS=', total)
+              print('offers=', len(offers), 'channels=', len({o.channel for o in offers}), 'sellers=', len({(o.channel, o.seller_display_name) for o in offers}), 'events=', len(events))
+
+          print('TOTAL_VALIDATED_PERU_OFFERS=', total)
+          print('Q350_VALIDATED_PERU_OFFERS=', len(q350))
+          print('Q350_CHANNELS=', sorted({o.channel for o in q350}))
+          print('Q350_SELLERS=', sorted({f'{o.channel}:{o.seller_display_name}' for o in q350}))
           if total < 1:
-              raise SystemExit('No validated public price offer found for the 3 real JBL products')
+              raise SystemExit('No validated Peru price offer found for the 3 real JBL products')
+          if len(q350) < 2:
+              raise SystemExit('Q350 did not produce at least two independently validated Peru offers')
           PY
       - uses: actions/upload-artifact@v4
         if: always()

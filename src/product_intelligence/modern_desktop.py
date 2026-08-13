@@ -1,8 +1,10 @@
 import tkinter as tk
 from tkinter import ttk
 from .price_desktop import App as PriceApp
+from .media_desktop import App as MediaBaseApp
 from .ui_process import ProcessRegistry
 from .ui_theme import configure_business_theme
+from .ui_widgets import AnimatedStateGif
 
 class App(PriceApp):
     def __init__(self):
@@ -17,6 +19,20 @@ class App(PriceApp):
         frame=ttk.Frame(self.log_notebook,padding=5); text=tk.Text(frame,wrap='word',font=('Consolas',9),relief='flat'); text.pack(fill='both',expand=True); self.log_notebook.add(frame,text=label); self.process_log_tabs[key]=text; return text
     def start_process_session(self,kind,label,total=1):
         s=self.process_registry.start(kind,label,total); self._add_log_tab(s.session_id,f'{kind} #{s.session_id.rsplit("-",1)[-1]}'); return s.session_id
+    def _build_media_tab(self):
+        MediaBaseApp._build_media_tab(self)
+        gallery=self.media_canvas.master; gallery.pack_forget(); box=ttk.LabelFrame(self.media_tab,text='Proceso actual',padding=8); box.pack(fill='x',pady=(8,0))
+        left=ttk.Frame(box); left.pack(side='left',fill='both',expand=True); self.media_state_gif=AnimatedStateGif(box); self.media_state_gif.pack(side='right',padx=(12,0))
+        self.media_progress_title=tk.StringVar(value='Listo para buscar multimedia'); ttk.Label(left,textvariable=self.media_progress_title,font=('Segoe UI Semibold',10)).pack(anchor='w')
+        self.media_product_progress=ttk.Progressbar(left,maximum=100); self.media_product_progress.pack(fill='x',pady=(7,2)); self.media_product_percent=tk.StringVar(value='0%'); ttk.Label(left,textvariable=self.media_product_percent).pack(anchor='e')
+        self.media_overall_progress=ttk.Progressbar(left,maximum=100); self.media_overall_progress.pack(fill='x',pady=(3,2)); self.media_overall_percent=tk.StringVar(value='0%'); ttk.Label(left,textvariable=self.media_overall_percent).pack(anchor='e')
+        self.media_progress_detail=tk.StringVar(value='0 productos completados'); ttk.Label(left,textvariable=self.media_progress_detail).pack(anchor='w'); self.media_state_gif.set_state('idle'); gallery.pack(fill='both',expand=True)
+    def _load_wolf_gif(self):pass
+    def _animate_wolf(self):pass
+    def _set_progress_ui(self):
+        super()._set_progress_ui()
+        if hasattr(self,'media_state_gif'):
+            state='complete' if self._wolf_state=='done' else 'error' if self._wolf_state=='error' else 'running' if self._media_running else 'idle'; self.media_state_gif.set_state(state)
     def _start_media_indices(self,indices):
         if not self._media_running:
             valid=[i for i in indices if self._identity_for_index(i) is not None]

@@ -96,14 +96,23 @@ class App(IsolatedApp):
     def _install_excel_progress(self):
         tab = self._run_tab()
         if tab is None: return
-        box = ttk.LabelFrame(tab, text="Progreso del proceso", style="Card.TLabelframe", padding=8); box.pack(fill="x", pady=(8, 0))
-        self.excel_progress_animation = ProgressAnimation(box, width=180, height=105); self.excel_progress_animation.pack(anchor="center")
+        box = ttk.LabelFrame(tab, text="Progreso del proceso", style="Card.TLabelframe", padding=10, height=190)
+        box.pack(fill="x", pady=(8, 0))
+        box.pack_propagate(False)
+        progress_info = ttk.Frame(box)
+        progress_info.pack(side="left", fill="both", expand=True, padx=(0, 12))
+        progress_visual = ttk.Frame(box)
+        progress_visual.pack(side="right", fill="y")
         self.excel_progress_status = tk.StringVar(value="Listo para procesar")
-        ttk.Label(box, textvariable=self.excel_progress_status, font=("Segoe UI", 9, "bold")).pack(anchor="center", pady=(2, 5))
-        row = ttk.Frame(box); row.pack(fill="x")
-        self.excel_progress_bar = ttk.Progressbar(row, maximum=100, mode="determinate"); self.excel_progress_bar.pack(side="left", fill="x", expand=True)
+        ttk.Label(progress_info, text="Seguimiento", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        ttk.Label(progress_info, textvariable=self.excel_progress_status, font=("Segoe UI", 9, "bold"), wraplength=720, justify="left").pack(anchor="w", fill="x", pady=(3, 10))
+        row = ttk.Frame(progress_info); row.pack(fill="x")
+        ttk.Label(row, text="Progreso general", width=16).pack(side="left")
+        self.excel_progress_bar = ttk.Progressbar(row, maximum=100, mode="determinate"); self.excel_progress_bar.pack(side="left", fill="x", expand=True, padx=(6, 8))
         self.excel_progress_value = tk.StringVar(value="0%")
-        ttk.Label(row, textvariable=self.excel_progress_value, width=8).pack(side="left", padx=(8, 0))
+        ttk.Label(row, textvariable=self.excel_progress_value, width=8).pack(side="left")
+        self.excel_progress_animation = ProgressAnimation(progress_visual, width=220, height=140)
+        self.excel_progress_animation.pack(anchor="center")
 
     def _excel_progress_start(self, total: int):
         def apply():

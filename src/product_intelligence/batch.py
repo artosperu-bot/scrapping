@@ -20,6 +20,7 @@ from .pipeline import ProductPipeline
 from .record_builder import build_record_strict
 from .resolution_engine import analyze_resolution
 from .semantic_guard import is_placeholder
+from .source_strategy import SourceStrategy
 from .template_contract import analyze_template_contract
 from .template_intelligence import analyze_matrix
 
@@ -62,7 +63,6 @@ def _identity_placeholder(value) -> bool:
 
 
 def _looks_like_part_number(value: str | None) -> bool:
-    """Conservative generic MPN heuristic used only when no stronger identifier exists."""
     text = str(value or "").strip()
     if not text or " " in text or len(text) < 6 or len(text) > 48:
         return False
@@ -86,7 +86,6 @@ def _promote_mpn(vals: dict[str, str]) -> None:
 
 
 def detect_items(template: str) -> list[BatchItem]:
-    """Detect normalized product identities from heterogeneous Excel workbooks."""
     intake = analyze_workbook_intake(template)
     return [
         BatchItem(
@@ -115,7 +114,6 @@ def _best_product_sheet(template: str) -> tuple[str, int]:
 
 
 def manual_identity_items(template: str, identities: list[ProductIdentity], source_urls_by_index: list[list[str]] | None = None) -> list[BatchItem]:
-    """Bind identities to rows; user URLs are priority candidates, never blindly trusted evidence."""
     sheet, header_row = _best_product_sheet(template)
     items = []
     for i, ident in enumerate(identities):
@@ -264,7 +262,6 @@ def _resolution_for(records: list[ProductRecord], template_plan: dict | None) ->
 
 
 def _coverage_sufficient(resolution: dict, has_manufacturer: bool) -> bool:
-    """Stop because requested fields are resolved, never because N pages were seen."""
     if not has_manufacturer or resolution.get("blocked"):
         return False
     return not list(resolution.get("research_terms") or [])
@@ -290,23 +287,68 @@ def _prioritize(candidates) -> list:
     return sorted(candidates, key=lambda c: (not bool(getattr(c, "likely_official", False)), -float(getattr(c, "score", 0))))
 
 
-def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None, log=lambda m: None) -> ProductRecord | None:
+def _looks_like_pdf_url(url: str | None) -> bool:
+    path = (urlparse(str(url or "")).path or "").lower()
+    return path.endswith(".pdf")
+
+
+def _ingest_direct_documents(
+    identity: ProductIdentity,
+    *,
+    target_semantics: list[str],
+    seen_urls: set[str],
+    errors: list[str],
+    log,
+    limit: int = 6,
+) -> list[ProductRecord]:
+    accepted: list[ProductRecord] = []
+    document_candidates = discover_product_documents(identity, limit=limit)
+    for candidate in document_candidates:
+        if candidate.url in seen_urls:
+            continue
+        seen_urls.add(candidate.url)
+        try:
+            doc_rec = process_pdf_document(identity, candidate.url, target_semantics=target_semantics)
+            accepted.append(doc_rec)
+            log(f"  documento técnico validado: {candidate.url}")
+            if len(accepted) >= 3:
+                break
+        except Exception as exc:
+            errors.append(f"document:{candidate.url}: {type(exc).__name__}: {exc}")
+    return accepted
+
+
+def scrape_item(
+    item: BatchItem,
+    out_dir: str,
+    template_plan: dict | None = None,
+    log=lambda m: None,
+    source_strategy: SourceStrategy | None = None,
+) -> ProductRecord | None:
+    strategy = (source_strategy or SourceStrategy()).normalized()
     pipe = ProductPipeline()
     manual_urls = list(dict.fromkeys([u for u in ((item.source_urls or []) + ([item.source_url] if item.source_url else [])) if u]))
+    eligible_manual_urls = [
+        u for u in manual_urls
+        if strategy.web or (strategy.pdf and _looks_like_pdf_url(u))
+    ]
     manual_candidates = [
         type("Candidate", (), {"url": u, "likely_official": False, "score": 2.0, "ai_assisted": False, "manual_source": True})()
-        for u in manual_urls
+        for u in eligible_manual_urls
     ]
-    free_candidates = search_web(item.identity, limit=18)
-    known_manual = set(manual_urls)
+    free_candidates = search_web(item.identity, limit=18) if strategy.web else []
+    known_manual = set(eligible_manual_urls)
     candidates = manual_candidates + _prioritize([c for c in free_candidates if getattr(c, "url", None) not in known_manual])
     if manual_urls:
-        log(f"  fuentes manuales prioritarias: {len(manual_urls)}; se validan antes de aceptar evidencia")
+        log(
+            f"  fuentes manuales: {len(manual_urls)}; elegibles por estrategia={len(eligible_manual_urls)}; "
+            "se validan antes de aceptar evidencia"
+        )
 
     media_slots = int((template_plan or {}).get("media_slots", 0) or 0)
     target_semantics = list((template_plan or {}).get("scrape_semantics") or [])
-    include_images = bool(media_slots)
-    include_pdfs = bool((template_plan or {}).get("summary", {}).get("scrape_targets", 1))
+    include_images = bool(media_slots) and strategy.web
+    include_pdfs = strategy.pdf and bool((template_plan or {}).get("summary", {}).get("scrape_targets", 1))
     errors: list[str] = []
     accepted: list[ProductRecord] = []
     queue = list(candidates)
@@ -319,42 +361,46 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
         candidate = queue[cursor]
         cursor += 1
         try:
-            official_domain = _candidate_official_domain(candidate, item.identity, accepted)
             log(f"  probando: {candidate.url}")
-            rec = pipe.process_url(
-                item.identity,
-                candidate.url,
-                official_domain=official_domain,
-                include_pdfs=include_pdfs,
-                include_images=include_images,
-                browser_fallback=True,
-                target_semantics=target_semantics,
-                media_slots=media_slots,
-            )
+            if strategy.pdf and _looks_like_pdf_url(candidate.url):
+                rec = process_pdf_document(item.identity, candidate.url, target_semantics=target_semantics)
+            else:
+                if not strategy.web:
+                    continue
+                official_domain = _candidate_official_domain(candidate, item.identity, accepted)
+                rec = pipe.process_url(
+                    item.identity,
+                    candidate.url,
+                    official_domain=official_domain,
+                    include_pdfs=include_pdfs,
+                    include_images=include_images,
+                    browser_fallback=True,
+                    target_semantics=target_semantics,
+                    media_slots=media_slots,
+                )
+                if getattr(candidate, "manual_source", False) and (rec.fetch or {}).get("source_class") != "manufacturer":
+                    learned_brand = _compact(rec.identity.brand)
+                    host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
+                    if learned_brand and learned_brand in _compact(host):
+                        rec = pipe.process_url(
+                            item.identity,
+                            candidate.url,
+                            official_domain=host,
+                            include_pdfs=include_pdfs,
+                            include_images=include_images,
+                            browser_fallback=True,
+                            target_semantics=target_semantics,
+                            media_slots=media_slots,
+                        )
+
             if rec.identity.identifiers_conflicting:
                 raise ValueError("identificadores en conflicto")
-
-            if getattr(candidate, "manual_source", False) and (rec.fetch or {}).get("source_class") != "manufacturer":
-                learned_brand = _compact(rec.identity.brand)
-                host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
-                if learned_brand and learned_brand in _compact(host):
-                    rec = pipe.process_url(
-                        item.identity,
-                        candidate.url,
-                        official_domain=host,
-                        include_pdfs=include_pdfs,
-                        include_images=include_images,
-                        browser_fallback=True,
-                        target_semantics=target_semantics,
-                        media_slots=media_slots,
-                    )
-
             if accepted and not _cross_source_consistent(accepted[0], rec, candidate.url):
                 raise ValueError("fuente exacta contiene el identificador pero no representa la misma ficha de producto")
             accepted.append(rec)
             log(f"  fuente validada: {(rec.fetch or {}).get('source_class', '?')} / {rec.identity.match_level}")
 
-            if not manufacturer_followup_done:
+            if strategy.web and not manufacturer_followup_done:
                 enriched = _enriched_identity(item, rec)
                 if enriched:
                     followups = search_web(enriched, limit=20)
@@ -376,6 +422,15 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
         except Exception as exc:
             errors.append(f"{candidate.url}: {type(exc).__name__}: {exc}")
 
+    if not accepted and strategy.pdf:
+        accepted.extend(_ingest_direct_documents(
+            item.identity,
+            target_semantics=target_semantics,
+            seen_urls=seen_urls,
+            errors=errors,
+            log=log,
+        ))
+
     if not accepted:
         log("  SIN FUENTE VALIDADA: " + (errors[-1] if errors else "no hubo candidatos"))
         return None
@@ -384,38 +439,22 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
     resolution = analyze_resolution(rec, template_plan)
     gap_terms = list(resolution.get("research_terms") or [])
 
-    # Before generic secondary research, look explicitly for product manuals/datasheets/PDFs.
-    # Every direct PDF is still identity-validated and routed through the same evidence pool.
-    if gap_terms and include_pdfs:
-        document_candidates = discover_product_documents(rec.identity, limit=6)
-        document_extra: list[ProductRecord] = []
-        current_sources = set(rec.sources or [])
-        for candidate in document_candidates:
-            if candidate.url in seen_urls or candidate.url in current_sources:
-                continue
-            seen_urls.add(candidate.url)
-            try:
-                doc_rec = process_pdf_document(
-                    rec.identity,
-                    candidate.url,
-                    target_semantics=gap_terms,
-                )
-                accepted.append(doc_rec)
-                document_extra.append(doc_rec)
-                current_sources.add(candidate.url)
-                log(f"  documento técnico validado: {candidate.url}")
-                if len(document_extra) >= 3:
-                    break
-            except Exception as exc:
-                errors.append(f"document:{candidate.url}: {type(exc).__name__}: {exc}")
-
+    if gap_terms and strategy.pdf:
+        document_extra = _ingest_direct_documents(
+            rec.identity,
+            target_semantics=gap_terms,
+            seen_urls=seen_urls,
+            errors=errors,
+            log=log,
+        )
         if document_extra:
+            accepted.extend(document_extra)
             rec = _merge_valid_records(accepted)
             resolution = analyze_resolution(rec, template_plan)
             gap_terms = list(resolution.get("research_terms") or [])
             log(f"  cobertura tras documentos: pendientes={len(gap_terms)}")
 
-    if gap_terms:
+    if strategy.web and gap_terms:
         mode = "conflictos/huecos" if resolution.get("blocked") else "huecos"
         log(f"  segunda pasada por {mode}: {len(gap_terms)} campos/grupos pendientes")
         current_sources = set(rec.sources or [])
@@ -491,7 +530,9 @@ def run_batch(
     manual_part_numbers: list[str] | None = None,
     manual_identities: list[ProductIdentity] | None = None,
     manual_source_urls: list[list[str]] | None = None,
+    source_strategy: SourceStrategy | None = None,
 ) -> dict:
+    strategy = (source_strategy or SourceStrategy()).normalized()
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -502,6 +543,11 @@ def run_batch(
         f"Contrato Excel: {ps['fields_total']} campos | {ps['scrape_targets']} datos de producto | "
         f"{ps['media_slots']} imágenes | {ps['seller_inputs']} datos del vendedor | "
         f"{ps['marketplace_inputs']} datos marketplace"
+    )
+    log(
+        "Fuentes ejecución: "
+        f"WEB={'ON' if strategy.web else 'OFF'} | PDF={'ON' if strategy.pdf else 'OFF'} | "
+        f"OCR={'ON' if strategy.ocr else 'OFF'} | MISTRAL={'ON' if strategy.mistral else 'OFF'}"
     )
 
     manual_mode = bool(manual_identities or manual_part_numbers)
@@ -519,7 +565,13 @@ def run_batch(
     for index, item in enumerate(items, 1):
         label = item.identity.mpn or item.identity.ean or item.identity.model or item.identity.product_name
         log(f"[{index}/{len(items)}] {label}")
-        rec = scrape_item(item, str(out / "json"), template_plan=template_plan, log=log)
+        rec = scrape_item(
+            item,
+            str(out / "json"),
+            template_plan=template_plan,
+            log=log,
+            source_strategy=strategy,
+        )
         if rec:
             records.append(rec)
             row_assignments[(item.sheet, item.row)] = rec
@@ -546,6 +598,7 @@ def run_batch(
 
     summary = {
         "mode": "manual_product_identity" if manual_mode else "excel_detected",
+        "source_strategy": strategy.as_options(),
         "template_contract": template_plan["summary"],
         "template_contract_file": str(out / "template_contract.json"),
         "products_detected": len(items),

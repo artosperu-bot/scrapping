@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 
 from .key_store import delete_value, load_value, save_value
 from .pdf_desktop import App as PdfApp
+from .provider_probe import ProbeResult, probe_mistral, probe_ocr_space
 from .provider_settings import ProviderSettings
 from .update_service import ReleaseInfo, UpdateService
 from .version import APP_VERSION
@@ -21,6 +22,7 @@ _PROVIDER_KEYS = {
     "ocr": "ocr_space_api_key",
     "mistral": "mistral_api_key",
 }
+_PROBE_STATES = ("PROBANDO…", "CONECTADO", "RECHAZADO", "ERROR DE RED", "SIN CONFIGURAR")
 
 
 def credential_state(name: str) -> str:
@@ -122,7 +124,11 @@ class App(PdfApp):
         actions.grid(row=1, column=2, sticky="e")
         ttk.Button(actions, text="Guardar / reemplazar", command=lambda: self._save_key(provider, key_var, status_var)).pack(side="left")
         ttk.Button(actions, text="Borrar", command=lambda: self._delete_key(provider, key_var, status_var)).pack(side="left", padx=(6, 0))
-        ttk.Button(actions, text="Probar conexión · pendiente", state="disabled").pack(side="left", padx=(6, 0))
+        test_button = ttk.Button(actions, text="Probar conexión")
+        test_button.configure(
+            command=lambda p=provider, s=status_var, b=test_button: self._test_provider_connection(p, s, b)
+        )
+        test_button.pack(side="left", padx=(6, 0))
         if model_var is not None:
             ttk.Label(box, text="Modelo").grid(row=2, column=0, sticky="w", pady=(8, 0))
             ttk.Entry(box, textvariable=model_var, state="readonly", width=34).grid(row=2, column=1, sticky="w", padx=(14, 8), pady=(8, 0))
@@ -141,6 +147,26 @@ class App(PdfApp):
         delete_value(_PROVIDER_KEYS[provider])
         key_var.set("")
         status_var.set("SIN CONFIGURAR")
+
+    def _test_provider_connection(self, provider: str, status_var: tk.StringVar, button: ttk.Button):
+        status_var.set("PROBANDO…")
+        button.configure(state="disabled")
+        timeout = max(5, min(120, int(self.request_timeout.get())))
+        model = str(self.mistral_model.get() or "mistral-small-latest")
+
+        def work():
+            if provider == "ocr":
+                result = probe_ocr_space(timeout=timeout)
+            else:
+                result = probe_mistral(model=model, timeout=timeout)
+            self.after(0, lambda r=result: self._finish_provider_probe(r, status_var, button))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_provider_probe(self, result: ProbeResult, status_var: tk.StringVar, button: ttk.Button):
+        status = result.status if result.status in _PROBE_STATES else "RECHAZADO"
+        status_var.set(status)
+        button.configure(state="normal")
 
     def _save_non_secret_settings(self):
         self._provider_settings.set("ocr_space_enabled", bool(self.ocr_enabled.get()))

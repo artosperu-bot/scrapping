@@ -47,14 +47,8 @@ def _release_payload(tag="v0.10.5"):
         "prerelease": False,
         "draft": False,
         "assets": [
-            {
-                "name": "ProductIntelligence-Windows.zip",
-                "browser_download_url": "https://example.invalid/ProductIntelligence-Windows.zip",
-            },
-            {
-                "name": "ProductIntelligence-Windows.sha256",
-                "browser_download_url": "https://example.invalid/ProductIntelligence-Windows.sha256",
-            },
+            {"name": "ProductIntelligence-Windows.zip", "browser_download_url": "https://example.invalid/ProductIntelligence-Windows.zip"},
+            {"name": "ProductIntelligence-Windows.sha256", "browser_download_url": "https://example.invalid/ProductIntelligence-Windows.sha256"},
         ],
     }
 
@@ -81,11 +75,7 @@ def test_check_latest_returns_release_only_when_newer():
         notes="Cambios de prueba",
         page_url="https://github.com/artosperu-bot/scrapping/releases/tag/v0.10.5",
     )
-
-    same = UpdateService(
-        current_version="0.10.4",
-        session=FakeSession([FakeResponse(payload=_release_payload("v0.10.4"))]),
-    )
+    same = UpdateService(current_version="0.10.4", session=FakeSession([FakeResponse(payload=_release_payload("v0.10.4"))]))
     assert same.check_latest() is None
 
 
@@ -99,12 +89,7 @@ def test_check_latest_requires_both_release_assets():
 def test_download_verified_checks_sha256(tmp_path):
     zip_bytes = b"valid release bytes"
     digest = hashlib.sha256(zip_bytes).hexdigest()
-    session = FakeSession(
-        [
-            FakeResponse(content=zip_bytes),
-            FakeResponse(text=f"{digest}  ProductIntelligence-Windows.zip\n"),
-        ]
-    )
+    session = FakeSession([FakeResponse(content=zip_bytes), FakeResponse(text=f"{digest}  ProductIntelligence-Windows.zip\n")])
     service = UpdateService(current_version="0.10.4", session=session)
     release = ReleaseInfo("0.10.5", "zip", "sha", "", "")
     path = service.download_verified(release, tmp_path)
@@ -113,15 +98,7 @@ def test_download_verified_checks_sha256(tmp_path):
 
 
 def test_download_verified_rejects_digest_mismatch(tmp_path):
-    service = UpdateService(
-        current_version="0.10.4",
-        session=FakeSession(
-            [
-                FakeResponse(content=b"tampered"),
-                FakeResponse(text=f"{'0' * 64}  ProductIntelligence-Windows.zip\n"),
-            ]
-        ),
-    )
+    service = UpdateService(current_version="0.10.4", session=FakeSession([FakeResponse(content=b"tampered"), FakeResponse(text=f"{'0' * 64}  ProductIntelligence-Windows.zip\n")]))
     with pytest.raises(ValueError, match="SHA256"):
         service.download_verified(ReleaseInfo("0.10.5", "zip", "sha", "", ""), tmp_path)
 
@@ -136,15 +113,11 @@ def _zip_bytes(entries):
 
 def test_extract_product_bundle_requires_expected_root_and_extracts(tmp_path):
     archive = tmp_path / "bundle.zip"
-    archive.write_bytes(
-        _zip_bytes(
-            {
-                "ProductIntelligence/ProductIntelligence.exe": b"main",
-                "ProductIntelligence/ProductIntelligenceUpdater.exe": b"updater",
-                "ProductIntelligence/_internal/x.txt": b"x",
-            }
-        )
-    )
+    archive.write_bytes(_zip_bytes({
+        "ProductIntelligence/ProductIntelligence.exe": b"main",
+        "ProductIntelligence/ProductIntelligenceUpdater.exe": b"updater",
+        "ProductIntelligence/_internal/x.txt": b"x",
+    }))
     stage = tmp_path / "stage"
     root = extract_product_bundle(archive, stage)
     assert root == stage / "ProductIntelligence"
@@ -156,6 +129,12 @@ def test_extract_product_bundle_rejects_path_traversal(tmp_path):
     archive.write_bytes(_zip_bytes({"ProductIntelligence/../../evil.txt": b"evil"}))
     with pytest.raises(UnsafeArchiveError):
         extract_product_bundle(archive, tmp_path / "stage")
+
+
+def test_windows_wait_uses_native_process_handle_not_os_kill_probe():
+    source = Path("src/product_intelligence/updater.py").read_text(encoding="utf-8")
+    assert "WaitForSingleObject" in source
+    assert "os.kill(pid, 0)" not in source
 
 
 def test_provider_desktop_exposes_manual_update_controls():

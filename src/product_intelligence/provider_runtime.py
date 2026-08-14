@@ -67,5 +67,5 @@ def remote_ocr_text(image_bytes: bytes, *, language: str = "eng") -> str:
 
 
 def mistral_narrator_client():
-    """Return the intentionally unconfigured transport seam for this phase."""
-    return MistralClient()
+    """Return the production client while keeping the API key outside run state."""
+    return MistralClient(lambda: load_value("mistral_api_key"))

@@ -18,6 +18,8 @@ def test_build_document_queries_cover_manual_datasheet_and_mpn():
     assert '"jbl quantum 350" manual pdf' in joined
     assert '"jbl quantum 350" datasheet pdf' in joined
     assert '"jblq350wlblkam" manual pdf' in joined
+    assert '"jblq350wlblkam"' in [q.lower() for q in queries]
+    assert '"jblq350wlblkam" support downloads' in joined
     assert len(queries) == len(set(queries))
 
 

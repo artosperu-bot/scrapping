@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from .discovery import SearchCandidate, _provider_search, _rank_candidates
+from .discovery import SearchCandidate, _provider_search, _rank_candidates, search_web
 from .models import ProductIdentity
 from .normalize import key_norm
 from .pdf_evidence import discover_pdf_candidates
@@ -87,7 +87,6 @@ def identity_matches_document(identity: ProductIdentity, url: str, title: str = 
     if not model:
         return False
 
-    # Reject an explicit sibling model when the brand is present, e.g. Quantum 400 vs Quantum 350.
     model_tokens = re.findall(r"[a-z]+|\d+", key_norm(model_text))
     numeric_tokens = [x for x in model_tokens if x.isdigit() and len(x) >= 2]
     text_norm = key_norm(combined)
@@ -158,6 +157,32 @@ def resolve_document_candidate_urls(
     return resolved
 
 
+def _resolve_valid_candidates(
+    identity: ProductIdentity,
+    candidates: list[SearchCandidate],
+    *,
+    limit: int,
+    timeout: int,
+) -> list[SearchCandidate]:
+    resolved: list[SearchCandidate] = []
+    resolved_seen: set[str] = set()
+    for candidate in sorted(candidates, key=_document_rank, reverse=True):
+        try:
+            rows = resolve_document_candidate_urls(identity, candidate, timeout=timeout)
+        except requests.RequestException:
+            continue
+        for row in rows:
+            if row.url in resolved_seen:
+                continue
+            if not classify_document_candidate(row.url, row.title, row.snippet):
+                continue
+            resolved_seen.add(row.url)
+            resolved.append(row)
+            if len(resolved) >= limit:
+                return resolved
+    return resolved
+
+
 def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeout: int = 15) -> list[SearchCandidate]:
     seen: set[str] = set()
     valid: list[SearchCandidate] = []
@@ -175,21 +200,21 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeou
                 continue
             valid.append(candidate)
 
-    valid.sort(key=_document_rank, reverse=True)
-    resolved: list[SearchCandidate] = []
-    resolved_seen: set[str] = set()
-    for candidate in valid:
-        try:
-            rows = resolve_document_candidate_urls(identity, candidate, timeout=timeout)
-        except requests.RequestException:
+    resolved = _resolve_valid_candidates(identity, valid, limit=limit, timeout=timeout)
+    if resolved:
+        return resolved
+
+    fallback: list[SearchCandidate] = []
+    for candidate in search_web(identity, limit=max(12, limit), timeout=max(15, timeout)):
+        if candidate.url in seen:
             continue
-        for row in rows:
-            if row.url in resolved_seen:
-                continue
-            if not classify_document_candidate(row.url, row.title, row.snippet):
-                continue
-            resolved_seen.add(row.url)
-            resolved.append(row)
-            if len(resolved) >= limit:
-                return resolved
-    return resolved
+        seen.add(candidate.url)
+        if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
+            continue
+        if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(
+            candidate.url, candidate.title, candidate.snippet
+        ):
+            continue
+        fallback.append(candidate)
+
+    return _resolve_valid_candidates(identity, fallback, limit=limit, timeout=timeout)

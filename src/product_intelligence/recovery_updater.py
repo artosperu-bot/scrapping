@@ -125,6 +125,23 @@ def safe_extract_bundle(zip_path: Path, stage_dir: Path) -> Path:
     return product_root
 
 
+def _schedule_replace_on_reboot(pending: Path, dest: Path) -> None:
+    if os.name != "nt":
+        raise OSError("deferred replacement is only supported on Windows")
+    import ctypes
+
+    MOVEFILE_REPLACE_EXISTING = 0x1
+    MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    move_file_ex = kernel32.MoveFileExW
+    move_file_ex.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
+    move_file_ex.restype = ctypes.c_int
+    flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_DELAY_UNTIL_REBOOT
+    if not move_file_ex(str(Path(pending).resolve()), str(Path(dest).resolve()), flags):
+        error = ctypes.get_last_error()
+        raise OSError(error, "MoveFileExW failed", str(dest))
+
+
 def _copy_tree(source: Path, target: Path, *, retries: int = 30) -> None:
     target.mkdir(parents=True, exist_ok=True)
     for path in source.rglob("*"):
@@ -145,8 +162,18 @@ def _copy_tree(source: Path, target: Path, *, retries: int = 30) -> None:
             except OSError as exc:
                 last_error = exc
                 time.sleep(0.25)
-        if last_error is not None:
+        if last_error is None:
+            continue
+        if dest.name != UPDATER_EXE:
             raise last_error
+
+        pending = dest.with_name(dest.name + ".recovery_pending")
+        try:
+            pending.unlink(missing_ok=True)
+        except OSError:
+            pass
+        shutil.copy2(path, pending)
+        _schedule_replace_on_reboot(pending, dest)
 
 
 def _terminate_stale_updaters(*, platform: str | None = None, runner=subprocess.run) -> None:

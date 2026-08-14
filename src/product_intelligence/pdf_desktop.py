@@ -22,9 +22,17 @@ from .pdf_evidence import (
     pdf_evidence_scope,
     pdf_output_root,
 )
+from .provider_runtime import provider_run_scope
+from .provider_settings import ProviderSettings
 
 _BASE_EXTRACT_PAGE = pipeline_module.extract_page
 _BASE_EXTRACT_PDF = pipeline_module.extract_pdf
+_PROVIDER_OPTION_KEYS = (
+    "ocr_space_enabled",
+    "mistral_enabled",
+    "mistral_model",
+    "request_timeout",
+)
 
 
 def _pdf_aware_extract_page(html, base_url, identity_terms=None):
@@ -114,9 +122,15 @@ class App(IsolatedApp):
                 messagebox.showerror("Identidad", "Hay productos sin identidad válida. Corrígelos antes de ejecutar.")
                 return
             products.append(snap)
+
+        persisted = ProviderSettings().as_dict()
+        options = {"use_pdf_evidence": bool(self.use_pdf_evidence.get())}
+        for key in _PROVIDER_OPTION_KEYS:
+            options[key] = persisted.get(key)
+
         snapshot = ExecutionSnapshot.create(
             "EXCEL", self.out.get(), products, workbook=self.excel.get(), overwrite=self.overwrite.get(),
-            options={"use_pdf_evidence": bool(self.use_pdf_evidence.get())},
+            options=options,
         )
         self._active_snapshots[snapshot.run_id] = snapshot
         self.runbtn.configure(state="disabled")
@@ -129,12 +143,26 @@ class App(IsolatedApp):
                 stage = str(event.get("stage") or "PDF")
                 status = "ERROR" if stage == "PDF_ERROR" else "REJECTED" if stage == "PDF_REJECTED" else "FOUND" if stage in {"PDF_FOUND", "PDF_DOWNLOADED", "PDF_TEXT", "PDF_OCR"} else "PROGRESS"
                 self._audit(job, status=status, stage=stage, source="PDF", url=str(event.get("url") or ""), detail=str(event.get("detail") or ""), result=str(event.get("local_path") or ""))
+
+            def on_provider(event, data):
+                detail = ", ".join(f"{key}={value}" for key, value in sorted((data or {}).items()))
+                status = "REJECTED" if event == "MISTRAL_DESCRIPTION_REJECTED" else "PROGRESS"
+                self._audit(
+                    job,
+                    status=status,
+                    stage=event,
+                    source=str((data or {}).get("provider") or "PROVIDER"),
+                    detail=detail,
+                )
+
+            provider_settings = {key: job.option(key) for key in _PROVIDER_OPTION_KEYS}
             try:
                 identities = [p.identity for p in job.products]
                 urls = [list(p.manual_urls) for p in job.products]
                 self.emit(f"=== {job.run_id} INICIO SCRAPING ===")
-                with pdf_evidence_scope(bool(job.option("use_pdf_evidence", True)), job.output_root, on_pdf):
-                    result = run_batch(job.workbook, job.output_root, overwrite=job.overwrite, log=self.emit, manual_identities=identities, manual_source_urls=urls)
+                with provider_run_scope(provider_settings, on_provider):
+                    with pdf_evidence_scope(bool(job.option("use_pdf_evidence", True)), job.output_root, on_pdf):
+                        result = run_batch(job.workbook, job.output_root, overwrite=job.overwrite, log=self.emit, manual_identities=identities, manual_source_urls=urls)
                 self.emit(json.dumps(result, ensure_ascii=False, indent=2))
                 self._audit(job, status="DONE", stage="final", detail="Scraping Excel completado.", result=str(result.get("output_excel") or ""))
                 self.after(0, lambda: messagebox.showinfo("Terminado", f"Excel: {result['output_excel']}"))

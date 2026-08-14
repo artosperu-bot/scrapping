@@ -149,6 +149,26 @@ def _copy_tree(source: Path, target: Path, *, retries: int = 30) -> None:
             raise last_error
 
 
+def _terminate_stale_updaters(*, platform: str | None = None, runner=subprocess.run) -> None:
+    platform_name = os.name if platform is None else platform
+    if platform_name != "nt":
+        return
+    script = (
+        "Get-Process -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.ProcessName -like 'ProductIntelligenceUpdater*' } | "
+        "Stop-Process -Force -ErrorAction SilentlyContinue"
+    )
+    runner(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    time.sleep(0.75)
+
+
 def _wait_for_pid_exit(pid: int, timeout: float = 120.0) -> None:
     if pid <= 0 or os.name != "nt":
         return
@@ -195,6 +215,7 @@ def recover(target_dir: Path, *, session=requests) -> str:
         expected = parse_sha256(sha_path.read_text(encoding="utf-8", errors="replace"))
         verify_sha256(archive, expected)
         product_root = safe_extract_bundle(archive, temp_dir / "stage")
+        _terminate_stale_updaters()
         _copy_tree(product_root, target_dir)
 
     subprocess.Popen([str(target_dir / APP_EXE)], cwd=str(target_dir), close_fds=True)

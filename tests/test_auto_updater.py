@@ -154,6 +154,14 @@ def test_pyinstaller_bundle_contains_external_updater():
     assert "ProductIntelligenceUpdater.exe" in workflow
 
 
+def test_updater_exe_is_standalone_when_copied_to_temp():
+    spec = Path("ProductIntelligence.spec").read_text(encoding="utf-8")
+    updater_block = spec.split("updater_exe = EXE(", 1)[1].split("\n)\n\ncoll = COLLECT", 1)[0]
+    assert "updater_analysis.binaries" in updater_block
+    assert "updater_analysis.datas" in updater_block
+    assert "exclude_binaries=False" in updater_block
+
+
 def test_release_workflow_publishes_zip_and_checksum():
     workflow = Path(".github/workflows/release-windows.yml").read_text(encoding="utf-8")
     assert "release/windows" in workflow

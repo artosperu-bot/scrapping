@@ -62,6 +62,10 @@ def _compact_header(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", normalize_header(value))
 
 
+_ALIAS_NORMALIZED = {
+    kind: {normalize_header(alias) for alias in aliases}
+    for kind, aliases in _IDENTITY_ALIASES.items()
+}
 _ALIAS_COMPACT = {
     kind: {_compact_header(alias) for alias in aliases}
     for kind, aliases in _IDENTITY_ALIASES.items()
@@ -73,8 +77,8 @@ def identity_header_kind(label: Any) -> str | None:
     compact = _compact_header(normalized)
     if not normalized:
         return None
-    for kind, aliases in _IDENTITY_ALIASES.items():
-        if normalized in {normalize_header(x) for x in aliases} or compact in _ALIAS_COMPACT[kind]:
+    for kind in _IDENTITY_ALIASES:
+        if normalized in _ALIAS_NORMALIZED[kind] or compact in _ALIAS_COMPACT[kind]:
             return kind
     canonical = canonical_key(normalized)
     mapping = {
@@ -130,13 +134,19 @@ def _value_looks_valid(kind: str, value: Any) -> bool:
     text = _clean_value(value)
     if not text or _identity_placeholder(text):
         return False
+    # A later header label is structural evidence, not a product value for an upper header candidate.
+    if identity_header_kind(text) is not None:
+        return False
     if kind == "gtin":
         compact = re.sub(r"[\s-]+", "", text)
         return compact.isdigit() and len(compact) in {8, 12, 13, 14}
     if kind in {"part_number", "sku"}:
-        return looks_like_part_number(text) or (len(text) >= 3 and len(text) <= 80 and " " not in text)
+        return looks_like_part_number(text) or (3 <= len(text) <= 80 and " " not in text)
     if kind == "model":
-        return len(text) <= 120
+        if looks_like_part_number(text):
+            return True
+        # Descriptive models are valid, but long prose/instructions are not product-row evidence.
+        return len(text) <= 120 and len(text.split()) <= 6
     if kind == "product_name":
         return 2 <= len(text) <= 250
     return bool(text)
@@ -187,6 +197,18 @@ class WorkbookIntakeResult:
         return {"sheets": [sheet.to_dict() for sheet in self.sheets]}
 
 
+def _row_has_identity_header_signal(ws, row: int) -> bool:
+    signals = 0
+    for col in range(1, ws.max_column + 1):
+        value = ws.cell(row, col).value
+        if value in (None, ""):
+            continue
+        kind = identity_header_kind(value)
+        if kind and kind not in {"brand", "source_url"}:
+            signals += 1
+    return signals > 0
+
+
 def _candidate_header(ws, row: int) -> tuple[float, dict[int, str], dict[int, str], dict[str, list[int]], int]:
     raw_headers: dict[int, str] = {}
     normalized_headers: dict[int, str] = {}
@@ -213,6 +235,9 @@ def _candidate_header(ws, row: int) -> tuple[float, dict[int, str], dict[int, st
     if identity_kinds:
         end = min(ws.max_row, row + 30)
         for rr in range(row + 1, end + 1):
+            # Do not let an upper semantic row steal product evidence that belongs to a later table.
+            if _row_has_identity_header_signal(ws, rr):
+                break
             row_hit = False
             for kind in identity_kinds:
                 for col in columns.get(kind, []):

@@ -1,0 +1,70 @@
+name: Build Recovery Updater Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/recovery-updater-v0104
+    paths:
+      - 'src/product_intelligence/recovery_updater.py'
+      - 'run_recovery_updater.py'
+      - 'ProductIntelligenceRecovery.spec'
+      - 'tests/test_recovery_updater.py'
+      - '.github/workflows/build-recovery-updater.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-intelligence-recovery-updater-windows
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install desktop and test dependencies
+        shell: cmd
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[desktop,dev]"
+
+      - name: Run recovery updater tests
+        shell: cmd
+        run: python -m pytest tests\test_recovery_updater.py -q
+
+      - name: Build standalone recovery updater
+        shell: cmd
+        run: pyinstaller --noconfirm --clean ProductIntelligenceRecovery.spec
+
+      - name: Verify recovery executable exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'dist/ProductIntelligenceRecoveryUpdater.exe')) {
+            throw 'Missing ProductIntelligenceRecoveryUpdater.exe'
+          }
+
+      - name: Smoke standalone recovery updater from TEMP
+        shell: pwsh
+        run: |
+          $smokeDir = Join-Path $env:RUNNER_TEMP 'product-intelligence-recovery-smoke'
+          if (Test-Path $smokeDir) { Remove-Item $smokeDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $smokeDir | Out-Null
+          $smokeExe = Join-Path $smokeDir 'ProductIntelligenceRecoveryUpdater.exe'
+          Copy-Item 'dist/ProductIntelligenceRecoveryUpdater.exe' $smokeExe
+          $process = Start-Process -FilePath $smokeExe -ArgumentList '--self-test' -WorkingDirectory $smokeDir -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Recovery updater self-test failed with exit code $($process.ExitCode)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProductIntelligenceRecoveryUpdater-Windows
+          path: dist/ProductIntelligenceRecoveryUpdater.exe
+          if-no-files-found: error

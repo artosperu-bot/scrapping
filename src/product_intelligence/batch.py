@@ -12,6 +12,7 @@ from .input_identity import parse_product_query
 from .discovery import search_web, search_web_for_fields
 from .document_discovery import discover_product_documents
 from .document_ingestion import process_pdf_document
+from .excel_intake import analyze_workbook_intake
 from .excel_mapper_v8 import fill_excel_v8
 from .models import ProductIdentity, ProductRecord
 from .normalize import key_norm
@@ -85,50 +86,18 @@ def _promote_mpn(vals: dict[str, str]) -> None:
 
 
 def detect_items(template: str) -> list[BatchItem]:
-    """Detect product identities while ignoring marketplace/template example values."""
-    wb = load_workbook(template, data_only=False, read_only=False)
-    items: list[BatchItem] = []
-    for ws in wb.worksheets:
-        matrix = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)] for r in range(1, min(ws.max_row, 20) + 1)]
-        info = analyze_matrix(matrix)
-        fields = {f["column"]: f for f in info.get("fields") or []}
-        if len(fields) < 3:
-            continue
-        header_row = info["header_row"]
-        for row in range(header_row + 1, ws.max_row + 1):
-            vals: dict[str, str] = {}
-            source_url = None
-            for col, field in fields.items():
-                value = ws.cell(row, col).value
-                if value in (None, ""):
-                    continue
-                label = key_norm(field["label"])
-                canonical = field.get("canonical")
-                if canonical in {"brand", "model", "ean", "upc", "gtin", "mpn"}:
-                    cleaned = _clean_id(value)
-                    if canonical in {"ean", "upc", "gtin", "mpn"} and _identity_placeholder(cleaned):
-                        continue
-                    vals[canonical] = cleaned
-                if field.get("external_id") == "39" or canonical == "product_name":
-                    text = str(value).strip()
-                    if not _identity_placeholder(text):
-                        vals["product_name"] = text
-                if any(x in label for x in ["source url", "url fuente", "pagina oficial", "official url"]):
-                    source_url = str(value).strip()
-
-            for col in range(1, ws.max_column + 1):
-                header = key_norm(str(ws.cell(header_row, col).value or ""))
-                if any(x == header or x in header for x in ["mpn", "part number", "manufacturer part number", "codigo fabricante"]):
-                    candidate = _clean_id(ws.cell(row, col).value)
-                    if candidate and not _identity_placeholder(candidate):
-                        vals["mpn"] = candidate
-
-            _promote_mpn(vals)
-            if not any(vals.get(k) for k in ["mpn", "ean", "upc", "gtin", "model", "product_name"]):
-                continue
-            identity = ProductIdentity(**{k: v for k, v in vals.items() if k in ProductIdentity.model_fields})
-            items.append(BatchItem(row=row, sheet=ws.title, identity=identity, source_url=source_url, source_urls=[source_url] if source_url else []))
-    return items
+    """Detect normalized product identities from heterogeneous Excel workbooks."""
+    intake = analyze_workbook_intake(template)
+    return [
+        BatchItem(
+            row=product.row,
+            sheet=product.sheet,
+            identity=product.identity,
+            source_url=product.source_url,
+            source_urls=list(product.source_urls or []),
+        )
+        for product in intake.products
+    ]
 
 
 def _best_product_sheet(template: str) -> tuple[str, int]:

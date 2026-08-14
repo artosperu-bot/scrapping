@@ -1,3 +1,5 @@
+import pytest
+
 from product_intelligence.workspace_tracking import WorkspaceRunTracker
 from product_intelligence.workspaces import RunStatus, Stage, WorkspaceRepository
 
@@ -58,3 +60,16 @@ def test_failed_stage_is_recorded_without_erasing_completed_stages(tmp_path):
     assert states[Stage.EXCEL].status is RunStatus.COMPLETED
     assert states[Stage.PRICES].status is RunStatus.ERROR
     assert repo.get_run(run.id).status is RunStatus.ERROR
+
+
+def test_tracker_rejects_product_owned_by_another_workspace(tmp_path):
+    repo = WorkspaceRepository(tmp_path / "workspaces.db")
+    first = repo.create_workspace("Falabella")
+    second = repo.create_workspace("Ripley")
+    foreign_product = repo.add_product(second.id, part_number="PN-X")
+    tracker = WorkspaceRunTracker(repo, first.id)
+
+    with pytest.raises(ValueError, match="does not belong to workspace"):
+        tracker.begin_core([foreign_product.id])
+
+    assert repo.latest_run(foreign_product.id) is None

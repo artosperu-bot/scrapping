@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "product-intelligence"
-version = "0.10.16"
+version = "0.10.17"
 description = "Motor de inteligencia de producto con identidad fuerte, evidencia trazable, media intelligence y completado seguro de Excel."
 requires-python = ">=3.10"
 authors = [{ name = "S&T Store" }]

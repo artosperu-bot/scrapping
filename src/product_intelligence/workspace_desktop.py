@@ -32,6 +32,7 @@ class App(ProviderApp):
         self._active_workspace_id: str | None = None
         self._workspace_product_ids: dict[int, str] = {}
         self._workspace_core_active = False
+        self._workspace_core_watching = False
         self._workspace_core_success: bool | None = None
         self._workspace_media_active = False
         self._workspace_media_error = False
@@ -54,7 +55,7 @@ class App(ProviderApp):
     def emit(self, msg):
         text = str(msg)
         super().emit(text)
-        if self._workspace_core_active:
+        if self._workspace_core_watching:
             if text == "=== TERMINADO ===":
                 self._workspace_core_success = True
             elif text.startswith("Traceback (most recent call last)"):
@@ -73,8 +74,10 @@ class App(ProviderApp):
         self._sync_workspace_products()
         product_ids = [self._workspace_product_ids[i] for i in sorted(self._workspace_product_ids)]
         self._workspace_core_success = None
+        self._workspace_core_watching = True
         super().run()
         if not product_ids or not self.runbtn.instate(("disabled",)):
+            self._workspace_core_watching = False
             return
         self._workspace_tracker.begin_core(product_ids)
         self._workspace_core_active = True
@@ -90,6 +93,7 @@ class App(ProviderApp):
         error = None if success else "Core pipeline ended without a successful terminal marker."
         self._workspace_tracker.finish_core(success=success, error=error)
         self._workspace_core_active = False
+        self._workspace_core_watching = False
         self._reload_workspaces(select_id=self._active_workspace_id)
 
     def _start_media_indices(self, indices: list[int]):

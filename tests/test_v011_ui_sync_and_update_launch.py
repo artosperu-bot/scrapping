@@ -22,9 +22,10 @@ def test_shared_product_labels_support_sku_fallback():
     assert "identity.sku" in source
 
 
-def test_main_app_launches_updater_as_independent_windows_process():
+def test_main_app_launches_updater_independently_with_windows_uac():
     provider = (SRC / "provider_desktop.py").read_text(encoding="utf-8")
-    assert "def _updater_creationflags" in provider
-    assert "CREATE_NEW_PROCESS_GROUP" in provider
-    assert "DETACHED_PROCESS" in provider
-    assert "creationflags=self._updater_creationflags()" in provider
+    assert "def _launch_updater_process" in provider
+    assert "ShellExecuteW" in provider
+    assert '"runas"' in provider
+    assert "subprocess.list2cmdline" in provider
+    assert "UAC_ELEVATION_CANCELLED" in provider

@@ -11,6 +11,7 @@ datas=[]; binaries=[]; hiddenimports=[
     'product_intelligence.ocr_space_client',
     'product_intelligence.mistral_client',
     'product_intelligence.description_narrator',
+    'product_intelligence.progress_animation',
     'product_intelligence.update_service',
     'product_intelligence.version',
 ]
@@ -29,6 +30,13 @@ media_assets=root/'src'/'product_intelligence'/'assets'
 if media_assets.exists():
     datas.append((str(media_assets),'product_intelligence/assets'))
 
+progress_assets=root/'src'/'product_intelligence'/'assets'/'progress'
+for progress_name in ('processing.gif', 'completed.gif'):
+    progress_file=progress_assets/progress_name
+    if not progress_file.is_file():
+        raise FileNotFoundError(f"Missing required progress asset: {progress_file}")
+    datas.append((str(progress_file),'product_intelligence/assets/progress'))
+
 common_excludes=[
     'pytest',
     'paddleocr','paddlepaddle','paddle','cv2','numpy',
@@ -42,11 +50,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=common_excludes,
-    noarchive=False,
+    hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=common_excludes, noarchive=False,
 )
 pyz = PYZ(a.pure)
 exe = EXE(
@@ -57,16 +61,9 @@ exe = EXE(
 )
 
 updater_analysis = Analysis(
-    ['run_updater.py'],
-    pathex=[str(root/'src')],
-    binaries=[],
-    datas=[],
-    hiddenimports=['product_intelligence.updater'],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=common_excludes,
-    noarchive=False,
+    ['run_updater.py'], pathex=[str(root/'src')], binaries=[], datas=[],
+    hiddenimports=['product_intelligence.updater'], hookspath=[], hooksconfig={}, runtime_hooks=[],
+    excludes=common_excludes, noarchive=False,
 )
 updater_pyz = PYZ(updater_analysis.pure)
 updater_exe = EXE(
@@ -77,14 +74,6 @@ updater_exe = EXE(
 )
 
 coll = COLLECT(
-    exe,
-    updater_exe,
-    a.binaries,
-    a.datas,
-    updater_analysis.binaries,
-    updater_analysis.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='ProductIntelligence'
+    exe, updater_exe, a.binaries, a.datas, updater_analysis.binaries, updater_analysis.datas,
+    strip=False, upx=True, upx_exclude=[], name='ProductIntelligence'
 )

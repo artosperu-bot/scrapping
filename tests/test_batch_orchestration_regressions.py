@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from product_intelligence.batch import (
     _coverage_sufficient,
     _identity_placeholder,
@@ -32,3 +34,12 @@ def test_research_stops_only_when_coverage_is_sufficient():
     resolution = {"blocked": False, "research_terms": []}
     assert _coverage_sufficient(resolution, has_manufacturer=True) is True
     assert _coverage_sufficient(resolution, has_manufacturer=False) is False
+
+
+def test_document_discovery_runs_before_generic_gap_research():
+    source = Path("src/product_intelligence/batch.py").read_text(encoding="utf-8")
+    document_call = source.index("document_candidates = discover_product_documents")
+    pdf_ingestion = source.index("process_pdf_document(")
+    generic_gap = source.index("search_web_for_fields(rec.identity")
+    assert document_call < generic_gap
+    assert pdf_ingestion < generic_gap

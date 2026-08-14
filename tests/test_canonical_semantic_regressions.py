@@ -86,3 +86,10 @@ def test_wired_usb_c_without_battery_maps_power_and_not_applicable_autonomy():
     assert "Alámbrico" in connectivity.value
     assert "Bluetooth" not in connectivity.value
     assert "Inalámbrico" not in connectivity.value
+
+
+def test_charging_usb_c_is_not_host_connectivity():
+    rec = record(ev("Charging cable", "USB-C"), mpn="GEN-CHARGE")
+    facts = build_canonical_facts(rec)
+    assert facts["connectivity"]["usb_c"] is False
+    assert facts["connectivity"]["wired"] is None

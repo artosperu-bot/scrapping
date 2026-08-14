@@ -10,6 +10,8 @@ from openpyxl import load_workbook
 
 from .input_identity import parse_product_query
 from .discovery import search_web, search_web_for_fields
+from .document_discovery import discover_product_documents
+from .document_ingestion import process_pdf_document
 from .excel_mapper_v8 import fill_excel_v8
 from .models import ProductIdentity, ProductRecord
 from .normalize import key_norm
@@ -65,7 +67,6 @@ def _looks_like_part_number(value: str | None) -> bool:
         return False
     if not re.fullmatch(r"[A-Za-z0-9._/-]+", text):
         return False
-    # Pure numbers belong to GTIN/EAN/UPC, not MPN inference.
     if text.isdigit():
         return False
     letters = sum(ch.isalpha() for ch in text)
@@ -115,7 +116,6 @@ def detect_items(template: str) -> list[BatchItem]:
                 if any(x in label for x in ["source url", "url fuente", "pagina oficial", "official url"]):
                     source_url = str(value).strip()
 
-            # Some marketplace templates have no explicit MPN column. Scan literal headers too.
             for col in range(1, ws.max_column + 1):
                 header = key_norm(str(ws.cell(header_row, col).value or ""))
                 if any(x == header or x in header for x in ["mpn", "part number", "manufacturer part number", "codigo fabricante"]):
@@ -267,8 +267,6 @@ def _candidate_official_domain(candidate, identity: ProductIdentity, accepted: l
         if b and b in host_compact:
             return host
 
-    # Manual seed URLs are authoritative candidates, not authoritative facts. When brand is
-    # still unknown, allow a conservative hostname/strong-id prefix hint (e.g. jbl.com + JBL...).
     if getattr(candidate, "manual_source", False):
         label = _compact(host.split(".")[0])
         strong = _compact(identity.mpn or identity.model or identity.product_name)
@@ -367,8 +365,6 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
             if rec.identity.identifiers_conflicting:
                 raise ValueError("identificadores en conflicto")
 
-            # A manual official seed can initially arrive without brand metadata. If the page itself
-            # establishes a brand matching its host, re-process as manufacturer to unlock official PDFs.
             if getattr(candidate, "manual_source", False) and (rec.fetch or {}).get("source_class") != "manufacturer":
                 learned_brand = _compact(rec.identity.brand)
                 host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
@@ -389,8 +385,6 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
             accepted.append(rec)
             log(f"  fuente validada: {(rec.fetch or {}).get('source_class', '?')} / {rec.identity.match_level}")
 
-            # As soon as brand is learned from a validated page, explicitly re-run discovery using
-            # brand + strong identifier and inject official/manufacturer candidates before secondaries.
             if not manufacturer_followup_done:
                 enriched = _enriched_identity(item, rec)
                 if enriched:
@@ -417,15 +411,41 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
         log("  SIN FUENTE VALIDADA: " + (errors[-1] if errors else "no hubo candidatos"))
         return None
 
-    # PASS 1: merge all validated evidence. The primary source is ranked manufacturer-first.
     rec = _merge_valid_records(accepted)
-
-    # PASS 2: semantic resolution / applicability / contradiction analysis.
     resolution = analyze_resolution(rec, template_plan)
     gap_terms = list(resolution.get("research_terms") or [])
 
-    # PASS 3: targeted gap research for every unresolved semantic returned by the resolver.
-    # Search in small groups so a single generic query does not dilute technical intent.
+    # Before generic secondary research, look explicitly for product manuals/datasheets/PDFs.
+    # Every direct PDF is still identity-validated and routed through the same evidence pool.
+    if gap_terms and include_pdfs:
+        document_candidates = discover_product_documents(rec.identity, limit=6)
+        document_extra: list[ProductRecord] = []
+        current_sources = set(rec.sources or [])
+        for candidate in document_candidates:
+            if candidate.url in seen_urls or candidate.url in current_sources:
+                continue
+            seen_urls.add(candidate.url)
+            try:
+                doc_rec = process_pdf_document(
+                    rec.identity,
+                    candidate.url,
+                    target_semantics=gap_terms,
+                )
+                accepted.append(doc_rec)
+                document_extra.append(doc_rec)
+                current_sources.add(candidate.url)
+                log(f"  documento técnico validado: {candidate.url}")
+                if len(document_extra) >= 3:
+                    break
+            except Exception as exc:
+                errors.append(f"document:{candidate.url}: {type(exc).__name__}: {exc}")
+
+        if document_extra:
+            rec = _merge_valid_records(accepted)
+            resolution = analyze_resolution(rec, template_plan)
+            gap_terms = list(resolution.get("research_terms") or [])
+            log(f"  cobertura tras documentos: pendientes={len(gap_terms)}")
+
     if gap_terms:
         mode = "conflictos/huecos" if resolution.get("blocked") else "huecos"
         log(f"  segunda pasada por {mode}: {len(gap_terms)} campos/grupos pendientes")
@@ -467,9 +487,6 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
                     accepted.append(gap_rec)
                     total_extra += 1
                     log(f"    gap fuente validada: {(gap_rec.fetch or {}).get('source_class','?')} / {gap_rec.identity.match_level}")
-
-                    # Two validated sources per gap group are normally enough; manufacturer evidence
-                    # gets first priority due to candidate ordering and record ranking.
                     if len(chunk_extra) >= 2:
                         break
                 except Exception as exc:
@@ -483,8 +500,6 @@ def scrape_item(item: BatchItem, out_dir: str, template_plan: dict | None = None
                     log("  PASS 3 completó todos los huecos resolubles")
                     break
 
-    # Only the post-research resolution is final. Unresolved contradictions stay visible and
-    # are never silently written by the Excel layer.
     rec.evidence_graph = dict(rec.evidence_graph or {})
     rec.evidence_graph["resolution_audit"] = resolution
     rec.missing_fields = [row["semantic"] for row in resolution.get("fields", []) if row.get("status") == "INSUFFICIENT_EVIDENCE"]

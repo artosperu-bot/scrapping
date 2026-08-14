@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable, Protocol, Sequence
+
+from .canonical_facts import build_canonical_facts
 
 
 _DENY_ATTR = re.compile(
@@ -39,6 +42,7 @@ def _identity_value(identity: Any, name: str) -> str:
 
 
 def _iter_evidence(rec: Any):
+    """Legacy conservative iterator retained for compatibility; narration no longer consumes it."""
     for ev in list(getattr(rec, "evidence", None) or []):
         if bool(getattr(ev, "rejected", False)):
             continue
@@ -59,12 +63,115 @@ def _iter_evidence(rec: Any):
         yield attr, text
 
 
+def _canonical_input(rec: Any) -> Any:
+    """Adapt legacy/partial record-shaped objects to the canonical builder without mutating them."""
+    identity = getattr(rec, "identity", None)
+    identity_fields = (
+        "brand", "manufacturer", "product_name", "model", "mpn", "sku", "ean", "upc", "gtin",
+        "variant", "capacity", "color", "region", "confidence", "match_level",
+        "identifiers_confirmed", "identifiers_conflicting",
+    )
+    normalized_identity = SimpleNamespace(**{name: getattr(identity, name, None) for name in identity_fields})
+    evidence = [ev for ev in list(getattr(rec, "evidence", None) or []) if not bool(getattr(ev, "rejected", False))]
+    return SimpleNamespace(identity=normalized_identity, evidence=evidence)
+
+
+def _fmt_number(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value).strip()
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:g}"
+
+
+def _yes_no(value: bool | None) -> str | None:
+    if value is True:
+        return "Sí"
+    if value is False:
+        return "No"
+    return None
+
+
 def build_safe_facts(rec: Any, *, limit: int = 24) -> list[str]:
-    """Return only validated, non-commercial facts suitable for narration."""
+    """Project only resolved canonical facts into Spanish narration-safe text.
+
+    Raw evidence never goes directly to Mistral. UNKNOWN values are omitted instead of
+    being converted to negative or positive claims.
+    """
+    facts_map = build_canonical_facts(_canonical_input(rec))
+    conn = facts_map.get("connectivity", {})
+    bt = conn.get("bluetooth", {})
+    battery = facts_map.get("battery", {})
+    durability = facts_map.get("durability", {})
+    product = facts_map.get("product", {})
+    package = facts_map.get("package", {})
+
+    candidates: list[tuple[str, Any]] = []
+
+    bt_present = _yes_no(bt.get("present"))
+    if bt_present is not None:
+        candidates.append(("Bluetooth", bt_present))
+    if bt.get("version") is not None:
+        candidates.append(("Versión Bluetooth", str(bt["version"])))
+
+    transport_labels = (
+        ("Conexión alámbrica", conn.get("wired")),
+        ("Conexión inalámbrica", conn.get("wireless")),
+        ("USB-C", conn.get("usb_c") is True),
+        ("USB", conn.get("usb") is True),
+        ("RF 2.4 GHz", conn.get("rf_2_4ghz") is True),
+        ("Wi-Fi", conn.get("wifi") is True),
+        ("NFC", conn.get("nfc") is True),
+        ("Jack 3.5 mm", conn.get("jack_3_5mm") is True),
+    )
+    for label, value in transport_labels:
+        if value is True:
+            candidates.append((label, "Sí"))
+
+    if battery.get("runtime_hours") is not None:
+        candidates.append(("Autonomía", f"{_fmt_number(battery['runtime_hours'])} h"))
+    if battery.get("capacity_mah") is not None:
+        candidates.append(("Capacidad de batería", f"{_fmt_number(battery['capacity_mah'])} mAh"))
+    rechargeable = _yes_no(battery.get("rechargeable"))
+    if rechargeable is not None:
+        candidates.append(("Batería recargable", rechargeable))
+
+    if durability.get("ip_rating"):
+        candidates.append(("Protección IP", durability["ip_rating"]))
+    if facts_map.get("driver_size_mm") is not None:
+        candidates.append(("Tamaño del driver", f"{_fmt_number(facts_map['driver_size_mm'])} mm"))
+
+    if product.get("weight_g") is not None:
+        candidates.append(("Peso", f"{_fmt_number(product['weight_g'])} g"))
+    elif product.get("weight"):
+        candidates.append(("Peso", product["weight"]))
+    if product.get("dimensions"):
+        candidates.append(("Dimensiones", product["dimensions"]))
+
+    if facts_map.get("form_factor"):
+        form = {"in-ear": "In-ear", "on-ear": "On-ear", "over-ear": "Over-ear"}.get(
+            facts_map["form_factor"], facts_map["form_factor"]
+        )
+        candidates.append(("Formato", form))
+    if facts_map.get("semantic_segment"):
+        segment = {"sports": "Deportivo", "gaming": "Gaming"}.get(
+            facts_map["semantic_segment"], facts_map["semantic_segment"]
+        )
+        candidates.append(("Segmento", segment))
+
+    if package.get("contents"):
+        candidates.append(("Contenido de la caja", package["contents"]))
+
     facts: list[str] = []
     seen: set[str] = set()
-    for attr, value in _iter_evidence(rec):
-        item = f"{attr}: {value}"
+    for label, value in candidates:
+        if value in (None, ""):
+            continue
+        item = f"{label}: {str(value).strip()}"
+        if _DENY_TEXT.search(item):
+            continue
         key = re.sub(r"\s+", " ", item).strip().casefold()
         if key in seen:
             continue

@@ -5,6 +5,7 @@ from typing import Any
 
 from .models import ProductRecord
 from .normalize import canonical_key, key_norm
+from .source_authority import effective_quality
 
 
 def _value(ev) -> str:
@@ -31,11 +32,7 @@ def _gtin_type(value: str | None) -> str | None:
 
 
 def _bluetooth_version(attribute: str, raw: str) -> str | None:
-    """Return a Bluetooth protocol version only from version-shaped evidence.
-
-    Telemetry attributes such as ``Bluetooth Transmitter Power = 20 dBm`` contain the
-    word Bluetooth but are not evidence that the product exposes Bluetooth transport.
-    """
+    """Return a Bluetooth protocol version only from version-shaped evidence."""
     attr = key_norm(attribute)
     raw_text = str(raw or "").strip()
     if re.search(r"bluetooth\s*(?:version|versi[oó]n)", attr, re.I) or attr in {"bluetooth", "bluetooth version", "version bluetooth", "version de bluetooth"}:
@@ -61,6 +58,37 @@ def _charging_or_accessory_context(attribute: str, raw: str) -> bool:
         "package contents", "what s in the box", "contenido del paquete", "included items",
         "battery charging", "usb charging",
     ])
+
+
+def _proprietary_rf_context(attribute: str, raw: str) -> bool:
+    joined = key_norm(f"{attribute} {raw}")
+    if "bluetooth" in joined and not re.search(
+        r"dongle|receiver|receptor|wireless adapter|adaptador|proprietary|propietari|usb wireless",
+        joined,
+        re.I,
+    ):
+        return False
+    return bool(re.search(r"\b(?:rf|radio ?frequency|2[ .]?4\s*ghz)\b", joined, re.I))
+
+
+def _select_authoritative_candidate(canonical: str, candidates: list[tuple[Any, Any]], *, min_confidence: float = .70):
+    """Choose a value only when its evidence is eligible and strictly strongest."""
+    ranked = []
+    for ev, value in candidates:
+        confidence = float(getattr(ev, "confidence", 0.0) or 0.0)
+        if confidence < min_confidence:
+            continue
+        rank, quality = effective_quality(canonical, ev, confidence)
+        ranked.append(((rank, quality), value))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    top_score, top_value = ranked[0]
+    if len(ranked) > 1:
+        second_score, second_value = ranked[1]
+        if second_value != top_value and second_score == top_score:
+            return None
+    return top_value
 
 
 def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
@@ -98,6 +126,8 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
         "product": {"weight": None, "weight_g": None, "dimensions": None},
         "features": [],
     }
+    runtime_candidates = []
+    ip_candidates = []
 
     for ev in rec.evidence:
         attr = key_norm(ev.attribute)
@@ -149,7 +179,7 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
             facts["connectivity"]["usb"] = True
         if host_connectivity and re.search(r"\b3[., ]5\s*mm\b|headphone jack|audio jack", joined, re.I):
             facts["connectivity"]["jack_3_5mm"] = True
-        if re.search(r"2[ .]?4\s*ghz|radio ?frequency|\brf\b", joined, re.I):
+        if _proprietary_rf_context(ev.attribute, raw):
             facts["connectivity"]["rf_2_4ghz"] = True
             facts["connectivity"]["wireless"] = True
         if host_connectivity and re.search(r"\bwi[ -]?fi\b", joined, re.I):
@@ -166,8 +196,6 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
             host_wired = bool(re.search(r"usb[ -]?c|3[., ]5\s*mm|wired|cableado|al[aá]mbric", val, re.I))
             if host_wireless and not host_wired:
                 facts["connectivity"]["wireless"] = True
-                if facts["connectivity"]["wired"] is None:
-                    facts["connectivity"]["wired"] = False
 
         if re.search(r"battery|bater[ií]a", attr, re.I):
             explicit = _norm_bool(raw)
@@ -189,20 +217,16 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
             m = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:h|hr|hrs|hours?|horas?)\b", raw, re.I)
             runtime = float(m.group(1).replace(",", ".")) if m else _number(raw)
             if runtime is not None:
-                facts["battery"]["runtime_hours"] = runtime
-                if facts["battery"]["present"] is None:
-                    facts["battery"]["present"] = True
+                runtime_candidates.append((ev, runtime))
 
         m = re.search(r"\bIP\s*([0-6X])([0-9K])\b", raw, re.I)
         if not m:
             m = re.search(r"\bIP\s*([0-6X])([0-9K])\b", ev.attribute, re.I)
         if m:
             rating = f"IP{m.group(1).upper()}{m.group(2).upper()}"
-            facts["durability"]["ip_rating"] = rating
             dust = m.group(1).upper()
             water = m.group(2).upper()
-            facts["durability"]["dust_rating"] = None if dust == "X" else int(dust)
-            facts["durability"]["water_rating"] = int(water) if water.isdigit() else water
+            ip_candidates.append((ev, (rating, None if dust == "X" else int(dust), int(water) if water.isdigit() else water)))
 
         if re.search(r"\bin[ -]?ear\b|intraaural", joined, re.I):
             facts["form_factor"] = "in-ear"
@@ -234,6 +258,19 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
             if raw and raw not in facts["features"]:
                 facts["features"].append(raw)
 
+    runtime = _select_authoritative_candidate("battery_life", runtime_candidates)
+    if runtime is not None:
+        facts["battery"]["runtime_hours"] = runtime
+        if facts["battery"]["present"] is None:
+            facts["battery"]["present"] = True
+
+    ip = _select_authoritative_candidate("ip_rating", ip_candidates)
+    if ip is not None:
+        rating, dust, water = ip
+        facts["durability"]["ip_rating"] = rating
+        facts["durability"]["dust_rating"] = dust
+        facts["durability"]["water_rating"] = water
+
     bt = facts["connectivity"]["bluetooth"]
     if bt["version"] is not None:
         bt["present"] = True
@@ -241,8 +278,6 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
     if facts["connectivity"]["usb_c"] or facts["connectivity"]["jack_3_5mm"]:
         if facts["connectivity"]["wired"] is None:
             facts["connectivity"]["wired"] = True
-    if facts["battery"]["runtime_hours"] is not None and facts["battery"]["present"] is None:
-        facts["battery"]["present"] = True
     if facts["battery"]["present"] is False:
         facts["battery"]["rechargeable"] = False
         facts["battery"]["runtime_hours"] = None

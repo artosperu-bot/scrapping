@@ -47,7 +47,7 @@ jobs:
       - name: Smoke modern desktop shell
         shell: cmd
         run: >-
-          python -c "from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); required={'dashboard','products','sources','attributes','media','prices','run','audit','settings'}; assert required.issubset(app._workspace_tabs); assert 'settings' in app._nav_buttons; app.destroy(); print('PROVIDER_DESKTOP_SMOKE=PASS')"
+          python -c "from product_intelligence.modern_desktop import App as ModernApp; from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); assert app._active_workspace == 'dashboard'; required={'dashboard','products','sources','attributes','media','prices','run','audit','settings'}; assert required.issubset(app._workspace_tabs); assert 'settings' in app._nav_buttons; app.destroy(); print('PROVIDER_DESKTOP_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd

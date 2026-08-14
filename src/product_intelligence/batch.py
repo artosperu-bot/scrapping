@@ -16,6 +16,7 @@ from .excel_intake import analyze_workbook_intake
 from .excel_mapper_v8 import fill_excel_v8
 from .models import ProductIdentity, ProductRecord
 from .normalize import key_norm
+from .pdf_search_trace import PdfSearchTrace, format_trace_lines
 from .pipeline import ProductPipeline
 from .record_builder import build_record_strict
 from .resolution_engine import analyze_resolution
@@ -292,6 +293,10 @@ def _looks_like_pdf_url(url: str | None) -> bool:
     return path.endswith(".pdf")
 
 
+def _product_key(identity: ProductIdentity) -> str:
+    return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "producto")
+
+
 def _ingest_direct_documents(
     identity: ProductIdentity,
     *,
@@ -302,19 +307,24 @@ def _ingest_direct_documents(
     limit: int = 6,
 ) -> list[ProductRecord]:
     accepted: list[ProductRecord] = []
-    document_candidates = discover_product_documents(identity, limit=limit)
+    trace = PdfSearchTrace(_product_key(identity))
+    document_candidates = discover_product_documents(identity, limit=limit, trace=trace)
+    if document_candidates:
+        log(f"  PDF CANDIDATOS: {len(document_candidates)}")
     for candidate in document_candidates:
         if candidate.url in seen_urls:
             continue
         seen_urls.add(candidate.url)
         try:
-            doc_rec = process_pdf_document(identity, candidate.url, target_semantics=target_semantics)
+            doc_rec = process_pdf_document(identity, candidate.url, target_semantics=target_semantics, trace=trace)
             accepted.append(doc_rec)
-            log(f"  documento técnico validado: {candidate.url}")
+            log(f"  PDF VALIDADO: {candidate.url}")
             if len(accepted) >= 3:
                 break
         except Exception as exc:
             errors.append(f"document:{candidate.url}: {type(exc).__name__}: {exc}")
+    for line in format_trace_lines(trace):
+        log(line)
     return accepted
 
 

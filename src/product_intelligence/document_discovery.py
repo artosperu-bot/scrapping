@@ -222,15 +222,63 @@ def _resolve_valid_candidates(
         except requests.RequestException:
             continue
         for row in rows:
-            if row.url in resolved_seen:
+            if row.url in resolved_seen or not _looks_like_direct_pdf(row.url):
                 continue
-            if not classify_document_candidate(row.url, row.title, row.snippet):
-                continue
+            # The parent candidate already passed product identity. A PDF found
+            # inside that landing may have an opaque filename/label, so do not
+            # discard it before download. The PDF body is identity-validated by
+            # process_pdf_document before any evidence can be accepted.
             resolved_seen.add(row.url)
             resolved.append(row)
             if len(resolved) >= limit:
                 return resolved
     return resolved
+
+
+def _browser_document_pass(
+    identity: ProductIdentity,
+    *,
+    queries: list[str],
+    seen: set[str],
+    limit: int,
+    timeout: int,
+    trace=None,
+) -> list[SearchCandidate]:
+    """Force a browser pass when HTTP produced no concrete usable PDF."""
+    per_query = max(6, min(max(limit * 2, 12), 20))
+    collected: list[SearchCandidate] = []
+    # Strong-ID queries are intentionally first. Stop as soon as a concrete PDF
+    # is resolved rather than opening a browser for every variant unnecessarily.
+    for query in queries[:8]:
+        if trace:
+            trace.emit("PDF_SEARCH_BROWSER_FALLBACK", query=query, reason="NO_RESOLVABLE_PDF")
+        rows = browser_search(query, timeout=max(15, timeout), limit=per_query)
+        if trace:
+            trace.emit("PDF_SEARCH_BROWSER_RESULT", query=query, result_count=len(rows))
+        for candidate in _rank_candidates(rows, identity, per_query):
+            if candidate.url in seen:
+                continue
+            if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
+                continue
+            seen.add(candidate.url)
+            if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(
+                candidate.url, candidate.title, candidate.snippet
+            ):
+                # Direct search hits still need document semantics in the search
+                # result. Opaque PDFs discovered inside an identity-matched
+                # landing are allowed later and body-validated after download.
+                continue
+            collected.append(candidate)
+        resolved = _resolve_valid_candidates(
+            identity,
+            collected,
+            limit=limit,
+            timeout=timeout,
+            trace=trace,
+        )
+        if resolved:
+            return resolved
+    return []
 
 
 def discover_product_documents(
@@ -239,10 +287,11 @@ def discover_product_documents(
     timeout: int = 15,
     trace=None,
 ) -> list[SearchCandidate]:
+    queries = build_document_queries(identity)
     seen: set[str] = set()
     valid: list[SearchCandidate] = []
     per_query = max(4, min(limit, 8))
-    for query in build_document_queries(identity):
+    for query in queries:
         if trace:
             candidates = search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace)
         else:
@@ -262,6 +311,19 @@ def discover_product_documents(
     resolved = _resolve_valid_candidates(identity, valid, limit=limit, timeout=timeout, trace=trace)
     if resolved:
         return resolved
+
+    # A page result is not success. If the HTTP path found pages but none yielded
+    # a concrete PDF, force a real Chromium search pass before giving up.
+    browser_resolved = _browser_document_pass(
+        identity,
+        queries=queries,
+        seen=seen,
+        limit=limit,
+        timeout=timeout,
+        trace=trace,
+    )
+    if browser_resolved:
+        return browser_resolved
 
     fallback: list[SearchCandidate] = []
     for candidate in search_web(identity, limit=max(12, limit), timeout=max(15, timeout)):

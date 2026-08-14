@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable, Protocol, Sequence
 
 from .canonical_facts import build_canonical_facts
@@ -62,6 +63,19 @@ def _iter_evidence(rec: Any):
         yield attr, text
 
 
+def _canonical_input(rec: Any) -> Any:
+    """Adapt legacy/partial record-shaped objects to the canonical builder without mutating them."""
+    identity = getattr(rec, "identity", None)
+    identity_fields = (
+        "brand", "manufacturer", "product_name", "model", "mpn", "sku", "ean", "upc", "gtin",
+        "variant", "capacity", "color", "region", "confidence", "match_level",
+        "identifiers_confirmed", "identifiers_conflicting",
+    )
+    normalized_identity = SimpleNamespace(**{name: getattr(identity, name, None) for name in identity_fields})
+    evidence = [ev for ev in list(getattr(rec, "evidence", None) or []) if not bool(getattr(ev, "rejected", False))]
+    return SimpleNamespace(identity=normalized_identity, evidence=evidence)
+
+
 def _fmt_number(value: Any) -> str:
     try:
         number = float(value)
@@ -86,7 +100,7 @@ def build_safe_facts(rec: Any, *, limit: int = 24) -> list[str]:
     Raw evidence never goes directly to Mistral. UNKNOWN values are omitted instead of
     being converted to negative or positive claims.
     """
-    facts_map = build_canonical_facts(rec)
+    facts_map = build_canonical_facts(_canonical_input(rec))
     conn = facts_map.get("connectivity", {})
     bt = conn.get("bluetooth", {})
     battery = facts_map.get("battery", {})
@@ -113,8 +127,6 @@ def build_safe_facts(rec: Any, *, limit: int = 24) -> list[str]:
         ("Jack 3.5 mm", conn.get("jack_3_5mm") is True),
     )
     for label, value in transport_labels:
-        # Only explicit positive transport facts are narrated. A default False means
-        # "not established" for boolean capability slots in the current canonical schema.
         if value is True:
             candidates.append((label, "Sí"))
 

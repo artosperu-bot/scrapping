@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .capabilities import is_available
 
@@ -19,12 +19,39 @@ class OCRUnavailable(RuntimeError):
     pass
 
 
+class OCRProvider(Protocol):
+    """Remote/local OCR contract used by PDF extraction and tests.
+
+    Implementations receive bytes and return plain text only. Provider-specific
+    credentials, HTTP details and secrets stay behind the implementation.
+    """
+
+    def extract(self, image_bytes: bytes, *, language: str, timeout: int) -> str:
+        ...
+
+
+def extract_with_provider(
+    image_bytes: bytes,
+    provider: OCRProvider | None,
+    *,
+    language: str = "en",
+    timeout: int = 20,
+) -> str:
+    """Invoke a configured provider and fail closed on provider errors."""
+    if provider is None:
+        return ""
+    try:
+        return str(provider.extract(image_bytes, language=language, timeout=int(timeout)) or "").strip()
+    except Exception:
+        return ""
+
+
 def available() -> bool:
     return is_available("ocr")
 
 
 def extract_text(image_path: str | Path, *, lang: str = "en") -> list[OCRLine]:
-    """OCR last-resort adapter.
+    """Existing local OCR last-resort adapter.
 
     The caller must validate product/document identity before invoking OCR.
     OCR output is evidence with lower trust; it is never allowed to overwrite
@@ -41,8 +68,6 @@ def extract_text(image_path: str | Path, *, lang: str = "en") -> list[OCRLine]:
     raw = engine.ocr(str(image_path), cls=True)
     lines: list[OCRLine] = []
 
-    # PaddleOCR 2.x commonly returns: [[bbox, (text, confidence)], ...]
-    # Keep parsing defensive so unsupported/new payloads fail closed.
     for page in raw or []:
         if not isinstance(page, (list, tuple)):
             continue

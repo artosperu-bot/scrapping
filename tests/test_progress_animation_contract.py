@@ -39,20 +39,37 @@ def test_tom_and_jerry_gifs_are_real_animated_assets():
 
 def test_progress_animation_is_shared_by_excel_media_and_price_shells():
     media = (SRC / "media_progress_desktop.py").read_text(encoding="utf-8")
-    isolated = (SRC / "isolated_desktop.py").read_text(encoding="utf-8")
+    excel = (SRC / "pdf_desktop.py").read_text(encoding="utf-8")
     price = (SRC / "price_desktop.py").read_text(encoding="utf-8")
     assert "ProgressAnimation" in media
-    assert "ProgressAnimation" in isolated
+    assert "ProgressAnimation" in excel
     assert "ProgressAnimation" in price
+
+
+def test_running_price_and_media_progress_do_not_use_fake_stage_percentages():
+    media = (SRC / "media_progress_desktop.py").read_text(encoding="utf-8")
+    price = (SRC / "price_desktop.py").read_text(encoding="utf-8")
+    assert "self._progress.product_percent" not in media
+    assert "self._progress.overall_percent" not in media
+    assert '"searching": 20' not in price
+    assert '"validating": 55' not in price
+    assert '"saving": 90' not in price
+    assert 'mode="indeterminate"' in media
+    assert 'mode="indeterminate"' in price
+
+
+def test_excel_percent_comes_from_real_product_counter():
+    source = (SRC / "pdf_desktop.py").read_text(encoding="utf-8")
+    assert "_excel_progress_log" in source
+    assert r"^\[(\d+)/(\d+)\]" in source
+    assert "position - 1" in source
 
 
 def test_error_state_does_not_switch_to_completed_asset():
     path = SRC / "progress_animation.py"
-    assert path.is_file()
     source = path.read_text(encoding="utf-8")
     assert "completed.gif" in source
     assert "processing.gif" in source
-    assert "def set_error" in source
     error_body = source.split("def set_error", 1)[1].split("\n    def ", 1)[0]
     assert "completed.gif" not in error_body
 

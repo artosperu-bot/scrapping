@@ -7,6 +7,7 @@ from product_intelligence.description_narrator import (
     DescriptionGuard,
     build_safe_facts,
 )
+from product_intelligence.mistral_client import MistralClient
 from product_intelligence.ocr_adapter import OCRProvider, extract_with_provider
 
 
@@ -57,6 +58,26 @@ class FakeNarrator:
         if self.fail:
             raise RuntimeError("provider down")
         return self.text
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+class FakeSession:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return FakeResponse({"choices": [{"message": {"content": "Descripción segura"}}]})
 
 
 def _record():
@@ -159,3 +180,26 @@ def test_narrator_payload_uses_only_safe_facts():
     assert "2.4 ghz" in payload
     assert "499" not in payload
     assert "titanium" not in payload
+
+
+def test_mistral_client_posts_chat_completion_with_stored_key_without_real_network():
+    session = FakeSession()
+    client = MistralClient(lambda: "stored-key", session=session)
+    result = client.generate(
+        {"identity": {"brand": "JBL"}, "facts": ["Driver: 40 mm"], "instructions": "Solo hechos"},
+        model="mistral-small-latest",
+        timeout=17,
+    )
+
+    assert result == "Descripción segura"
+    assert len(session.calls) == 1
+    url, kwargs = session.calls[0]
+    assert url == "https://api.mistral.ai/v1/chat/completions"
+    assert kwargs["headers"]["Authorization"] == "Bearer stored-key"
+    assert kwargs["headers"]["Content-Type"] == "application/json"
+    assert kwargs["timeout"] == 17
+    assert kwargs["json"]["model"] == "mistral-small-latest"
+    assert kwargs["json"]["messages"][0]["role"] == "user"
+    prompt = kwargs["json"]["messages"][0]["content"]
+    assert "Driver: 40 mm" in prompt
+    assert "stored-key" not in prompt

@@ -6,8 +6,8 @@ from product_intelligence import provider_desktop
 def test_single_configuration_workspace_is_present():
     source = inspect.getsource(provider_desktop.App)
     assert 'text="Configuración"' in source
-    assert 'text="OCR.space"' in source
-    assert 'text="Mistral"' in source
+    assert 'title="OCR.space"' in source
+    assert 'title="Mistral"' in source
     assert 'mistral-small-latest' in source
 
 

@@ -29,7 +29,7 @@ from .preflight import analyze_workbook
 from .repair import repair_existing_record
 
 
-IDENTITY_TYPES = ("MPN / Part Number", "EAN", "UPC / GTIN", "Modelo", "Nombre")
+IDENTITY_TYPES = ("MPN / Part Number", "EAN", "UPC / GTIN", "SKU", "Modelo", "Nombre")
 
 
 class App(tk.Tk):
@@ -43,6 +43,7 @@ class App(tk.Tk):
         self.product_rows: list[dict] = []
         self.manual_urls: dict[int, list[str]] = {}
         self.source_preview: dict[int, list[dict]] = {}
+        self._analysis_running = False
         self._build()
         self.after(150, self._drain)
 
@@ -232,13 +233,15 @@ class App(tk.Tk):
             return "EAN"
         if p.get("upc") or p.get("gtin"):
             return "UPC / GTIN"
+        if p.get("sku"):
+            return "SKU"
         if p.get("model"):
             return "Modelo"
         return "Nombre"
 
     @staticmethod
     def _identity_value_from_row(p: dict) -> str:
-        return str(p.get("identifier") or p.get("mpn") or p.get("ean") or p.get("upc") or p.get("gtin") or p.get("model") or p.get("product_name") or "").strip()
+        return str(p.get("identifier") or p.get("mpn") or p.get("ean") or p.get("upc") or p.get("gtin") or p.get("sku") or p.get("model") or p.get("product_name") or "").strip()
 
     def _identity_for_index(self, index: int) -> ProductIdentity | None:
         if index < 0 or index >= len(self.product_rows):
@@ -249,15 +252,17 @@ class App(tk.Tk):
         if not value:
             return None
         kwargs = {}
-        if id_type == "MPN / Part Number":
+        if id_type in {"MPN / Part Number", "PART_NUMBER", "PART_NUMBER_FROM_MODEL"}:
             kwargs["mpn"] = value
         elif id_type == "EAN":
             kwargs["ean"] = value
-        elif id_type == "UPC / GTIN":
+        elif id_type in {"UPC / GTIN", "GTIN"}:
             kwargs["gtin"] = value
-        elif id_type == "Modelo":
+        elif id_type == "SKU":
+            kwargs["sku"] = value
+        elif id_type in {"Modelo", "MODEL"}:
             kwargs["model"] = value
-        elif id_type == "Nombre":
+        elif id_type in {"Nombre", "PRODUCT_NAME"}:
             kwargs["product_name"] = value
         else:
             parsed = parse_product_query(value)
@@ -267,12 +272,15 @@ class App(tk.Tk):
         brand = str(p.get("brand") or "").strip()
         model = str(p.get("model") or "").strip()
         product_name = str(p.get("product_name") or "").strip()
+        sku = str(p.get("sku") or "").strip()
         if brand:
             kwargs["brand"] = brand
         if model and "model" not in kwargs:
             kwargs["model"] = model
         if product_name and "product_name" not in kwargs:
             kwargs["product_name"] = product_name
+        if sku and "sku" not in kwargs:
+            kwargs["sku"] = sku
         return ProductIdentity(**kwargs)
 
     def _refresh_product_row(self, index: int, status: str | None = None):
@@ -343,7 +351,7 @@ class App(tk.Tk):
                 p["product_name"] = model_value if model_value and model_value != value else p.get("product_name")
             else:
                 p["model"] = model_value
-            for key in ("mpn", "ean", "upc", "gtin"):
+            for key in ("mpn", "ean", "upc", "gtin", "sku"):
                 p[key] = None
             if p["identity_type"] == "MPN / Part Number":
                 p["mpn"] = value
@@ -351,6 +359,8 @@ class App(tk.Tk):
                 p["ean"] = value
             elif p["identity_type"] == "UPC / GTIN":
                 p["gtin"] = value
+            elif p["identity_type"] == "SKU":
+                p["sku"] = value
             self.source_preview.pop(index, None)
             self._refresh_product_row(index, "Identidad modificada")
             self._refresh_run_summary()
@@ -371,38 +381,83 @@ class App(tk.Tk):
         if not template or not Path(template).exists():
             messagebox.showerror("Falta archivo", "Selecciona una plantilla .xlsx.")
             return
+        if self._analysis_running:
+            self.analysis_status.set("El Excel ya se está analizando; la aplicación sigue disponible.")
+            return
+        self._analysis_running = True
+        self.preflight = None
+        self.analysis_status.set("Analizando estructura, productos e identidades…")
+        self.emit(f"Analizando Excel: {Path(template).name}")
+        threading.Thread(
+            target=self._analyze_excel_worker,
+            args=(template,),
+            daemon=True,
+            name="excel-analysis",
+        ).start()
+
+    def _analyze_excel_worker(self, template: str):
         try:
             data = analyze_workbook(template)
-            self.preflight = data
-            self.product_rows = list(data.get("products") or [])
-            for p in self.product_rows:
-                p.setdefault("identity_type", self._detected_identity_type(p))
-            self.manual_urls = {i: list(p.get("source_urls") or []) for i, p in enumerate(self.product_rows)}
-            self.source_preview = {}
-            self._clear_tree(self.products_tree)
-            self._clear_tree(self.attrs_tree)
-            self._clear_tree(self.sources_tree)
-            self.source_product_list.delete(0, "end")
-            for i, _p in enumerate(self.product_rows):
-                self.source_product_list.insert("end", "")
-                self._refresh_product_row(i, "Listo para revisar")
-            for f in data["attributes"]:
-                self.attrs_tree.insert("", "end", values=(f.get("column"), f.get("external_id") or "", f.get("label") or "", f.get("action") or "", "Sí" if f.get("required") else "No", f.get("value_type") or "", f.get("options_count") or 0))
-            if self.product_rows:
-                self.products_tree.selection_set("0")
-                self.source_product_list.selection_set(0)
-                self._on_source_product_select()
-            s = data["summary"]
-            actions = s.get("actions", {})
-            self.analysis_status.set(f"Detectado: {s.get('products_detected', 0)} productos | {s.get('fields_total', 0)} campos | {actions.get('INVESTIGAR', 0)} investigar | {actions.get('VALIDAR / COMPLETAR', 0)} identidad | {actions.get('IMAGEN', 0)} imágenes | {actions.get('DEJAR VACÍO / PROTEGER', 0)} STECH/marketplace")
-            self.emit("=== ANÁLISIS DEL EXCEL ===")
-            self.emit(json.dumps(s, ensure_ascii=False))
-            self._refresh_run_summary()
-        except Exception as e:
-            self.preflight = None
-            self.analysis_status.set("No se pudo analizar la plantilla.")
-            self.emit(traceback.format_exc())
-            messagebox.showerror("Error al analizar Excel", str(e))
+        except Exception as exc:
+            tb = traceback.format_exc()
+            self.after(0, lambda exc=exc, tb=tb: self._apply_analysis_error(exc, tb))
+            return
+        self.after(0, lambda data=data: self._apply_analysis_result(data))
+
+    def _apply_analysis_result(self, data: dict):
+        self._analysis_running = False
+        self.preflight = data
+        self.product_rows = list(data.get("products") or [])
+        for p in self.product_rows:
+            p.setdefault("identity_type", self._detected_identity_type(p))
+        self.manual_urls = {i: list(p.get("source_urls") or []) for i, p in enumerate(self.product_rows)}
+        self.source_preview = {}
+        self._clear_tree(self.products_tree)
+        self._clear_tree(self.attrs_tree)
+        self._clear_tree(self.sources_tree)
+        self.source_product_list.delete(0, "end")
+        for i, _p in enumerate(self.product_rows):
+            self.source_product_list.insert("end", "")
+            self._refresh_product_row(i, "Listo para revisar")
+        for f in data["attributes"]:
+            self.attrs_tree.insert("", "end", values=(f.get("column"), f.get("external_id") or "", f.get("label") or "", f.get("action") or "", "Sí" if f.get("required") else "No", f.get("value_type") or "", f.get("options_count") or 0))
+        if self.product_rows:
+            self.products_tree.selection_set("0")
+            self.source_product_list.selection_set(0)
+            self._on_source_product_select()
+        s = data["summary"]
+        actions = s.get("actions", {})
+        self.analysis_status.set(
+            f"Detectado: {s.get('products_detected', 0)} productos | {s.get('product_sheets_detected', 0)} hoja(s) producto | "
+            f"{s.get('fields_total', 0)} campos | {actions.get('INVESTIGAR', 0)} investigar | "
+            f"{actions.get('VALIDAR / COMPLETAR', 0)} identidad | {actions.get('IMAGEN', 0)} imágenes | "
+            f"{actions.get('DEJAR VACÍO / PROTEGER', 0)} STECH/marketplace"
+        )
+        self.emit("=== ANÁLISIS DEL EXCEL ===")
+        self.emit(json.dumps(s, ensure_ascii=False))
+        for sheet in (data.get("intake_audit") or {}).get("sheets", []):
+            self.emit(
+                f"INTAKE sheet={sheet.get('sheet_detected')} accepted={sheet.get('sheet_accepted')} "
+                f"header_row={sheet.get('header_row_detected')} reason={sheet.get('sheet_rejection_reason')}"
+            )
+            for row in sheet.get("rows", []):
+                self.emit(
+                    f"  row={row.get('product_row')} accepted={row.get('row_accepted')} "
+                    f"identity={row.get('identity_type')}:{row.get('identity_selected')} "
+                    f"search_requested={row.get('search_requested')} query={row.get('search_query')!r} "
+                    f"reason={row.get('rejection_reason')}"
+                )
+        self._refresh_run_summary()
+
+    def _apply_analysis_error(self, exc: Exception, tb: str | None = None):
+        self._analysis_running = False
+        self.preflight = None
+        self.analysis_status.set("No se pudo analizar la plantilla.")
+        if tb:
+            self.emit(tb)
+        else:
+            self.emit(f"{type(exc).__name__}: {exc}")
+        messagebox.showerror("Error al analizar Excel", str(exc))
 
     def _selected_source_index(self) -> int | None:
         sel = self.source_product_list.curselection()
@@ -448,7 +503,7 @@ class App(tk.Tk):
 
         def work():
             try:
-                label = ident.mpn or ident.ean or ident.upc or ident.gtin or ident.model or ident.product_name
+                label = ident.mpn or ident.ean or ident.upc or ident.gtin or ident.sku or ident.model or ident.product_name
                 self.emit(f"Preparando fuentes para: {label}")
                 found = search_web(ident, limit=12)
                 rows, seen, priority = [], set(manual), len(manual) + 1
@@ -507,10 +562,12 @@ class App(tk.Tk):
         if not self.excel.get() or not Path(self.excel.get()).exists():
             messagebox.showerror("Falta archivo", "Selecciona una plantilla .xlsx.")
             return
+        if self._analysis_running:
+            messagebox.showinfo("Analizando Excel", "El análisis del Excel sigue en curso. Puedes seguir usando la interfaz y ejecutar cuando termine.")
+            return
         if self.preflight is None:
             self.analyze_excel()
-            if self.preflight is None:
-                return
+            return
         index = self._selected_source_index()
         if index is not None:
             self.save_urls_for_selected()

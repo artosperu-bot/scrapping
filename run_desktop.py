@@ -1,7 +1,8 @@
 from importlib import import_module
-from product_intelligence.modern_desktop import main
-from product_intelligence.provider_desktop import main as provider_main
+from product_intelligence.workspace_desktop import main as workspace_main
 
-# Preserve the validated modern/PDF extension chain while launching the provider settings layer.
+# Preserve the validated modern/PDF/provider extension chain, then add the
+# persistent workspace shell as the final additive desktop layer.
 import_module("product_intelligence.pdf_desktop")
-provider_main()
+import_module("product_intelligence.provider_desktop")
+workspace_main()

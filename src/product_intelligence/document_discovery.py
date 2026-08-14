@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import re
+from urllib.parse import urlparse
+
+from .discovery import SearchCandidate, _provider_search, _rank_candidates
+from .models import ProductIdentity
+from .normalize import key_norm
+
+_DOCUMENT_PATTERNS = (
+    ("quick_start", re.compile(r"\bquick\s*(?:start|guide)|gu[ií]a\s*r[aá]pida\b", re.I)),
+    ("compliance", re.compile(r"\bcompliance|regulatory|declaration\s+of\s+conformity|conformidad|certification\b", re.I)),
+    ("datasheet", re.compile(r"\bdata\s*sheet|datasheet|spec\s*sheet|ficha\s+t[eé]cnica|technical\s+sheet\b", re.I)),
+    ("manual", re.compile(r"\buser\s+manual|owner'?s\s+manual|manual\s+de\s+usuario|manual\b", re.I)),
+    ("technical_pdf", re.compile(r"\bspecifications?|technical\s+specifications?|especificaciones\b", re.I)),
+)
+_PROMOTIONAL = re.compile(r"\bbrochure|catalog(?:ue)?|promotional|buy\s+now|shop\s+now|oferta|sale\b", re.I)
+
+
+def _compact(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", key_norm(value or ""))
+
+
+def _descriptive_model(identity: ProductIdentity) -> str:
+    strong = {_compact(x) for x in [identity.mpn, identity.ean, identity.upc, identity.gtin] if x}
+    for value in [identity.model, identity.product_name]:
+        text = str(value or "").strip()
+        if text and _compact(text) not in strong:
+            return text
+    return str(identity.model or identity.product_name or "").strip()
+
+
+def build_document_queries(identity: ProductIdentity) -> list[str]:
+    brand = str(identity.brand or "").strip()
+    model = _descriptive_model(identity)
+    strong = next((str(x).strip() for x in [identity.mpn, identity.ean, identity.upc, identity.gtin] if x), "")
+    queries: list[str] = []
+    if brand and model:
+        phrase = f'"{brand} {model}"'
+        queries.extend([
+            f"{phrase} manual pdf",
+            f"{phrase} datasheet pdf",
+            f"{phrase} specifications pdf",
+            f"{phrase} user manual",
+            f"{phrase} filetype:pdf",
+        ])
+    if strong:
+        quoted = f'"{strong}"'
+        queries.extend([
+            f"{quoted} manual pdf",
+            f"{quoted} datasheet",
+            f"{quoted} specifications pdf",
+        ])
+    return list(dict.fromkeys(q for q in queries if q.strip()))
+
+
+def classify_document_candidate(url: str, title: str = "", snippet: str = "") -> str | None:
+    text = f"{url} {title} {snippet}"
+    if _PROMOTIONAL.search(text):
+        return None
+    for kind, pattern in _DOCUMENT_PATTERNS:
+        if pattern.search(text):
+            return kind
+    return None
+
+
+def identity_matches_document(identity: ProductIdentity, url: str, title: str = "", snippet: str = "") -> bool:
+    combined = f"{url} {title} {snippet}"
+    compact = _compact(combined)
+    strong = [_compact(x) for x in [identity.mpn, identity.ean, identity.upc, identity.gtin] if x]
+    if any(x and x in compact for x in strong):
+        return True
+
+    brand = _compact(identity.brand)
+    model_text = _descriptive_model(identity)
+    model = _compact(model_text)
+    if not model:
+        return False
+
+    # Reject an explicit sibling model when the brand is present, e.g. Quantum 400 vs Quantum 350.
+    model_tokens = re.findall(r"[a-z]+|\d+", key_norm(model_text))
+    numeric_tokens = [x for x in model_tokens if x.isdigit() and len(x) >= 2]
+    text_norm = key_norm(combined)
+    if brand and brand in compact:
+        for number in numeric_tokens:
+            family_words = [x for x in model_tokens if x.isalpha() and len(x) >= 3]
+            if family_words and any(word in text_norm for word in family_words):
+                seen_numbers = re.findall(r"\b\d{2,}\b", text_norm)
+                if seen_numbers and number not in seen_numbers:
+                    return False
+        return model in compact
+    return False
+
+
+def search_web_query_candidates(identity: ProductIdentity, query: str, limit: int = 8, timeout: int = 15) -> list[SearchCandidate]:
+    if not str(query or "").strip():
+        return []
+    return _rank_candidates(_provider_search(str(query).strip(), timeout), identity, limit)
+
+
+def _document_rank(candidate: SearchCandidate) -> tuple[int, int, float]:
+    kind = classify_document_candidate(candidate.url, candidate.title, candidate.snippet)
+    priority = {"manual": 5, "datasheet": 5, "quick_start": 4, "compliance": 3, "technical_pdf": 2}.get(kind, 0)
+    host = (urlparse(candidate.url).hostname or "").lower()
+    support_hint = int(any(x in host or x in candidate.url.lower() for x in ["support", "manual", "download", "docs"]))
+    return int(bool(candidate.likely_official)), priority + support_hint, float(candidate.score or 0)
+
+
+def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeout: int = 15) -> list[SearchCandidate]:
+    seen: set[str] = set()
+    valid: list[SearchCandidate] = []
+    per_query = max(4, min(limit, 8))
+    for query in build_document_queries(identity):
+        for candidate in search_web_query_candidates(identity, query, limit=per_query, timeout=timeout):
+            if candidate.url in seen:
+                continue
+            seen.add(candidate.url)
+            if not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
+                continue
+            if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
+                continue
+            valid.append(candidate)
+    valid.sort(key=_document_rank, reverse=True)
+    return valid[:limit]

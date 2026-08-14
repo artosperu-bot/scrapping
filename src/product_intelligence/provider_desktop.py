@@ -185,7 +185,7 @@ class App(PdfApp):
         if not getattr(sys, "frozen", False):
             messagebox.showinfo("Actualizaciones", "La instalación automática solo está disponible desde el ejecutable empaquetado.")
             return
-        if not messagebox.askyesno("Actualizar ProductIntelligence", f"Se instalará la versión v{release.version}. La aplicación se cerrará y volverá a abrirse automáticamente. ¿Continuar?"):
+        if not messagebox.askyesno("Actualizar ProductIntelligence", f"Se instalará la versión v{release.version}. Windows puede solicitar permisos de administrador. La aplicación se cerrará y volverá a abrirse automáticamente. ¿Continuar?"):
             return
         install_dir = Path(sys.executable).resolve().parent
         updater = install_dir / "ProductIntelligenceUpdater.exe"
@@ -203,32 +203,56 @@ class App(PdfApp):
             return 0
         return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
 
+    @staticmethod
+    def _launch_updater_process(updater: Path, args: list[str], cwd: Path) -> None:
+        if os.name == "nt":
+            import ctypes
+
+            params = subprocess.list2cmdline(args)
+            shell_result = ctypes.windll.shell32.ShellExecuteW(
+                None,
+                "runas",
+                str(updater),
+                params,
+                str(cwd),
+                1,
+            )
+            if shell_result <= 32:
+                raise RuntimeError("UAC_ELEVATION_CANCELLED")
+            return
+        subprocess.Popen(
+            [str(updater), *args],
+            cwd=str(cwd),
+            close_fds=True,
+        )
+
     def _download_and_launch_update(self, release: ReleaseInfo, install_dir: Path, updater: Path):
         try:
             update_dir = Path(tempfile.gettempdir()) / "ProductIntelligence" / "updates" / release.version
             zip_path = UpdateService(current_version=APP_VERSION).download_verified(release, update_dir)
             temp_updater = Path(tempfile.gettempdir()) / f"ProductIntelligenceUpdater-{os.getpid()}.exe"
             shutil.copy2(updater, temp_updater)
-            subprocess.Popen(
-                [
-                    str(temp_updater),
-                    "--zip", str(zip_path),
-                    "--target", str(install_dir),
-                    "--restart", str(install_dir / "ProductIntelligence.exe"),
-                    "--pid", str(os.getpid()),
-                ],
-                cwd=str(Path(tempfile.gettempdir())),
-                close_fds=True,
-                creationflags=self._updater_creationflags(),
-            )
+            updater_args = [
+                "--zip", str(zip_path),
+                "--target", str(install_dir),
+                "--restart", str(install_dir / "ProductIntelligence.exe"),
+                "--pid", str(os.getpid()),
+            ]
+            self._launch_updater_process(temp_updater, updater_args, Path(tempfile.gettempdir()))
             self.after(0, self.destroy)
-        except Exception:
-            self.after(0, self._update_launch_failed)
+        except Exception as exc:
+            self.after(0, lambda error=str(exc): self._update_launch_failed(error))
 
-    def _update_launch_failed(self):
+    def _update_launch_failed(self, error: str = ""):
         self.check_update_button.configure(state="normal")
         self.install_update_button.configure(state="normal" if self._available_release else "disabled")
         self.update_status.set(f"Versión instalada: v{APP_VERSION} · actualización cancelada sin cambios")
+        if error == "UAC_ELEVATION_CANCELLED":
+            messagebox.showwarning(
+                "Actualizaciones",
+                "Windows no concedió permisos de administrador. La actualización se canceló y la instalación actual no fue modificada.",
+            )
+            return
         messagebox.showerror("Actualizaciones", "No se pudo preparar la actualización. La versión instalada no fue modificada.")
 
 

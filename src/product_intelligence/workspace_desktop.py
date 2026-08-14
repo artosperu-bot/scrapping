@@ -68,9 +68,56 @@ class App(ProviderApp):
 
     def _apply_analysis_result(self, data: dict):
         super()._apply_analysis_result(data)
+        self._refresh_shared_product_consumers()
         if self.preflight is not None and self._active_workspace_id:
             self._sync_workspace_products()
             self._reload_workspaces(select_id=self._active_workspace_id)
+
+    def _shared_product_label(self, index: int, row: dict) -> str:
+        identity = self._identity_for_index(index)
+        if identity is not None:
+            value = (
+                identity.mpn
+                or identity.ean
+                or identity.upc
+                or identity.gtin
+                or identity.sku
+                or identity.model
+                or identity.product_name
+            )
+            if value:
+                return str(value)
+        return str(row.get("model") or row.get("product_name") or f"Producto {index + 1}")
+
+    def _refresh_shared_product_consumers(self):
+        """Refresh UI consumers only after async Excel analysis has committed product_rows."""
+        rows = list(self.product_rows)
+
+        media_list = getattr(self, "media_product_list", None)
+        if media_list is not None:
+            self.media_manual_urls = {i: list(self.manual_urls.get(i, [])) for i in range(len(rows))}
+            self._media_current_index = None
+            media_list.delete(0, "end")
+            for index, row in enumerate(rows):
+                media_list.insert("end", self._shared_product_label(index, row))
+            if rows:
+                media_list.selection_set(0)
+                self._on_media_product_select()
+                self.media_status.set(f"{len(rows)} productos listos para multimedia.")
+            else:
+                self.media_status.set("Analiza un Excel para cargar los productos.")
+            self._clear_media_gallery()
+
+        price_list = getattr(self, "price_product_list", None)
+        if price_list is not None:
+            price_list.delete(0, "end")
+            for index, row in enumerate(rows):
+                price_list.insert("end", self._shared_product_label(index, row))
+            if rows:
+                price_list.selection_set(0)
+                self.price_status.set(f"{len(rows)} productos listos para comparar precios.")
+            else:
+                self.price_status.set("Analiza un Excel para cargar productos.")
 
     def run(self):
         if not self._active_workspace_id or self._workspace_tracker is None:

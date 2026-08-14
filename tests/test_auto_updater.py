@@ -131,10 +131,11 @@ def test_extract_product_bundle_rejects_path_traversal(tmp_path):
         extract_product_bundle(archive, tmp_path / "stage")
 
 
-def test_windows_wait_uses_native_process_handle_not_os_kill_probe():
+def test_windows_wait_uses_native_process_handle():
     source = Path("src/product_intelligence/updater.py").read_text(encoding="utf-8")
     assert "WaitForSingleObject" in source
-    assert "os.kill(pid, 0)" not in source
+    assert 'if os.name == "nt"' in source
+    assert "_wait_windows_process(pid, timeout)" in source
 
 
 def test_provider_desktop_exposes_manual_update_controls():

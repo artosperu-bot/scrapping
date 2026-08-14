@@ -46,6 +46,19 @@ def _semantic_has_direct_evidence(rec: ProductRecord, semantic: str) -> bool:
     return False
 
 
+def _semantic_has_strong_direct_evidence(rec: ProductRecord, semantic: str) -> bool:
+    target = _phrase(semantic)
+    if len(target) < 3:
+        return False
+    for ev in rec.evidence:
+        attr = _phrase(ev.attribute)
+        if not attr:
+            continue
+        if attr == target and float(ev.confidence or 0) >= .85:
+            return True
+    return False
+
+
 def _not_applicable(facts: dict[str, Any], semantic: str) -> tuple[bool, str]:
     s = _phrase(semantic)
     if any(x in s for x in ["autonomia", "battery life", "play time", "runtime"]):
@@ -155,11 +168,15 @@ def analyze_resolution(rec: ProductRecord, template_plan: dict | None) -> dict[s
             research.append(semantic)
         else:
             na, na_reason = _not_applicable(facts, semantic)
+            strong_direct = _semantic_has_strong_direct_evidence(rec, semantic)
             canonical_ok, canonical_status, canonical_reason = _canonical_resolves(facts, semantic)
             direct = _semantic_has_direct_evidence(rec, semantic)
             if na:
                 status = NOT_APPLICABLE
                 reason = na_reason
+            elif strong_direct:
+                status = FOUND_DIRECT
+                reason = "validated_exact_evidence_matches_field_semantics"
             elif canonical_ok:
                 status = canonical_status
                 reason = canonical_reason

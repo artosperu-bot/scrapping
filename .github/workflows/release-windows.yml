@@ -71,6 +71,17 @@ jobs:
           Write-Host "processing.gif=$($processing.FullName)"
           Write-Host "completed.gif=$($completed.FullName)"
 
+      - name: Verify standalone updater bootstrap
+        shell: pwsh
+        run: |
+          $smokeDir = Join-Path $env:RUNNER_TEMP 'product-intelligence-updater-smoke'
+          if (Test-Path $smokeDir) { Remove-Item $smokeDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $smokeDir | Out-Null
+          $smokeUpdater = Join-Path $smokeDir 'ProductIntelligenceUpdater.exe'
+          Copy-Item 'dist/ProductIntelligence/ProductIntelligenceUpdater.exe' $smokeUpdater
+          $process = Start-Process -FilePath $smokeUpdater -ArgumentList '--help' -WorkingDirectory $smokeDir -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Standalone updater smoke failed with exit code $($process.ExitCode)" }
+
       - name: Create release ZIP and SHA256
         shell: pwsh
         run: |

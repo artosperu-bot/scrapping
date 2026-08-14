@@ -131,6 +131,55 @@ def test_recovery_calls_stale_updater_cleanup_before_copy():
     assert recover_body.index("_terminate_stale_updaters()") < recover_body.index("_copy_tree(product_root, target_dir)")
 
 
+def test_copy_tree_defers_only_locked_updater_and_keeps_other_files_strict(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    (source / "ProductIntelligence.exe").write_bytes(b"new-app")
+    (source / "ProductIntelligenceUpdater.exe").write_bytes(b"new-updater")
+    (target / "ProductIntelligence.exe").write_bytes(b"old-app")
+    (target / "ProductIntelligenceUpdater.exe").write_bytes(b"old-updater")
+
+    real_replace = recovery_updater.os.replace
+
+    def replace_with_locked_updater(src, dst):
+        if Path(dst).name == "ProductIntelligenceUpdater.exe":
+            raise PermissionError(5, "Access denied", str(dst))
+        return real_replace(src, dst)
+
+    scheduled = []
+    monkeypatch.setattr(recovery_updater.os, "replace", replace_with_locked_updater)
+    monkeypatch.setattr(recovery_updater.time, "sleep", lambda _: None)
+    monkeypatch.setattr(recovery_updater, "_schedule_replace_on_reboot", lambda pending, dest: scheduled.append((Path(pending), Path(dest))))
+
+    recovery_updater._copy_tree(source, target, retries=2)
+
+    assert (target / "ProductIntelligence.exe").read_bytes() == b"new-app"
+    assert (target / "ProductIntelligenceUpdater.exe").read_bytes() == b"old-updater"
+    pending = target / "ProductIntelligenceUpdater.exe.recovery_pending"
+    assert pending.read_bytes() == b"new-updater"
+    assert scheduled == [(pending, target / "ProductIntelligenceUpdater.exe")]
+
+
+def test_copy_tree_still_fails_closed_for_locked_non_updater_file(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    (source / "critical.dll").write_bytes(b"new")
+    (target / "critical.dll").write_bytes(b"old")
+
+    def always_locked(src, dst):
+        raise PermissionError(5, "Access denied", str(dst))
+
+    monkeypatch.setattr(recovery_updater.os, "replace", always_locked)
+    monkeypatch.setattr(recovery_updater.time, "sleep", lambda _: None)
+
+    with pytest.raises(PermissionError):
+        recovery_updater._copy_tree(source, target, retries=2)
+
+
 def test_self_test_exits_zero_without_network():
     assert recovery_updater.main(["--self-test"]) == 0
 

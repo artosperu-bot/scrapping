@@ -26,6 +26,12 @@ class App(PdfApp):
         self._provider_settings = ProviderSettings()
         self._install_settings_workspace()
 
+    def _show_workspace(self, key: str):
+        super()._show_workspace(key)
+        if key == "settings" and hasattr(self, "_page_title"):
+            self._page_title.set("Configuración")
+            self._page_subtitle.set("Configura proveedores opcionales sin exponer credenciales ni alterar ejecuciones en curso.")
+
     def _install_settings_workspace(self):
         self.settings_tab = ttk.Frame(self.notebook, style="Page.TFrame", padding=(12, 12))
         self.notebook.add(self.settings_tab, text="Configuración")

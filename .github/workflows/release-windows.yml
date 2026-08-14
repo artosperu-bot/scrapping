@@ -46,7 +46,7 @@ jobs:
       - name: Smoke provider desktop shell
         shell: cmd
         run: >-
-          python -c "from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v'); app.destroy(); print('UPDATE_UI_SMOKE=PASS')"
+          python -c "from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); app.destroy(); print('PROGRESS_UI_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd
@@ -59,11 +59,17 @@ jobs:
         shell: cmd
         run: pyinstaller --noconfirm --clean ProductIntelligence.spec
 
-      - name: Verify executables
-        shell: cmd
+      - name: Verify executables and progress resources
+        shell: pwsh
         run: |
-          if not exist dist\ProductIntelligence\ProductIntelligence.exe exit /b 1
-          if not exist dist\ProductIntelligence\ProductIntelligenceUpdater.exe exit /b 1
+          if (-not (Test-Path 'dist/ProductIntelligence/ProductIntelligence.exe')) { throw 'Missing ProductIntelligence.exe' }
+          if (-not (Test-Path 'dist/ProductIntelligence/ProductIntelligenceUpdater.exe')) { throw 'Missing ProductIntelligenceUpdater.exe' }
+          $processing = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'processing.gif'
+          $completed = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'completed.gif'
+          if (-not $processing) { throw 'processing.gif not bundled' }
+          if (-not $completed) { throw 'completed.gif not bundled' }
+          Write-Host "processing.gif=$($processing.FullName)"
+          Write-Host "completed.gif=$($completed.FullName)"
 
       - name: Create release ZIP and SHA256
         shell: pwsh

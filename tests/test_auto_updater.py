@@ -53,8 +53,8 @@ def _release_payload(tag="v0.10.5"):
     }
 
 
-def test_app_version_is_first_auto_updatable_version():
-    assert APP_VERSION == "0.10.4"
+def test_app_version_is_current_auto_updatable_version():
+    assert APP_VERSION == "0.10.5"
 
 
 def test_semver_comparison_is_numeric_not_lexicographic():

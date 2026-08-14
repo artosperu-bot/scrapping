@@ -64,9 +64,13 @@ class App(ProviderApp):
             self._workspace_media_error = True
 
     def analyze_excel(self):
-        super().analyze_excel()
+        return super().analyze_excel()
+
+    def _apply_analysis_result(self, data: dict):
+        super()._apply_analysis_result(data)
         if self.preflight is not None and self._active_workspace_id:
             self._sync_workspace_products()
+            self._reload_workspaces(select_id=self._active_workspace_id)
 
     def run(self):
         if not self._active_workspace_id or self._workspace_tracker is None:
@@ -163,6 +167,7 @@ class App(ProviderApp):
                 or identity.ean
                 or identity.upc
                 or identity.gtin
+                or identity.sku
                 or identity.model
                 or identity.product_name
                 or ""

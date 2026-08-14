@@ -29,7 +29,7 @@ class SearchCandidate:
 
 def build_query(i:ProductIdentity)->str:
     parts=[]
-    for v in [i.mpn,i.ean,i.upc,i.gtin]:
+    for v in [i.mpn,i.ean,i.upc,i.gtin,i.sku]:
         if v: parts.append(f'"{v}"')
     for v in [i.brand,i.model,i.product_name]:
         if v and v not in parts: parts.append(str(v))
@@ -143,8 +143,8 @@ def _contains_strong_identifier(text:str,strong:list[str])->bool:
 
 
 def _descriptive_model(identity:ProductIdentity)->str:
-    """Choose human model/name text for search-result matching, not an MPN duplicated as model."""
-    strong = {_compact(str(x)) for x in [identity.mpn, identity.ean, identity.upc, identity.gtin] if x}
+    """Choose human model/name text for search-result matching, not a strong identifier duplicated as model."""
+    strong = {_compact(str(x)) for x in [identity.mpn, identity.ean, identity.upc, identity.gtin, identity.sku] if x}
     for value in [identity.model, identity.product_name]:
         text = str(value or "").strip()
         if not text:
@@ -169,7 +169,7 @@ def _provider_search(query:str,timeout:int)->list[tuple[str,str,str]]:
 def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, limit:int)->list[SearchCandidate]:
     seen=set();out=[]
     brand=key_norm(identity.brand or "").replace(" ","")
-    strong=[str(x) for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
+    strong=[str(x) for x in [identity.mpn,identity.ean,identity.upc,identity.gtin,identity.sku] if x]
     model=_descriptive_model(identity)
     technical_terms=("specification","specifications","specs","datasheet","data sheet","manual","support","product page","ficha tecnica","ficha técnica")
     for u,t,sn in urls:
@@ -207,7 +207,7 @@ def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=
 def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[SearchCandidate]:
     q=build_query(identity)
     if not q:return []
-    strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x),None)
+    strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin,identity.sku] if x),None)
     queries=[]
     for candidate in [q, str(strong_raw or '').strip()]:
         if candidate and candidate not in queries:queries.append(candidate)

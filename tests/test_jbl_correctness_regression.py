@@ -56,3 +56,27 @@ def test_tune530c_usb_c_wired_stays_supported():
     facts = build_canonical_facts(rec)
     assert facts["connectivity"]["usb_c"] is True
     assert facts["connectivity"]["wired"] is True
+
+
+def test_ip_conflict_does_not_use_last_value_seen():
+    rec = _record(
+        _ev("Ingress Protection", "IP65", 0.95, "official_manual"),
+        _ev("IP rating", "IPX5", 0.80, "retailer"),
+        brand="JBL",
+        model="Endurance Run 3",
+    )
+    facts = build_canonical_facts(rec)
+    assert facts["durability"]["ip_rating"] == "IP65"
+
+
+def test_runtime_requires_canonical_resolution():
+    rec = _record(
+        _ev("Battery life", "25", 0.55, "secondary_html"),
+        brand="JBL",
+        model="Endurance Run 3",
+    )
+    plan = {"scrape_semantics": ["Autonomía"]}
+    result = analyze_resolution(rec, plan)
+    row = result["fields"][0]
+    assert row["status"] == INSUFFICIENT_EVIDENCE
+    assert result["canonical_facts"]["battery"]["runtime_hours"] is None

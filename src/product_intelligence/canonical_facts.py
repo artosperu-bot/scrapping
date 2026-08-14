@@ -31,11 +31,7 @@ def _gtin_type(value: str | None) -> str | None:
 
 
 def _bluetooth_version(attribute: str, raw: str) -> str | None:
-    """Return a Bluetooth protocol version only from version-shaped evidence.
-
-    Telemetry attributes such as ``Bluetooth Transmitter Power = 20 dBm`` contain the
-    word Bluetooth but are not evidence that the product exposes Bluetooth transport.
-    """
+    """Return a Bluetooth protocol version only from version-shaped evidence."""
     attr = key_norm(attribute)
     raw_text = str(raw or "").strip()
     if re.search(r"bluetooth\s*(?:version|versi[oó]n)", attr, re.I) or attr in {"bluetooth", "bluetooth version", "version bluetooth", "version de bluetooth"}:
@@ -61,6 +57,17 @@ def _charging_or_accessory_context(attribute: str, raw: str) -> bool:
         "package contents", "what s in the box", "contenido del paquete", "included items",
         "battery charging", "usb charging",
     ])
+
+
+def _proprietary_rf_context(attribute: str, raw: str) -> bool:
+    joined = key_norm(f"{attribute} {raw}")
+    if "bluetooth" in joined and not re.search(
+        r"dongle|receiver|receptor|wireless adapter|adaptador|proprietary|propietari|usb wireless",
+        joined,
+        re.I,
+    ):
+        return False
+    return bool(re.search(r"\b(?:rf|radio ?frequency|2[ .]?4\s*ghz)\b", joined, re.I))
 
 
 def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
@@ -149,7 +156,7 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
             facts["connectivity"]["usb"] = True
         if host_connectivity and re.search(r"\b3[., ]5\s*mm\b|headphone jack|audio jack", joined, re.I):
             facts["connectivity"]["jack_3_5mm"] = True
-        if re.search(r"2[ .]?4\s*ghz|radio ?frequency|\brf\b", joined, re.I):
+        if _proprietary_rf_context(ev.attribute, raw):
             facts["connectivity"]["rf_2_4ghz"] = True
             facts["connectivity"]["wireless"] = True
         if host_connectivity and re.search(r"\bwi[ -]?fi\b", joined, re.I):
@@ -166,8 +173,6 @@ def build_canonical_facts(rec: ProductRecord) -> dict[str, Any]:
             host_wired = bool(re.search(r"usb[ -]?c|3[., ]5\s*mm|wired|cableado|al[aá]mbric", val, re.I))
             if host_wireless and not host_wired:
                 facts["connectivity"]["wireless"] = True
-                if facts["connectivity"]["wired"] is None:
-                    facts["connectivity"]["wired"] = False
 
         if re.search(r"battery|bater[ií]a", attr, re.I):
             explicit = _norm_bool(raw)

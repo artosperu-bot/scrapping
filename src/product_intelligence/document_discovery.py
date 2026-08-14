@@ -3,12 +3,16 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+import requests
+
 from .discovery import SearchCandidate, _provider_search, _rank_candidates
 from .models import ProductIdentity
 from .normalize import key_norm
+from .pdf_evidence import discover_pdf_candidates
+from .web_fetch import UA
 
 _DOCUMENT_PATTERNS = (
-    ("quick_start", re.compile(r"\bquick\s*(?:start|guide)|gu[ií]a\s*r[aá]pida\b", re.I)),
+    ("quick_start", re.compile(r"\bquick\s*(?:start|guide)|gu[ií]a\s+r[aá]pida\b", re.I)),
     ("compliance", re.compile(r"\bcompliance|regulatory|declaration\s+of\s+conformity|conformidad|certification\b", re.I)),
     ("datasheet", re.compile(r"\bdata\s*sheet|datasheet|spec\s*sheet|ficha\s+t[eé]cnica|technical\s+sheet\b", re.I)),
     ("manual", re.compile(r"\buser\s+manual|owner'?s\s+manual|manual\s+de\s+usuario|manual\b", re.I)),
@@ -50,6 +54,9 @@ def build_document_queries(identity: ProductIdentity) -> list[str]:
             f"{quoted} manual pdf",
             f"{quoted} datasheet",
             f"{quoted} specifications pdf",
+            f"{quoted} filetype:pdf",
+            f"{quoted} spec sheet pdf",
+            f"{quoted} user manual filetype:pdf",
         ])
     return list(dict.fromkeys(q for q in queries if q.strip()))
 
@@ -104,6 +111,49 @@ def _document_rank(candidate: SearchCandidate) -> tuple[int, int, float]:
     host = (urlparse(candidate.url).hostname or "").lower()
     support_hint = int(any(x in host or x in candidate.url.lower() for x in ["support", "manual", "download", "docs"]))
     return int(bool(candidate.likely_official)), priority + support_hint, float(candidate.score or 0)
+
+
+def _looks_like_direct_pdf(url: str | None) -> bool:
+    return (urlparse(str(url or "")).path or "").lower().endswith(".pdf")
+
+
+def resolve_document_candidate_urls(
+    identity: ProductIdentity,
+    candidate: SearchCandidate,
+    *,
+    timeout: int = 15,
+) -> list[SearchCandidate]:
+    """Turn a validated document landing page into concrete PDF candidates.
+
+    Search engines frequently return product/support HTML pages whose visible
+    result mentions a manual or spec sheet. Those pages must never be passed to
+    the PDF parser as if they were PDFs. We fetch only the landing HTML, extract
+    document links, and still let the downstream PDF identity validator decide
+    whether any document is safe to accept.
+    """
+    if _looks_like_direct_pdf(candidate.url):
+        return [candidate]
+
+    response = requests.get(
+        candidate.url,
+        timeout=timeout,
+        headers={"User-Agent": UA, "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.7"},
+    )
+    response.raise_for_status()
+    resolved: list[SearchCandidate] = []
+    seen: set[str] = set()
+    for row in discover_pdf_candidates(response.text, candidate.url):
+        if row.url in seen:
+            continue
+        seen.add(row.url)
+        resolved.append(SearchCandidate(
+            row.url,
+            row.label or candidate.title,
+            f"document link from {candidate.url}",
+            max(float(candidate.score or 0), .5),
+            bool(candidate.likely_official),
+        ))
+    return resolved
 
 
 def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeout: int = 15) -> list[SearchCandidate]:

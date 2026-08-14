@@ -19,6 +19,9 @@ class WorkspaceRunTracker:
         self._active: dict[Stage, list[str]] = {}
 
     def _ensure_run(self, product_id: str) -> str:
+        owned_product_ids = {product.id for product in self.repository.list_products(self.workspace_id)}
+        if product_id not in owned_product_ids:
+            raise ValueError(f"product {product_id} does not belong to workspace {self.workspace_id}")
         run = self.repository.latest_run(product_id)
         if run is None or run.status is RunStatus.COMPLETED:
             run = self.repository.create_run(product_id)

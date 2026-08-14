@@ -6,10 +6,12 @@ on:
     branches:
       - main
       - feature/ocrspace-mistral-description
+      - feature/auto-updater
     paths:
       - 'src/**'
       - 'tests/**'
       - 'run_desktop.py'
+      - 'run_updater.py'
       - 'pyproject.toml'
       - 'ProductIntelligence.spec'
       - 'vendor/**'
@@ -47,7 +49,7 @@ jobs:
       - name: Smoke modern desktop shell
         shell: cmd
         run: >-
-          python -c "from product_intelligence.modern_desktop import App as ModernApp; from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); assert app._active_workspace == 'dashboard'; required={'dashboard','products','sources','attributes','media','prices','run','audit','settings'}; assert required.issubset(app._workspace_tabs); assert 'settings' in app._nav_buttons; app.destroy(); print('PROVIDER_DESKTOP_SMOKE=PASS')"
+          python -c "from product_intelligence.modern_desktop import App as ModernApp; from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); assert app._active_workspace == 'dashboard'; required={'dashboard','products','sources','attributes','media','prices','run','audit','settings'}; assert required.issubset(app._workspace_tabs); assert 'settings' in app._nav_buttons; assert app.update_status.get().startswith('Versión instalada: v'); app.destroy(); print('PROVIDER_DESKTOP_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd
@@ -60,10 +62,11 @@ jobs:
         shell: cmd
         run: pyinstaller --noconfirm --clean ProductIntelligence.spec
 
-      - name: Verify executable exists
+      - name: Verify executables exist
         shell: cmd
         run: |
           if not exist dist\ProductIntelligence\ProductIntelligence.exe exit /b 1
+          if not exist dist\ProductIntelligence\ProductIntelligenceUpdater.exe exit /b 1
 
       - uses: actions/upload-artifact@v4
         with:

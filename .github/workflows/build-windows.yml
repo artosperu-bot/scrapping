@@ -7,7 +7,6 @@ on:
       - main
       - feature/ocrspace-mistral-description
       - feature/auto-updater
-      - fix/generic-excel-import-observability
     paths:
       - 'src/**'
       - 'tests/**'

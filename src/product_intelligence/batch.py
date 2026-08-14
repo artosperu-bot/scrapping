@@ -63,7 +63,6 @@ def _identity_placeholder(value) -> bool:
 
 
 def _looks_like_part_number(value: str | None) -> bool:
-    """Conservative generic MPN heuristic used only when no stronger identifier exists."""
     text = str(value or "").strip()
     if not text or " " in text or len(text) < 6 or len(text) > 48:
         return False
@@ -87,7 +86,6 @@ def _promote_mpn(vals: dict[str, str]) -> None:
 
 
 def detect_items(template: str) -> list[BatchItem]:
-    """Detect normalized product identities from heterogeneous Excel workbooks."""
     intake = analyze_workbook_intake(template)
     return [
         BatchItem(
@@ -116,7 +114,6 @@ def _best_product_sheet(template: str) -> tuple[str, int]:
 
 
 def manual_identity_items(template: str, identities: list[ProductIdentity], source_urls_by_index: list[list[str]] | None = None) -> list[BatchItem]:
-    """Bind identities to rows; user URLs are priority candidates, never blindly trusted evidence."""
     sheet, header_row = _best_product_sheet(template)
     items = []
     for i, ident in enumerate(identities):
@@ -265,7 +262,6 @@ def _resolution_for(records: list[ProductRecord], template_plan: dict | None) ->
 
 
 def _coverage_sufficient(resolution: dict, has_manufacturer: bool) -> bool:
-    """Stop because requested fields are resolved, never because N pages were seen."""
     if not has_manufacturer or resolution.get("blocked"):
         return False
     return not list(resolution.get("research_terms") or [])
@@ -306,7 +302,8 @@ def _ingest_direct_documents(
     limit: int = 6,
 ) -> list[ProductRecord]:
     accepted: list[ProductRecord] = []
-    for candidate in discover_product_documents(identity, limit=limit):
+    document_candidates = discover_product_documents(identity, limit=limit)
+    for candidate in document_candidates:
         if candidate.url in seen_urls:
             continue
         seen_urls.add(candidate.url)
@@ -366,11 +363,7 @@ def scrape_item(
         try:
             log(f"  probando: {candidate.url}")
             if strategy.pdf and _looks_like_pdf_url(candidate.url):
-                rec = process_pdf_document(
-                    item.identity,
-                    candidate.url,
-                    target_semantics=target_semantics,
-                )
+                rec = process_pdf_document(item.identity, candidate.url, target_semantics=target_semantics)
             else:
                 if not strategy.web:
                     continue
@@ -429,7 +422,6 @@ def scrape_item(
         except Exception as exc:
             errors.append(f"{candidate.url}: {type(exc).__name__}: {exc}")
 
-    # Solo PDF must be able to bootstrap from the product identity without first accepting HTML.
     if not accepted and strategy.pdf:
         accepted.extend(_ingest_direct_documents(
             item.identity,
@@ -447,8 +439,6 @@ def scrape_item(
     resolution = analyze_resolution(rec, template_plan)
     gap_terms = list(resolution.get("research_terms") or [])
 
-    # Before generic secondary research, look explicitly for product manuals/datasheets/PDFs.
-    # Every direct PDF is still identity-validated and routed through the same evidence pool.
     if gap_terms and strategy.pdf:
         document_extra = _ingest_direct_documents(
             rec.identity,

@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .batch import detect_items
+from .discovery import build_query
+from .excel_intake import analyze_workbook_intake
 from .template_contract import analyze_template_contract
 from .extraction_strategy import extraction_plan
 
@@ -20,7 +21,7 @@ ACTION_BY_ROLE = {
 
 
 def _product_label(identity) -> str:
-    for key in ("mpn", "ean", "upc", "gtin", "model", "product_name"):
+    for key in ("mpn", "ean", "upc", "gtin", "sku", "model", "product_name"):
         value = getattr(identity, key, None)
         if value:
             return str(value)
@@ -30,20 +31,24 @@ def _product_label(identity) -> str:
 def analyze_workbook(template: str) -> dict[str, Any]:
     """Preflight the workbook without touching the web or modifying the Excel.
 
-    The result is intentionally UI-friendly: detected products, execution attributes and
-    a summary. Seller/marketplace inputs remain visible but are explicitly marked as
-    protected/blank so required marketplace columns never block product research.
+    The result is intentionally UI-friendly and includes the complete Excel-to-SEARCH
+    decision trail. Query strings are previews only: this function never performs web
+    discovery or scraping.
     """
     path = Path(template)
     if not path.exists():
         raise FileNotFoundError(template)
 
+    intake = analyze_workbook_intake(template)
     contract = analyze_template_contract(template)
-    items = detect_items(template)
 
     products = []
-    for item in items:
+    search_by_row: dict[tuple[str, int], tuple[bool, str]] = {}
+    for item in intake.products:
         ident = item.identity
+        query = build_query(ident)
+        requested = bool(query.strip())
+        search_by_row[(item.sheet, item.row)] = (requested, query)
         products.append({
             "sheet": item.sheet,
             "row": item.row,
@@ -52,11 +57,31 @@ def analyze_workbook(template: str) -> dict[str, Any]:
             "ean": ident.ean,
             "upc": ident.upc,
             "gtin": ident.gtin,
+            "sku": ident.sku,
             "brand": ident.brand,
             "model": ident.model,
             "product_name": ident.product_name,
             "source_urls": list(item.source_urls or []),
+            "identity_type": item.audit.get("identity_type"),
+            "identity_value": item.audit.get("identity_selected"),
+            "row_accepted": True,
+            "search_requested": requested,
+            "search_query": query,
+            "search_executed": False,
         })
+
+    intake_audit = intake.audit_dict()
+    for sheet in intake_audit.get("sheets", []):
+        sheet_name = sheet.get("sheet_detected")
+        for row in sheet.get("rows", []):
+            key = (sheet_name, row.get("product_row"))
+            requested, query = search_by_row.get(key, (False, ""))
+            row["search_requested"] = requested
+            row["search_query"] = query
+            row["search_executed"] = False
+            if not row.get("row_accepted"):
+                row["search_requested"] = False
+                row["rejection_reason"] = row.get("rejection_reason") or "ROW_REJECTED_BEFORE_SEARCH"
 
     attributes = []
     for sheet in contract.get("sheets", []):
@@ -86,9 +111,12 @@ def analyze_workbook(template: str) -> dict[str, Any]:
         "attributes": attributes,
         "reference_sheets": contract.get("reference_sheets", []),
         "extraction_plan": extraction_plan(),
+        "intake_audit": intake_audit,
         "summary": {
             **contract.get("summary", {}),
             "products_detected": len(products),
+            "sheets_analyzed": len(intake.sheets),
+            "product_sheets_detected": sum(1 for sheet in intake.sheets if sheet.accepted),
             "actions": action_counts,
         },
         "contract": contract,

@@ -10,6 +10,7 @@ import fitz
 import requests
 
 from .models import Evidence
+from .provider_runtime import remote_ocr_text
 from .web_fetch import UA
 
 
@@ -28,7 +29,7 @@ def download_bytes(url: str, timeout: int = 35) -> bytes:
     return r.content
 
 
-def _default_ocr_page(page_number: int, image_bytes: bytes) -> str:
+def _local_ocr_page(image_bytes: bytes) -> str:
     try:
         from paddleocr import PaddleOCR
         ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
@@ -41,6 +42,14 @@ def _default_ocr_page(page_number: int, image_bytes: bytes) -> str:
         return "\n".join(lines)
     except Exception:
         return ""
+
+
+def _default_ocr_page(page_number: int, image_bytes: bytes) -> str:
+    """Try configured OCR.space first, then preserve the existing local fallback."""
+    remote = remote_ocr_text(image_bytes, language="eng")
+    if remote:
+        return remote
+    return _local_ocr_page(image_bytes)
 
 
 def _extract_document(doc: fitz.Document, ocr_page: Callable[[int, bytes], str] | None = None) -> list[ExtractedPdfPage]:

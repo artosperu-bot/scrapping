@@ -26,7 +26,11 @@ def resource_path(name: str) -> Path:
 
 
 class ProgressAnimation(ttk.Frame):
-    """Small Tk-only animation view driven entirely by external process state."""
+    """Small Tk-only animation view driven entirely by external process state.
+
+    Animation assets are presentation-only. A missing, truncated or otherwise
+    unreadable GIF must never abort the business workflow that owns this view.
+    """
 
     def __init__(self, master, *, width: int = 180, height: int = 120):
         super().__init__(master)
@@ -61,16 +65,27 @@ class ProgressAnimation(ttk.Frame):
             return cached
 
         frames: list[tuple[ImageTk.PhotoImage, int]] = []
-        with Image.open(resource_path(asset_name)) as image:
-            default_duration = max(20, int(image.info.get("duration") or 80))
-            for frame in ImageSequence.Iterator(image):
-                rgba = frame.convert("RGBA")
-                rgba.thumbnail((self._width, self._height), Image.Resampling.LANCZOS)
-                duration = max(20, int(frame.info.get("duration") or default_duration))
-                frames.append((ImageTk.PhotoImage(rgba.copy(), master=self), duration))
-        if not frames:
-            raise ValueError(f"GIF sin frames: {asset_name}")
-        _FRAME_CACHE[key] = frames
+        try:
+            with Image.open(resource_path(asset_name)) as image:
+                default_duration = max(20, int(image.info.get("duration") or 80))
+                try:
+                    for frame in ImageSequence.Iterator(image):
+                        try:
+                            rgba = frame.convert("RGBA")
+                            rgba.thumbnail((self._width, self._height), Image.Resampling.LANCZOS)
+                            duration = max(20, int(frame.info.get("duration") or default_duration))
+                            frames.append((ImageTk.PhotoImage(rgba.copy(), master=self), duration))
+                        except (OSError, EOFError, ValueError):
+                            # Preserve any frames decoded before a truncated/corrupt frame.
+                            break
+                except (OSError, EOFError, ValueError):
+                    # Pillow can fail while advancing ImageSequence itself.
+                    pass
+        except (OSError, EOFError, ValueError):
+            return []
+
+        if frames:
+            _FRAME_CACHE[key] = frames
         return frames
 
     def _cancel_tick(self) -> None:
@@ -80,6 +95,24 @@ class ProgressAnimation(ttk.Frame):
             except tk.TclError:
                 pass
             self._after_id = None
+
+    def _show_fallback(self, text: str = "Animación no disponible") -> None:
+        """Render a harmless text fallback when the decorative GIF is unavailable."""
+        self._cancel_tick()
+        self._frames = []
+        self._frame_index = 0
+        try:
+            self.canvas.delete("all")
+            self.canvas.create_text(
+                self._width // 2,
+                self._height // 2,
+                text=text,
+                anchor="center",
+                justify="center",
+            )
+        except tk.TclError:
+            # The widget may already be closing; never leak that into a worker/event pump.
+            pass
 
     def _show_frame(self) -> None:
         if not self._frames:
@@ -93,22 +126,33 @@ class ProgressAnimation(ttk.Frame):
         self._after_id = None
         if self._state not in {RUNNING, COMPLETED} or not self._frames:
             return
-        self._show_frame()
-        _frame, duration = self._frames[self._frame_index % len(self._frames)]
-        self._frame_index = (self._frame_index + 1) % len(self._frames)
-        self._after_id = self.after(duration, self._tick)
+        try:
+            self._show_frame()
+            _frame, duration = self._frames[self._frame_index % len(self._frames)]
+            self._frame_index = (self._frame_index + 1) % len(self._frames)
+            self._after_id = self.after(duration, self._tick)
+        except tk.TclError:
+            self._after_id = None
 
     def _use_asset(self, asset_name: str, *, animate: bool) -> None:
         self._cancel_tick()
-        if self._asset_name != asset_name or not self._frames:
-            self._frames = self._load_frames(asset_name)
+        try:
+            if self._asset_name != asset_name or not self._frames:
+                self._frames = self._load_frames(asset_name)
+                self._asset_name = asset_name
+            if not self._frames:
+                self._show_fallback()
+                return
+            self._frame_index = 0
+            self._show_frame()
+            if animate:
+                _frame, duration = self._frames[0]
+                self._frame_index = 1 % len(self._frames)
+                self._after_id = self.after(duration, self._tick)
+        except (OSError, EOFError, ValueError, tk.TclError):
+            # Decorative animation failure must never become a workflow failure.
             self._asset_name = asset_name
-        self._frame_index = 0
-        self._show_frame()
-        if animate:
-            _frame, duration = self._frames[0]
-            self._frame_index = 1 % len(self._frames)
-            self._after_id = self.after(duration, self._tick)
+            self._show_fallback()
 
     def set_running(self, text: str = "Procesando…") -> None:
         self._state = RUNNING

@@ -171,8 +171,14 @@ class WorkspaceRepository:
                 "INSERT INTO workspace_products (id, workspace_id, part_number, brand, model, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (product_id, workspace_id, clean_part_number, brand, model, stamp),
             )
-        row = self._conn.execute("SELECT * FROM workspace_products WHERE id = ?", (product_id,)).fetchone()
-        return WorkspaceProduct(**dict(row))
+        return self.find_product(workspace_id, clean_part_number)
+
+    def find_product(self, workspace_id: str, part_number: str) -> WorkspaceProduct | None:
+        row = self._conn.execute(
+            "SELECT * FROM workspace_products WHERE workspace_id = ? AND part_number = ? ORDER BY created_at, id LIMIT 1",
+            (workspace_id, str(part_number or "").strip()),
+        ).fetchone()
+        return WorkspaceProduct(**dict(row)) if row is not None else None
 
     def list_products(self, workspace_id: str) -> list[WorkspaceProduct]:
         rows = self._conn.execute(
@@ -196,7 +202,55 @@ class WorkspaceRepository:
                 "INSERT INTO stage_states (run_id, stage, status, updated_at, error) VALUES (?, ?, ?, ?, NULL)",
                 [(run_id, stage.value, RunStatus.PENDING.value, stamp) for stage in Stage],
             )
-        return ProductRun(run_id, product_id, RunStatus.PENDING, stamp, stamp)
+        return self.get_run(run_id)
+
+    def get_run(self, run_id: str) -> ProductRun:
+        row = self._conn.execute("SELECT * FROM product_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return ProductRun(
+            id=row["id"],
+            product_id=row["product_id"],
+            status=RunStatus(row["status"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def latest_run(self, product_id: str) -> ProductRun | None:
+        row = self._conn.execute(
+            "SELECT * FROM product_runs WHERE product_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (product_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ProductRun(
+            id=row["id"],
+            product_id=row["product_id"],
+            status=RunStatus(row["status"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _aggregate_run_status(states: Mapping[Stage, StageState]) -> RunStatus:
+        statuses = [state.status for state in states.values()]
+        if any(status is RunStatus.ERROR for status in statuses):
+            return RunStatus.ERROR
+        if any(status is RunStatus.RUNNING for status in statuses):
+            return RunStatus.RUNNING
+        if statuses and all(status is RunStatus.COMPLETED for status in statuses):
+            return RunStatus.COMPLETED
+        if any(status is RunStatus.PAUSED for status in statuses):
+            return RunStatus.PAUSED
+        return RunStatus.PENDING
+
+    def _refresh_run_status(self, run_id: str, stamp: str | None = None) -> None:
+        stamp = stamp or _now()
+        aggregate = self._aggregate_run_status(self.list_stage_states(run_id))
+        self._conn.execute(
+            "UPDATE product_runs SET status = ?, updated_at = ? WHERE id = ?",
+            (aggregate.value, stamp, run_id),
+        )
 
     def set_stage_status(
         self,
@@ -214,10 +268,7 @@ class WorkspaceRepository:
             )
             if cursor.rowcount != 1:
                 raise KeyError((run_id, stage.value))
-            self._conn.execute(
-                "UPDATE product_runs SET status = ?, updated_at = ? WHERE id = ?",
-                (status.value, stamp, run_id),
-            )
+            self._refresh_run_status(run_id, stamp)
         return self.list_stage_states(run_id)[stage]
 
     def list_stage_states(self, run_id: str) -> Mapping[Stage, StageState]:
@@ -239,13 +290,18 @@ class WorkspaceRepository:
 
     def recover_running_stages(self) -> int:
         stamp = _now()
+        affected = [
+            row["run_id"]
+            for row in self._conn.execute(
+                "SELECT DISTINCT run_id FROM stage_states WHERE status = ?",
+                (RunStatus.RUNNING.value,),
+            ).fetchall()
+        ]
         with self._conn:
             cursor = self._conn.execute(
                 "UPDATE stage_states SET status = ?, updated_at = ?, error = NULL WHERE status = ?",
                 (RunStatus.PENDING.value, stamp, RunStatus.RUNNING.value),
             )
-            self._conn.execute(
-                "UPDATE product_runs SET status = ?, updated_at = ? WHERE status = ?",
-                (RunStatus.PENDING.value, stamp, RunStatus.RUNNING.value),
-            )
+            for run_id in affected:
+                self._refresh_run_status(run_id, stamp)
         return int(cursor.rowcount)

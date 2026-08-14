@@ -54,7 +54,7 @@ def test_price_progress_layout_reserves_visible_animation_space_and_keeps_logic(
     assert "height=190" in source
     assert "pack_propagate(False)" in source
     assert "ProgressAnimation(progress_visual, width=220, height=140)" in source
-    assert "run_price_product(identity, output_root, on_event=on_event, max_sources=12)" in source
+    assert "run_price_product(identity, output_root, on_event=on_event, max_sources=48)" in source
     assert 'self.price_tree.pack(side="left", fill="both", expand=True)' in source
     assert 'self.price_tree.bind("<Double-1>", self._open_price_offer)' in source
 

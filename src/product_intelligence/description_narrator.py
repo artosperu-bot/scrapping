@@ -14,6 +14,12 @@ _DENY_TEXT = re.compile(
     re.I,
 )
 _NUMBER_RE = re.compile(r"(?<![\w])\d+(?:[.,]\d+)?(?:\s*(?:mm|cm|m|g|kg|mah|wh|hz|khz|mhz|ghz|w|v|a|mp|gb|tb|mb|%))?", re.I)
+_RISKY_CLAIM_PATTERNS = (
+    re.compile(r"\b(?:titanio|titanium|aluminio|aluminum|acero|steel|carbono|carbon\s*fiber|fibra\s*de\s*carbono)\b", re.I),
+    re.compile(r"\b(?:certificaci[oó]n|certified|certification|mil-std|ip\s*\d{2}|ipx\s*\d)\b", re.I),
+    re.compile(r"\b(?:compatible|compatibilidad|compatibility)\b", re.I),
+    re.compile(r"\b(?:nfc|5g|wifi\s*6|wi-fi\s*6|bluetooth|c[aá]mara\s*t[eé]rmica|thermal\s*camera|visi[oó]n\s*nocturna|night\s*vision)\b", re.I),
+)
 
 
 class NarratorClient(Protocol):
@@ -54,11 +60,7 @@ def _iter_evidence(rec: Any):
 
 
 def build_safe_facts(rec: Any, *, limit: int = 24) -> list[str]:
-    """Return only validated, non-commercial facts suitable for narration.
-
-    Raw/rejected OCR, price, stock, seller and obvious conflict material are excluded.
-    Identity is handled separately in the prompt so facts stay technical and bounded.
-    """
+    """Return only validated, non-commercial facts suitable for narration."""
     facts: list[str] = []
     seen: set[str] = set()
     for attr, value in _iter_evidence(rec):
@@ -86,13 +88,24 @@ def build_payload(rec: Any, facts: Sequence[str]) -> dict[str, Any]:
         "instructions": (
             "Redacta una descripción comercial natural en español usando SOLO identity y facts. "
             "No inventes especificaciones, compatibilidad, materiales, certificaciones, beneficios, "
-            "precio, stock ni vendedor. Conserva exactamente marca, modelo y MPN."
+            "precio, stock ni vendedor. Conserva exactamente marca, modelo y MPN si los mencionas."
         ),
     }
 
 
 def _normalized_numbers(text: str) -> set[str]:
     return {re.sub(r"\s+", "", m.group(0).lower()).replace(",", ".") for m in _NUMBER_RE.finditer(text or "")}
+
+
+def _unsupported_risky_claim(text: str, allowed_text: str) -> bool:
+    for pattern in _RISKY_CLAIM_PATTERNS:
+        generated = {m.group(0).casefold() for m in pattern.finditer(text)}
+        if not generated:
+            continue
+        allowed = {m.group(0).casefold() for m in pattern.finditer(allowed_text)}
+        if generated - allowed:
+            return True
+    return False
 
 
 class DescriptionGuard:
@@ -105,10 +118,13 @@ class DescriptionGuard:
 
         identity = getattr(rec, "identity", None)
         lower = text.casefold()
-        for field in ("brand", "model", "mpn"):
+        for field in ("brand", "model"):
             expected = _identity_value(identity, field)
             if expected and expected.casefold() not in lower:
                 return GuardResult(False, f"IDENTITY_{field.upper()}_ALTERED_OR_MISSING")
+        expected_mpn = _identity_value(identity, "mpn")
+        if expected_mpn and re.search(r"\bmpn\b", text, re.I) and expected_mpn.casefold() not in lower:
+            return GuardResult(False, "IDENTITY_MPN_ALTERED")
 
         allowed_text = " ".join(
             [
@@ -123,6 +139,8 @@ class DescriptionGuard:
         new_numbers = _normalized_numbers(text) - allowed_numbers
         if new_numbers:
             return GuardResult(False, "UNSUPPORTED_NUMBER_OR_UNIT")
+        if _unsupported_risky_claim(text, allowed_text):
+            return GuardResult(False, "UNSUPPORTED_TECHNICAL_CLAIM")
         return GuardResult(True, "GROUNDED")
 
 

@@ -1,8 +1,7 @@
-from product_intelligence.modern_desktop import NAV_ITEMS, _PAGE_COPY
+from product_intelligence.provider_desktop import App as ProviderApp
+from product_intelligence.workspace_desktop import App as WorkspaceApp, WORKSPACE_NAV_KEY
 
 
-def test_modern_desktop_registers_persistent_workspaces_navigation():
-    keys = [key for _label, key in NAV_ITEMS]
-
-    assert "workspaces" in keys
-    assert _PAGE_COPY["workspaces"][0] == "Trabajos"
+def test_workspace_desktop_extends_validated_provider_shell():
+    assert issubclass(WorkspaceApp, ProviderApp)
+    assert WORKSPACE_NAV_KEY == "workspaces"

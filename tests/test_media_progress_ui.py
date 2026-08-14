@@ -39,26 +39,25 @@ def test_batch_progress_reaches_100_only_when_all_products_finish():
     assert progress.downloaded == 5
 
 
-def test_progress_desktop_contains_real_progress_bars_and_wolf_animation():
+def test_progress_desktop_contains_real_progress_bars_and_shared_animation():
     source = (ROOT / "src" / "product_intelligence" / "media_progress_desktop.py").read_text(encoding="utf-8")
     assert "ttk.Progressbar" in source
     assert "self.media_overall_progress" in source
     assert "self.media_product_progress" in source
-    assert "_animate_wolf" in source
-    assert "_draw_wolf" in source
+    assert "ProgressAnimation" in source
+    assert "_animate_wolf" not in source
+    assert "_draw_wolf" not in source
     assert "BatchProgress" in source
     assert 'text="Progreso del proceso"' in source
 
 
 def test_progress_panel_is_packed_before_expandable_gallery_and_keeps_requested_height():
     source = (ROOT / "src" / "product_intelligence" / "media_progress_desktop.py").read_text(encoding="utf-8")
-    # Regression: when the expandable gallery is packed first, Tk can squeeze the
-    # later progress panel down to just its LabelFrame title (as seen in Windows).
     assert "self.media_gallery_box.pack_forget()" in source
     progress_pack = source.index('progress_box.pack(fill="x"')
     gallery_repack = source.index('self.media_gallery_box.pack(fill="both", expand=True)')
     assert progress_pack < gallery_repack
-    assert 'height=150' in source or 'minsize=150' in source or 'propagate(False)' in source
+    assert 'height=165' in source or 'minsize=150' in source or 'propagate(False)' in source
 
 
 def test_exe_preserves_progress_desktop_extension():

@@ -39,7 +39,7 @@ class FakeSession:
         return self.responses.pop(0)
 
 
-def _release_payload(tag="v0.10.5"):
+def _release_payload(tag="v0.10.6"):
     return {
         "tag_name": tag,
         "body": "Cambios de prueba",
@@ -54,7 +54,7 @@ def _release_payload(tag="v0.10.5"):
 
 
 def test_app_version_is_current_auto_updatable_version():
-    assert APP_VERSION == "0.10.5"
+    assert APP_VERSION == "0.10.6"
 
 
 def test_semver_comparison_is_numeric_not_lexicographic():
@@ -65,15 +65,15 @@ def test_semver_comparison_is_numeric_not_lexicographic():
 
 
 def test_check_latest_returns_release_only_when_newer():
-    session = FakeSession([FakeResponse(payload=_release_payload("v0.10.5"))])
+    session = FakeSession([FakeResponse(payload=_release_payload("v0.10.6"))])
     service = UpdateService(current_version="0.10.4", session=session)
     release = service.check_latest()
     assert release == ReleaseInfo(
-        version="0.10.5",
+        version="0.10.6",
         zip_url="https://example.invalid/ProductIntelligence-Windows.zip",
         sha256_url="https://example.invalid/ProductIntelligence-Windows.sha256",
         notes="Cambios de prueba",
-        page_url="https://github.com/artosperu-bot/scrapping/releases/tag/v0.10.5",
+        page_url="https://github.com/artosperu-bot/scrapping/releases/tag/v0.10.6",
     )
     same = UpdateService(current_version="0.10.4", session=FakeSession([FakeResponse(payload=_release_payload("v0.10.4"))]))
     assert same.check_latest() is None
@@ -91,7 +91,7 @@ def test_download_verified_checks_sha256(tmp_path):
     digest = hashlib.sha256(zip_bytes).hexdigest()
     session = FakeSession([FakeResponse(content=zip_bytes), FakeResponse(text=f"{digest}  ProductIntelligence-Windows.zip\n")])
     service = UpdateService(current_version="0.10.4", session=session)
-    release = ReleaseInfo("0.10.5", "zip", "sha", "", "")
+    release = ReleaseInfo("0.10.6", "zip", "sha", "", "")
     path = service.download_verified(release, tmp_path)
     assert path.read_bytes() == zip_bytes
     assert path.name == "ProductIntelligence-Windows.zip"
@@ -100,7 +100,7 @@ def test_download_verified_checks_sha256(tmp_path):
 def test_download_verified_rejects_digest_mismatch(tmp_path):
     service = UpdateService(current_version="0.10.4", session=FakeSession([FakeResponse(content=b"tampered"), FakeResponse(text=f"{'0' * 64}  ProductIntelligence-Windows.zip\n")]))
     with pytest.raises(ValueError, match="SHA256"):
-        service.download_verified(ReleaseInfo("0.10.5", "zip", "sha", "", ""), tmp_path)
+        service.download_verified(ReleaseInfo("0.10.6", "zip", "sha", "", ""), tmp_path)
 
 
 def _zip_bytes(entries):

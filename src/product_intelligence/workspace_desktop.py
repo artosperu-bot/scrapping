@@ -52,13 +52,14 @@ class App(ProviderApp):
         self.notebook.insert(1, self.workspaces_tab, text="Trabajos")
         self._workspace_tabs[WORKSPACE_NAV_KEY] = self.workspaces_tab
 
+        nav_parent = self._nav_buttons["products"].master
         self._workspaces_nav_button = ttk.Button(
-            self.sidebar,
+            nav_parent,
             text="▤   Trabajos",
             style="Nav.TButton",
             command=lambda: self._show_workspace(WORKSPACE_NAV_KEY),
         )
-        self._workspaces_nav_button.pack(fill="x", padx=10, pady=(2, 2), before=self._nav_buttons.get("products"))
+        self._workspaces_nav_button.pack(fill="x", padx=10, pady=(2, 2), before=self._nav_buttons["products"])
         self._nav_buttons[WORKSPACE_NAV_KEY] = self._workspaces_nav_button
 
         create_box = ttk.LabelFrame(self.workspaces_tab, text="Nuevo trabajo", style="Card.TLabelframe")

@@ -44,7 +44,8 @@ Antes de publicar una versión:
 5. Ejecutar smokes de las capacidades adyacentes relevantes.
 6. Verificar estados terminales de UI: inicio, progreso, completado y error.
 7. Verificar build Windows y updater cuando corresponda.
-8. No publicar si existe una regresión crítica atribuible al cambio.
+8. Comparar contra el baseline histórico mínimo v0.10.4 y confirmar que ninguna capacidad previamente validada desapareció salvo cambio explícitamente aprobado.
+9. No publicar si existe una regresión crítica atribuible al cambio.
 
 Un smoke externo puede fallar por una fuente web cambiante. En ese caso debe investigarse y clasificarse; no se debe modificar lógica no relacionada solo para convertir el check en verde.
 
@@ -68,6 +69,89 @@ Todo cambio funcional requiere como mínimo:
 - fix mínimo/general, no específico a un solo producto salvo que el dominio lo requiera;
 - regresión de casos conocidos;
 - comprobación de que no degrada otras categorías o workflows.
+
+## Baseline histórico de versiones
+
+### v0.10.4 — baseline funcional mínimo
+
+Esta versión se conserva como baseline histórico de comportamiento. Cualquier capacidad útil que funcionaba aquí debe seguir disponible en versiones posteriores salvo que exista una decisión explícita de reemplazarla o retirarla.
+
+Capacidades a preservar:
+
+- Scraping Excel y completado seguro del archivo.
+- OCR.space.
+- Mistral y flujo de descripción existente.
+- PDF evidence.
+- Multimedia.
+- Price Intelligence.
+- Configuración y persistencia de API keys.
+- separación entre procesos/workflows.
+- resultados visibles en UI al terminar los procesos.
+
+### v0.10.5 — progreso visual compartido
+
+Añadió la capa visual de progreso con Tom & Jerry mediante `processing.gif` y `completed.gif`, componente compartido `ProgressAnimation`, estados RUNNING / COMPLETED / ERROR y actualización mediante Tkinter `after()`.
+
+Debe preservar todo lo de v0.10.4 y además:
+
+- GIF visible durante procesamiento.
+- GIF/estado de completado al finalizar.
+- integración visual en Scraping Excel, Multimedia y Price Intelligence sin porcentajes falsos.
+
+### v0.10.6 — updater standalone estable
+
+Corrigió el updater para que `ProductIntelligenceUpdater.exe` pudiera ejecutarse de forma standalone desde `%TEMP%`, incluyendo su runtime de PyInstaller.
+
+Debe preservar todo lo de v0.10.4 y v0.10.5 y además:
+
+- actualización automática desde GitHub Releases.
+- descarga y validación SHA256.
+- updater standalone desde TEMP.
+- bundle Windows con `ProductIntelligence.exe` y `ProductIntelligenceUpdater.exe`.
+
+### v0.10.7 — correctness + documentos técnicos
+
+Añadió mejoras generales de evidence/canonical correctness y descubrimiento de documentación técnica.
+
+Debe preservar todo lo anterior y además:
+
+- UNKNOWN no se convierte automáticamente en Sí/No.
+- Bluetooth 2.4 GHz no se convierte automáticamente en RF propietario.
+- USB de carga no implica audio cableado.
+- mejor reutilización canonical de GTIN / marca / modelo.
+- resolución de conflictos por autoridad/confianza.
+- búsqueda de manuales, datasheets y PDFs del producto.
+- ingestión PDF por el Evidence Pool existente.
+- Mistral redacta desde canonical validado.
+
+Nota histórica: `price_desktop.py` y `price_workflow.py` no cambiaron entre v0.10.6 y v0.10.7. Si aparece una diferencia de comportamiento de precios entre esas versiones, no atribuirla automáticamente al motor de precios; revisar UI/eventos, empaquetado, entorno y fuentes externas.
+
+### Candidato posterior a v0.10.7 — reorganización visual y terminal-state hardening
+
+Trabajo actual en PR #26. No es todavía una release publicada.
+
+Objetivos/capacidades:
+
+- organizar visualmente Price Intelligence, Multimedia y Scraping Excel.
+- reservar espacio suficiente para el GIF compartido.
+- mantener resultados como área principal.
+- asegurar que Price Intelligence nunca quede permanentemente en RUNNING cuando el worker ya terminó.
+- si falta una finalización coherente, mostrar ERROR observable en vez de congelar la UI.
+- preservar motores funcionales sin cambios innecesarios.
+
+## Regla para futuras versiones
+
+Antes de versionar `vX.Y.Z`, actualizar esta sección con:
+
+1. Qué versión sirve como baseline inmediato.
+2. Qué se agregó o corrigió.
+3. Qué capacidades heredadas deben seguir funcionando.
+4. Qué archivos/motores funcionales cambiaron realmente.
+5. Qué regresiones históricas específicas se probaron.
+6. Resultado de tests, smokes, build Windows y updater.
+7. Cualquier fallo externo conocido que no sea atribuible al código.
+
+Una nueva versión debe ser acumulativa: **hereda las capacidades validadas de las versiones anteriores y agrega mejoras; no puede perder silenciosamente una capacidad previa.**
 
 ## Versiones y regresiones conocidas
 

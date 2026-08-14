@@ -2,6 +2,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from product_intelligence import progress_animation as progress_module
+
 
 ROOT = Path(__file__).parents[1]
 SRC = ROOT / "src" / "product_intelligence"
@@ -119,3 +121,41 @@ def test_release_version_is_0108_everywhere():
     project_source = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'APP_VERSION = "0.10.8"' in version_source
     assert 'version = "0.10.8"' in project_source
+
+
+def test_progress_animation_broken_gif_never_escapes_into_business_workflow():
+    source = (SRC / "progress_animation.py").read_text(encoding="utf-8")
+    assert "_show_fallback" in source
+    assert "except (OSError, EOFError, ValueError)" in source
+    use_asset = source.split("def _use_asset", 1)[1].split("\n    def ", 1)[0]
+    assert "try:" in use_asset
+    assert "_show_fallback" in use_asset
+    assert "except" in use_asset
+
+
+def test_load_frames_swallow_exact_pillow_broken_stream(monkeypatch):
+    class BrokenImage:
+        info = {"duration": 80}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class BrokenFrame:
+        info = {}
+
+        def convert(self, _mode):
+            raise OSError("broken data stream when reading image file")
+
+    monkeypatch.setattr(progress_module.Image, "open", lambda *_args, **_kwargs: BrokenImage())
+    monkeypatch.setattr(progress_module.ImageSequence, "Iterator", lambda _image: iter([BrokenFrame()]))
+    monkeypatch.setattr(progress_module.ProgressAnimation, "winfo_toplevel", lambda self: self)
+
+    animation = object.__new__(progress_module.ProgressAnimation)
+    animation._width = 220
+    animation._height = 140
+
+    frames = progress_module.ProgressAnimation._load_frames(animation, "processing.gif")
+    assert frames == []

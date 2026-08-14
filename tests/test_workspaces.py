@@ -43,3 +43,31 @@ def test_new_run_initializes_all_pipeline_stages_pending(tmp_path):
 
     assert list(states) == list(Stage)
     assert all(state.status is RunStatus.PENDING for state in states.values())
+
+
+def test_latest_run_and_product_lookup_support_incremental_resume(tmp_path):
+    repo = WorkspaceRepository(tmp_path / "workspaces.db")
+    workspace = repo.create_workspace("Test")
+    product = repo.add_product(workspace.id, part_number="PN-1", brand="Brand")
+    first = repo.create_run(product.id)
+    second = repo.create_run(product.id)
+
+    assert repo.find_product(workspace.id, "PN-1") == product
+    assert repo.latest_run(product.id).id == second.id
+    assert first.id != second.id
+
+
+def test_run_status_is_derived_from_all_stage_states(tmp_path):
+    repo = WorkspaceRepository(tmp_path / "workspaces.db")
+    workspace = repo.create_workspace("Test")
+    product = repo.add_product(workspace.id, part_number="PN-1")
+    run = repo.create_run(product.id)
+
+    repo.set_stage_status(run.id, Stage.IDENTITY, RunStatus.COMPLETED)
+    assert repo.get_run(run.id).status is RunStatus.PENDING
+
+    repo.set_stage_status(run.id, Stage.EVIDENCE, RunStatus.RUNNING)
+    assert repo.get_run(run.id).status is RunStatus.RUNNING
+
+    repo.set_stage_status(run.id, Stage.EVIDENCE, RunStatus.ERROR, error="boom")
+    assert repo.get_run(run.id).status is RunStatus.ERROR

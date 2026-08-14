@@ -22,12 +22,13 @@ def extract_product_bundle(zip_path: Path, stage_dir: Path) -> Path:
     root = stage_dir.resolve()
     with zipfile.ZipFile(zip_path, "r") as zf:
         for info in zf.infolist():
-            candidate = (stage_dir / info.filename).resolve()
+            normalized = info.filename.replace("\\", "/")
+            candidate = (stage_dir / normalized).resolve()
             try:
                 candidate.relative_to(root)
             except ValueError as exc:
                 raise UnsafeArchiveError(info.filename) from exc
-            if not info.filename.replace("\\", "/").startswith("ProductIntelligence/"):
+            if not normalized.startswith("ProductIntelligence/"):
                 raise UnsafeArchiveError(info.filename)
         zf.extractall(stage_dir)
     product_root = stage_dir / "ProductIntelligence"
@@ -38,8 +39,40 @@ def extract_product_bundle(zip_path: Path, stage_dir: Path) -> Path:
     return product_root
 
 
+def _wait_windows_process(pid: int, timeout: float) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    SYNCHRONIZE = 0x00100000
+    WAIT_OBJECT_0 = 0x00000000
+    WAIT_TIMEOUT = 0x00000102
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    if not handle:
+        return
+    try:
+        result = kernel32.WaitForSingleObject(handle, max(0, int(timeout * 1000)))
+        if result == WAIT_OBJECT_0:
+            return
+        if result == WAIT_TIMEOUT:
+            raise TimeoutError(f"parent process {pid} did not exit")
+        raise OSError(ctypes.get_last_error(), "WaitForSingleObject failed")
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def wait_for_pid(pid: int, *, timeout: float = 60.0) -> None:
     if pid <= 0:
+        return
+    if os.name == "nt":
+        _wait_windows_process(pid, timeout)
         return
     deadline = time.time() + timeout
     while time.time() < deadline:

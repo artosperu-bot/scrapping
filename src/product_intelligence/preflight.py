@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .discovery import build_query
-from .excel_intake import analyze_workbook_intake
+from .intake_refinement import analyze_workbook_intake
 from .template_contract import analyze_template_contract
 from .extraction_strategy import extraction_plan
 

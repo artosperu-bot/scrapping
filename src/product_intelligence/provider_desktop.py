@@ -197,6 +197,12 @@ class App(PdfApp):
         self.update_status.set(f"Descargando v{release.version} y verificando SHA256…")
         threading.Thread(target=self._download_and_launch_update, args=(release, install_dir, updater), daemon=True).start()
 
+    @staticmethod
+    def _updater_creationflags() -> int:
+        if os.name != "nt":
+            return 0
+        return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+
     def _download_and_launch_update(self, release: ReleaseInfo, install_dir: Path, updater: Path):
         try:
             update_dir = Path(tempfile.gettempdir()) / "ProductIntelligence" / "updates" / release.version
@@ -213,6 +219,7 @@ class App(PdfApp):
                 ],
                 cwd=str(Path(tempfile.gettempdir())),
                 close_fds=True,
+                creationflags=self._updater_creationflags(),
             )
             self.after(0, self.destroy)
         except Exception:

@@ -1,6 +1,6 @@
 from openpyxl import Workbook
 
-from product_intelligence.excel_intake import analyze_workbook_intake
+from product_intelligence.intake_refinement import analyze_workbook_intake
 
 
 def _build_marketplace_template(path):

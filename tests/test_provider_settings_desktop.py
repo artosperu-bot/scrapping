@@ -11,11 +11,12 @@ def test_single_configuration_workspace_is_present():
     assert 'mistral-small-latest' in source
 
 
-def test_provider_keys_are_masked_and_real_connection_button_is_disabled():
+def test_provider_keys_are_masked_and_real_connection_button_is_enabled():
     source = inspect.getsource(provider_desktop.App._provider_box)
     assert 'show="•"' in source
-    assert 'Probar conexión · pendiente' in source
-    assert 'state="disabled"' in source
+    assert 'text="Probar conexión"' in source
+    assert 'Probar conexión · pendiente' not in source
+    assert '_test_provider_connection' in source
 
 
 def test_configuration_workspace_uses_existing_key_store_not_json_for_secrets():

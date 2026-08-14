@@ -29,11 +29,19 @@ def _extract_result_rows(raw_rows):
     return out
 
 
-def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
-    """Use the bundled Chromium as a real-browser fallback for search discovery.
+def _page_rows(page, selector: str, script: str):
+    try:
+        return page.locator(selector).evaluate_all(script)
+    except Exception:
+        return []
 
-    Playwright is imported lazily so core installs and unit tests do not require
-    the desktop/browser profile unless this fallback is actually executed.
+
+def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
+    """Use bundled Chromium as a real-browser fallback for search discovery.
+
+    Try multiple public search pages in the same browser session. The adapter
+    returns only external result URLs and never treats the search page itself as
+    product evidence. Playwright remains a lazy desktop-only dependency.
     """
     if not str(query or "").strip():
         return []
@@ -42,6 +50,25 @@ def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
     except ImportError:
         return []
 
+    encoded = quote_plus(str(query).strip())
+    engines = [
+        (
+            f"https://www.bing.com/search?q={encoded}&count={max(10, limit)}",
+            "li.b_algo",
+            """els => els.map(el => { const a=el.querySelector('h2 a'); const p=el.querySelector('.b_caption p'); return {href:a?.href||'', text:a?.innerText||'', snippet:p?.innerText||''}; })""",
+        ),
+        (
+            f"https://html.duckduckgo.com/html/?q={encoded}",
+            ".result",
+            """els => els.map(el => { const a=el.querySelector('a.result__a'); const p=el.querySelector('.result__snippet'); return {href:a?.href||'', text:a?.innerText||'', snippet:p?.innerText||''}; })""",
+        ),
+        (
+            f"https://search.brave.com/search?q={encoded}",
+            "div.snippet, div[data-type='web']",
+            """els => els.map(el => { const a=el.querySelector('a[href]'); const p=el.querySelector('.snippet-description, .description'); return {href:a?.href||'', text:a?.innerText||'', snippet:p?.innerText||el.innerText||''}; })""",
+        ),
+    ]
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
@@ -49,20 +76,26 @@ def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 Chrome/151 Safari/537.36"
             ))
-            page.goto(
-                f"https://www.bing.com/search?q={quote_plus(query)}&count={max(10, limit)}",
-                wait_until="domcontentloaded",
-                timeout=max(5, timeout) * 1000,
-            )
-            raw = page.locator("li.b_algo").evaluate_all(
-                """els => els.map(el => {
-                  const a = el.querySelector('h2 a');
-                  const p = el.querySelector('.b_caption p');
-                  return {href: a?.href || '', text: a?.innerText || '', snippet: p?.innerText || ''};
-                })"""
-            )
-            return _extract_result_rows(raw)[:limit]
-        except Exception:
-            return []
+            combined = []
+            seen = set()
+            for search_url, selector, script in engines:
+                try:
+                    page.goto(
+                        search_url,
+                        wait_until="domcontentloaded",
+                        timeout=max(5, timeout) * 1000,
+                    )
+                except Exception:
+                    continue
+                raw = _page_rows(page, selector, script)
+                rows = _extract_result_rows(raw)
+                for row in rows:
+                    if row[0] in seen:
+                        continue
+                    seen.add(row[0])
+                    combined.append(row)
+                    if len(combined) >= limit:
+                        return combined[:limit]
+            return combined[:limit]
         finally:
             browser.close()

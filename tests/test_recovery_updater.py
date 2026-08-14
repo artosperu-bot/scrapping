@@ -104,6 +104,33 @@ def test_safe_extract_bundle_rejects_path_traversal(tmp_path):
         recovery_updater.safe_extract_bundle(archive, tmp_path / "stage")
 
 
+def test_terminate_stale_updaters_targets_only_updater_processes():
+    calls = []
+
+    class Result:
+        returncode = 0
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result()
+
+    recovery_updater._terminate_stale_updaters(platform="nt", runner=runner)
+    assert len(calls) == 1
+    command = calls[0][0]
+    assert command[:3] == ["powershell", "-NoProfile", "-Command"]
+    script = command[3]
+    assert "ProductIntelligenceUpdater*" in script
+    assert "Stop-Process -Force" in script
+    assert "ProductIntelligenceRecoveryUpdater" not in script
+
+
+def test_recovery_calls_stale_updater_cleanup_before_copy():
+    source = Path("src/product_intelligence/recovery_updater.py").read_text(encoding="utf-8")
+    recover_body = source.split("def recover(", 1)[1].split("def _message", 1)[0]
+    assert "_terminate_stale_updaters()" in recover_body
+    assert recover_body.index("_terminate_stale_updaters()") < recover_body.index("_copy_tree(product_root, target_dir)")
+
+
 def test_self_test_exits_zero_without_network():
     assert recovery_updater.main(["--self-test"]) == 0
 

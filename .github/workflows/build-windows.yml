@@ -16,6 +16,7 @@ on:
       - 'ProductIntelligence.spec'
       - 'vendor/**'
       - '.github/workflows/build-windows.yml'
+      - '.github/workflows/release-windows.yml'
 
 permissions:
   contents: read

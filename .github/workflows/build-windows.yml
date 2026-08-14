@@ -7,6 +7,7 @@ on:
       - main
       - feature/ocrspace-mistral-description
       - feature/auto-updater
+      - feat/persistent-workspaces-v0110
     paths:
       - 'src/**'
       - 'tests/**'

@@ -74,88 +74,78 @@ Todo cambio funcional requiere como mínimo:
 
 ### v0.10.4 — baseline funcional mínimo
 
-Esta versión se conserva como baseline histórico de comportamiento. Cualquier capacidad útil que funcionaba aquí debe seguir disponible en versiones posteriores salvo que exista una decisión explícita de reemplazarla o retirarla.
-
 Capacidades a preservar:
-
-- Scraping Excel y completado seguro del archivo.
+- Scraping Excel y completado seguro.
 - OCR.space.
-- Mistral y flujo de descripción existente.
+- Mistral.
 - PDF evidence.
 - Multimedia.
 - Price Intelligence.
 - Configuración y persistencia de API keys.
-- separación entre procesos/workflows.
-- resultados visibles en UI al terminar los procesos.
+- separación entre workflows.
+- resultados visibles en UI al terminar.
 
 ### v0.10.5 — progreso visual compartido
 
-Añadió la capa visual de progreso con Tom & Jerry mediante `processing.gif` y `completed.gif`, componente compartido `ProgressAnimation`, estados RUNNING / COMPLETED / ERROR y actualización mediante Tkinter `after()`.
+Añadió `processing.gif`, `completed.gif`, `ProgressAnimation` y estados RUNNING / COMPLETED / ERROR.
 
-Debe preservar todo lo de v0.10.4 y además:
-
+Debe preservar v0.10.4 y además:
 - GIF visible durante procesamiento.
-- GIF/estado de completado al finalizar.
-- integración visual en Scraping Excel, Multimedia y Price Intelligence sin porcentajes falsos.
+- GIF/estado de completado.
+- integración visual sin porcentajes falsos.
 
 ### v0.10.6 — updater standalone estable
 
-Corrigió el updater para que `ProductIntelligenceUpdater.exe` pudiera ejecutarse de forma standalone desde `%TEMP%`, incluyendo su runtime de PyInstaller.
+Añadió updater standalone desde `%TEMP%` con runtime PyInstaller y verificación de bundle.
 
-Debe preservar todo lo de v0.10.4 y v0.10.5 y además:
-
-- actualización automática desde GitHub Releases.
-- descarga y validación SHA256.
-- updater standalone desde TEMP.
-- bundle Windows con `ProductIntelligence.exe` y `ProductIntelligenceUpdater.exe`.
+Debe preservar lo anterior y además:
+- actualización desde GitHub Releases.
+- SHA256.
+- bundle Windows con app + updater.
 
 ### v0.10.7 — correctness + documentos técnicos
 
-Añadió mejoras generales de evidence/canonical correctness y descubrimiento de documentación técnica.
+Añadió:
+- UNKNOWN no auto → Sí/No.
+- Bluetooth 2.4 GHz no auto → RF propietario.
+- USB carga no implica audio cableado.
+- mejor canonical GTIN/marca/modelo.
+- conflictos por autoridad/confianza.
+- búsqueda de manuales/datasheets/PDFs.
+- ingestión PDF por Evidence Pool.
+- Mistral desde canonical validado.
 
-Debe preservar todo lo anterior y además:
+Nota: `price_desktop.py` y `price_workflow.py` no cambiaron entre v0.10.6 y v0.10.7.
 
-- UNKNOWN no se convierte automáticamente en Sí/No.
-- Bluetooth 2.4 GHz no se convierte automáticamente en RF propietario.
-- USB de carga no implica audio cableado.
-- mejor reutilización canonical de GTIN / marca / modelo.
-- resolución de conflictos por autoridad/confianza.
-- búsqueda de manuales, datasheets y PDFs del producto.
-- ingestión PDF por el Evidence Pool existente.
-- Mistral redacta desde canonical validado.
+### v0.10.8 — UI organizada + terminal-state hardening
 
-Nota histórica: `price_desktop.py` y `price_workflow.py` no cambiaron entre v0.10.6 y v0.10.7. Si aparece una diferencia de comportamiento de precios entre esas versiones, no atribuirla automáticamente al motor de precios; revisar UI/eventos, empaquetado, entorno y fuentes externas.
+Hereda todo lo anterior y añade:
+- reorganización visual de Price Intelligence, Multimedia y Scraping Excel.
+- área fija suficiente para el GIF compartido.
+- resultados como área principal.
+- Price Intelligence no puede quedar permanentemente en RUNNING si el worker terminó.
+- errores de procesamiento de eventos quedan visibles y el event pump continúa programándose.
+- `batch_done` fuerza estado terminal coherente COMPLETED o ERROR.
+- contrato histórico de regresión documentado en este archivo.
 
-### Candidato posterior a v0.10.7 — reorganización visual y terminal-state hardening
-
-Trabajo actual en PR #26. No es todavía una release publicada.
-
-Objetivos/capacidades:
-
-- organizar visualmente Price Intelligence, Multimedia y Scraping Excel.
-- reservar espacio suficiente para el GIF compartido.
-- mantener resultados como área principal.
-- asegurar que Price Intelligence nunca quede permanentemente en RUNNING cuando el worker ya terminó.
-- si falta una finalización coherente, mostrar ERROR observable en vez de congelar la UI.
-- preservar motores funcionales sin cambios innecesarios.
+Clasificación conocida de smoke externo de Precios durante esta release:
+- se obtuvieron 3 ofertas peruanas válidas para JBL Quantum 350 (Memory Kings, PlazaVea y Sodimac).
+- MercadoLibre respondió HTTP 403.
+- un gate antiguo exigía `>3` ofertas y por eso podía marcar FAIL aun sin regresión del motor.
+- ese resultado se clasifica como variación/cobertura externa, no como degradación introducida por la reorganización visual.
 
 ## Regla para futuras versiones
 
 Antes de versionar `vX.Y.Z`, actualizar esta sección con:
+1. baseline inmediato;
+2. qué se agregó/corrigió;
+3. qué capacidades heredadas deben seguir funcionando;
+4. qué motores cambiaron realmente;
+5. qué regresiones históricas se probaron;
+6. resultado de tests/smokes/build/updater;
+7. fallos externos conocidos.
 
-1. Qué versión sirve como baseline inmediato.
-2. Qué se agregó o corrigió.
-3. Qué capacidades heredadas deben seguir funcionando.
-4. Qué archivos/motores funcionales cambiaron realmente.
-5. Qué regresiones históricas específicas se probaron.
-6. Resultado de tests, smokes, build Windows y updater.
-7. Cualquier fallo externo conocido que no sea atribuible al código.
-
-Una nueva versión debe ser acumulativa: **hereda las capacidades validadas de las versiones anteriores y agrega mejoras; no puede perder silenciosamente una capacidad previa.**
-
-## Versiones y regresiones conocidas
-
-Cuando un usuario reporte "en la versión anterior funcionaba y en la nueva no", la comparación entre tags/commits forma parte obligatoria del diagnóstico. Si el componente no cambió entre versiones, no atribuir el fallo a ese componente sin nueva evidencia: revisar empaquetado, estado persistido, entorno, dependencias y coordinación entre componentes.
+Una nueva versión debe ser acumulativa: **hereda capacidades validadas y agrega mejoras; no puede perder silenciosamente una capacidad previa.**
 
 ## Principio de entrega
 

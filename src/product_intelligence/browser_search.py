@@ -37,12 +37,7 @@ def _page_rows(page, selector: str, script: str):
 
 
 def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
-    """Use bundled Chromium as a real-browser fallback for search discovery.
-
-    Try multiple public search pages in the same browser session. The adapter
-    returns only external result URLs and never treats the search page itself as
-    product evidence. Playwright remains a lazy desktop-only dependency.
-    """
+    """Use bundled Chromium as a real-browser fallback for search discovery."""
     if not str(query or "").strip():
         return []
     try:
@@ -97,5 +92,60 @@ def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
                     if len(combined) >= limit:
                         return combined[:limit]
             return combined[:limit]
+        finally:
+            browser.close()
+
+
+def browser_pdf_links(url: str, *, timeout: int = 20, limit: int = 30) -> list[tuple[str, str]]:
+    """Render a product/support landing and collect concrete PDF download URLs.
+
+    This is discovery only: page text is never returned as product evidence.
+    It exists for sites where document links are injected by JavaScript after
+    the static HTML response has loaded.
+    """
+    if not str(url or "").startswith("http"):
+        return []
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/151 Safari/537.36"
+            ))
+            try:
+                page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=max(5, timeout) * 1000,
+                )
+                page.wait_for_timeout(1200)
+            except Exception:
+                return []
+
+            raw = page.locator("a[href], [data-url], [data-href], [data-file], [data-download-url]").evaluate_all(
+                """els => els.map(el => ({
+                  href: el.href || el.dataset?.url || el.dataset?.href || el.dataset?.file || el.dataset?.downloadUrl || '',
+                  text: (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()
+                }))"""
+            )
+            found: list[tuple[str, str]] = []
+            seen = set()
+            for row in raw:
+                href = str(row.get("href") or "").strip()
+                if not href.startswith("http") or href in seen:
+                    continue
+                path_and_query = href.lower()
+                if ".pdf" not in path_and_query:
+                    continue
+                seen.add(href)
+                found.append((href, str(row.get("text") or "").strip()))
+                if len(found) >= limit:
+                    break
+            return found
         finally:
             browser.close()

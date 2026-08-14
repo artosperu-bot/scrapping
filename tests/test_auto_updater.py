@@ -162,6 +162,14 @@ def test_updater_exe_is_standalone_when_copied_to_temp():
     assert "exclude_binaries=False" in updater_block
 
 
+def test_release_workflow_smokes_standalone_updater_from_temp():
+    workflow = Path(".github/workflows/release-windows.yml").read_text(encoding="utf-8")
+    assert "Verify standalone updater bootstrap" in workflow
+    assert "RUNNER_TEMP" in workflow
+    assert "Start-Process" in workflow
+    assert "ProductIntelligenceUpdater.exe" in workflow
+
+
 def test_release_workflow_publishes_zip_and_checksum():
     workflow = Path(".github/workflows/release-windows.yml").read_text(encoding="utf-8")
     assert "release/windows" in workflow

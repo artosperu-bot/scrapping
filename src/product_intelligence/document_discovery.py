@@ -47,10 +47,13 @@ def build_document_queries(identity: ProductIdentity) -> list[str]:
             f"{phrase} specifications pdf",
             f"{phrase} user manual",
             f"{phrase} filetype:pdf",
+            f"{phrase} support downloads",
         ])
     if strong:
         quoted = f'"{strong}"'
         queries.extend([
+            quoted,
+            f"{quoted} support downloads",
             f"{quoted} manual pdf",
             f"{quoted} datasheet",
             f"{quoted} specifications pdf",
@@ -123,13 +126,12 @@ def resolve_document_candidate_urls(
     *,
     timeout: int = 15,
 ) -> list[SearchCandidate]:
-    """Turn a validated document landing page into concrete PDF candidates.
+    """Turn an identity-matched landing page into concrete PDF candidates.
 
-    Search engines frequently return product/support HTML pages whose visible
-    result mentions a manual or spec sheet. Those pages must never be passed to
-    the PDF parser as if they were PDFs. We fetch only the landing HTML, extract
-    document links, and still let the downstream PDF identity validator decide
-    whether any document is safe to accept.
+    In PDF-only mode HTML may be fetched only as a discovery bridge. It is never
+    returned as evidence. Final candidates from this function are concrete PDFs;
+    downstream PDF ingestion still validates the document contents against the
+    product identity before any evidence is accepted.
     """
     if _looks_like_direct_pdf(candidate.url):
         return [candidate]
@@ -143,7 +145,7 @@ def resolve_document_candidate_urls(
     resolved: list[SearchCandidate] = []
     seen: set[str] = set()
     for row in discover_pdf_candidates(response.text, candidate.url):
-        if row.url in seen:
+        if row.url in seen or not _looks_like_direct_pdf(row.url):
             continue
         seen.add(row.url)
         resolved.append(SearchCandidate(
@@ -165,9 +167,11 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeou
             if candidate.url in seen:
                 continue
             seen.add(candidate.url)
-            if not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
-                continue
             if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
+                continue
+            if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(
+                candidate.url, candidate.title, candidate.snippet
+            ):
                 continue
             valid.append(candidate)
 
@@ -181,6 +185,8 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeou
             continue
         for row in rows:
             if row.url in resolved_seen:
+                continue
+            if not classify_document_candidate(row.url, row.title, row.snippet):
                 continue
             resolved_seen.add(row.url)
             resolved.append(row)

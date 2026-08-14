@@ -44,7 +44,7 @@ jobs:
         shell: cmd
         run: python -m pytest -q
 
-      - name: Smoke provider desktop shell
+      - name: Smoke modern desktop shell
         shell: cmd
         run: >-
           python -c "from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); required={'dashboard','products','sources','attributes','media','prices','run','audit','settings'}; assert required.issubset(app._workspace_tabs); assert 'settings' in app._nav_buttons; app.destroy(); print('PROVIDER_DESKTOP_SMOKE=PASS')"

@@ -60,7 +60,14 @@ def _canonical_resolves(facts: dict[str, Any], semantic: str) -> tuple[bool, str
     bt = conn.get("bluetooth", {})
     battery = facts.get("battery", {})
     durability = facts.get("durability", {})
+    identity = facts.get("identity", {})
 
+    if any(x in s for x in ["marca", "brand"]):
+        if identity.get("brand"):
+            return True, FOUND_DIRECT, "canonical_brand"
+    if any(x in s for x in ["modelo", "model", "mpn"]):
+        if identity.get("model") or identity.get("mpn"):
+            return True, FOUND_DIRECT, "canonical_model_or_mpn"
     if "bluetooth" in s and bt.get("present") is not None:
         return True, FOUND_DERIVED, "canonical_bluetooth_presence"
     if any(x in s for x in ["conectividad", "connectivity", "conexion"]):
@@ -82,7 +89,7 @@ def _canonical_resolves(facts: dict[str, Any], semantic: str) -> tuple[bool, str
         if facts.get("semantic_segment"):
             return True, FOUND_CLASSIFIED, "canonical_semantic_segment"
     if any(x in s for x in ["codigo de barras", "barcode", "ean", "upc", "gtin"]):
-        if facts.get("identity", {}).get("gtin"):
+        if identity.get("gtin"):
             return True, FOUND_DIRECT, "canonical_gtin"
     if "driver" in s and facts.get("driver_size_mm") is not None:
         return True, FOUND_DIRECT, "canonical_driver_size"
@@ -148,17 +155,17 @@ def analyze_resolution(rec: ProductRecord, template_plan: dict | None) -> dict[s
             research.append(semantic)
         else:
             na, na_reason = _not_applicable(facts, semantic)
-            direct = _semantic_has_direct_evidence(rec, semantic)
             canonical_ok, canonical_status, canonical_reason = _canonical_resolves(facts, semantic)
+            direct = _semantic_has_direct_evidence(rec, semantic)
             if na:
                 status = NOT_APPLICABLE
                 reason = na_reason
-            elif direct:
-                status = FOUND_DIRECT
-                reason = "validated_evidence_matches_field_semantics"
             elif canonical_ok:
                 status = canonical_status
                 reason = canonical_reason
+            elif direct:
+                status = FOUND_DIRECT
+                reason = "validated_evidence_matches_field_semantics"
             else:
                 status = INSUFFICIENT_EVIDENCE
                 reason = "no_validated_evidence_or_canonical_fact_for_requested_semantic"

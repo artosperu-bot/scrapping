@@ -2,6 +2,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from product_intelligence import progress_animation as progress_module
+
 
 ROOT = Path(__file__).parents[1]
 SRC = ROOT / "src" / "product_intelligence"
@@ -129,3 +131,31 @@ def test_progress_animation_broken_gif_never_escapes_into_business_workflow():
     assert "try:" in use_asset
     assert "_show_fallback" in use_asset
     assert "except" in use_asset
+
+
+def test_load_frames_swallow_exact_pillow_broken_stream(monkeypatch):
+    class BrokenImage:
+        info = {"duration": 80}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class BrokenFrame:
+        info = {}
+
+        def convert(self, _mode):
+            raise OSError("broken data stream when reading image file")
+
+    monkeypatch.setattr(progress_module.Image, "open", lambda *_args, **_kwargs: BrokenImage())
+    monkeypatch.setattr(progress_module.ImageSequence, "Iterator", lambda _image: iter([BrokenFrame()]))
+    monkeypatch.setattr(progress_module.ProgressAnimation, "winfo_toplevel", lambda self: self)
+
+    animation = object.__new__(progress_module.ProgressAnimation)
+    animation._width = 220
+    animation._height = 140
+
+    frames = progress_module.ProgressAnimation._load_frames(animation, "processing.gif")
+    assert frames == []

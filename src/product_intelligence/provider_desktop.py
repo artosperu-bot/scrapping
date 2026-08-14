@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox, ttk
 
 from .key_store import delete_value, load_value, save_value
 from .pdf_desktop import App as PdfApp
 from .provider_settings import ProviderSettings
+from .update_service import ReleaseInfo, UpdateService
+from .version import APP_VERSION
 
 
 _PROVIDER_KEYS = {
@@ -19,18 +28,20 @@ def credential_state(name: str) -> str:
 
 
 class App(PdfApp):
-    """Final desktop shell with one provider configuration workspace."""
+    """Final desktop shell with provider configuration and safe self-update UI."""
 
     def __init__(self):
         super().__init__()
         self._provider_settings = ProviderSettings()
+        self._available_release: ReleaseInfo | None = None
         self._install_settings_workspace()
+        self.after(1800, lambda: self._check_updates(silent=True))
 
     def _show_workspace(self, key: str):
         super()._show_workspace(key)
         if key == "settings" and hasattr(self, "_page_title"):
             self._page_title.set("Configuración")
-            self._page_subtitle.set("Configura proveedores opcionales sin exponer credenciales ni alterar ejecuciones en curso.")
+            self._page_subtitle.set("Configura proveedores opcionales y actualiza la aplicación sin perder tus ajustes.")
 
     def _install_settings_workspace(self):
         self.settings_tab = ttk.Frame(self.notebook, style="Page.TFrame", padding=(12, 12))
@@ -53,10 +64,6 @@ class App(PdfApp):
             text="Las credenciales se guardan en el almacén seguro del sistema. No se escriben en settings.json, logs, auditoría ni Excel.",
             wraplength=920,
         ).pack(anchor="w")
-        ttk.Label(
-            intro,
-            text="Las pruebas reales de conexión están deshabilitadas en esta fase.",
-        ).pack(anchor="w", pady=(4, 0))
 
         values = self._provider_settings.as_dict()
         self.ocr_enabled = tk.BooleanVar(value=bool(values.get("ocr_space_enabled", True)))
@@ -85,12 +92,23 @@ class App(PdfApp):
         ).pack(fill="x", pady=(0, 12))
 
         general = ttk.LabelFrame(self.settings_tab, text="Ejecución", style="Card.TLabelframe")
-        general.pack(fill="x")
+        general.pack(fill="x", pady=(0, 12))
         row = ttk.Frame(general)
         row.pack(fill="x")
         ttk.Label(row, text="Timeout de proveedor (segundos)").pack(side="left")
         ttk.Spinbox(row, from_=5, to=120, textvariable=self.request_timeout, width=8).pack(side="left", padx=10)
         ttk.Button(row, text="Guardar ajustes", style="Primary.TButton", command=self._save_non_secret_settings).pack(side="right")
+
+        updates = ttk.LabelFrame(self.settings_tab, text="Actualizaciones", style="Card.TLabelframe")
+        updates.pack(fill="x")
+        self.update_status = tk.StringVar(value=f"Versión instalada: v{APP_VERSION}")
+        ttk.Label(updates, textvariable=self.update_status, wraplength=760).pack(side="left", fill="x", expand=True)
+        actions = ttk.Frame(updates)
+        actions.pack(side="right")
+        self.check_update_button = ttk.Button(actions, text="Buscar actualizaciones", command=self._check_updates)
+        self.check_update_button.pack(side="left")
+        self.install_update_button = ttk.Button(actions, text="Actualizar ahora", state="disabled", style="Primary.TButton", command=self._start_update)
+        self.install_update_button.pack(side="left", padx=(8, 0))
 
     def _provider_box(self, *, title, enabled, key_var, status_var, provider, model_var=None):
         box = ttk.LabelFrame(self.settings_tab, text=title, style="Card.TLabelframe")
@@ -132,6 +150,79 @@ class App(PdfApp):
         self._provider_settings.save()
         self.mistral_model.set("mistral-small-latest")
         messagebox.showinfo("Configuración", "Ajustes no secretos guardados.")
+
+    def _check_updates(self, silent: bool = False):
+        self.update_status.set(f"Buscando actualizaciones… versión actual v{APP_VERSION}")
+        self.check_update_button.configure(state="disabled")
+        threading.Thread(target=self._check_updates_worker, args=(silent,), daemon=True).start()
+
+    def _check_updates_worker(self, silent: bool):
+        try:
+            release = UpdateService(current_version=APP_VERSION).check_latest()
+            self.after(0, lambda: self._finish_update_check(release, None, silent))
+        except Exception as exc:
+            self.after(0, lambda: self._finish_update_check(None, str(exc), silent))
+
+    def _finish_update_check(self, release: ReleaseInfo | None, error: str | None, silent: bool):
+        self.check_update_button.configure(state="normal")
+        self._available_release = release
+        if release is not None:
+            self.update_status.set(f"Nueva versión disponible: v{release.version}")
+            self.install_update_button.configure(state="normal")
+            return
+        self.install_update_button.configure(state="disabled")
+        if error:
+            self.update_status.set(f"Versión instalada: v{APP_VERSION} · no se pudo consultar GitHub")
+            if not silent:
+                messagebox.showwarning("Actualizaciones", "No se pudo consultar el canal de actualizaciones. Tu instalación actual no fue modificada.")
+        else:
+            self.update_status.set(f"Versión instalada: v{APP_VERSION} · ya estás actualizado")
+
+    def _start_update(self):
+        release = self._available_release
+        if release is None:
+            return
+        if not getattr(sys, "frozen", False):
+            messagebox.showinfo("Actualizaciones", "La instalación automática solo está disponible desde el ejecutable empaquetado.")
+            return
+        if not messagebox.askyesno("Actualizar ProductIntelligence", f"Se instalará la versión v{release.version}. La aplicación se cerrará y volverá a abrirse automáticamente. ¿Continuar?"):
+            return
+        install_dir = Path(sys.executable).resolve().parent
+        updater = install_dir / "ProductIntelligenceUpdater.exe"
+        if not updater.is_file():
+            messagebox.showerror("Actualizaciones", "No se encontró ProductIntelligenceUpdater.exe. No se modificó la instalación actual.")
+            return
+        self.install_update_button.configure(state="disabled")
+        self.check_update_button.configure(state="disabled")
+        self.update_status.set(f"Descargando v{release.version} y verificando SHA256…")
+        threading.Thread(target=self._download_and_launch_update, args=(release, install_dir, updater), daemon=True).start()
+
+    def _download_and_launch_update(self, release: ReleaseInfo, install_dir: Path, updater: Path):
+        try:
+            update_dir = Path(tempfile.gettempdir()) / "ProductIntelligence" / "updates" / release.version
+            zip_path = UpdateService(current_version=APP_VERSION).download_verified(release, update_dir)
+            temp_updater = Path(tempfile.gettempdir()) / f"ProductIntelligenceUpdater-{os.getpid()}.exe"
+            shutil.copy2(updater, temp_updater)
+            subprocess.Popen(
+                [
+                    str(temp_updater),
+                    "--zip", str(zip_path),
+                    "--target", str(install_dir),
+                    "--restart", str(install_dir / "ProductIntelligence.exe"),
+                    "--pid", str(os.getpid()),
+                ],
+                cwd=str(Path(tempfile.gettempdir())),
+                close_fds=True,
+            )
+            self.after(0, self.destroy)
+        except Exception:
+            self.after(0, self._update_launch_failed)
+
+    def _update_launch_failed(self):
+        self.check_update_button.configure(state="normal")
+        self.install_update_button.configure(state="normal" if self._available_release else "disabled")
+        self.update_status.set(f"Versión instalada: v{APP_VERSION} · actualización cancelada sin cambios")
+        messagebox.showerror("Actualizaciones", "No se pudo preparar la actualización. La versión instalada no fue modificada.")
 
 
 def main():

@@ -75,3 +75,41 @@ def test_discover_product_documents_filters_dedupes_and_keeps_metadata(monkeypat
         "https://support.jbl.com/q350-datasheet.pdf",
     ]
     assert found[0].likely_official is True
+
+
+def test_pdf_only_discovery_opens_identity_matched_product_page_to_find_real_pdfs(monkeypatch):
+    landing = SearchCandidate(
+        "https://global.jbl.com/gaming-headsets/JBLQ350WLBLKAM.html",
+        "JBL Quantum 350 Wireless",
+        "JBLQ350WLBLKAM",
+        .95,
+        True,
+    )
+
+    monkeypatch.setattr(
+        "product_intelligence.document_discovery.search_web_query_candidates",
+        lambda identity, query, limit=8, timeout=15: [landing],
+    )
+
+    class Response:
+        text = """
+        <html><body>
+          <a href="/downloads/JBL_Quantum350_SpecSheet.pdf">Spec Sheet</a>
+          <a href="/downloads/JBL_Quantum350_OwnersManual.pdf">Owners Manual</a>
+          <a href="/privacy.pdf">Privacy policy</a>
+        </body></html>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        "product_intelligence.document_discovery.requests.get",
+        lambda *args, **kwargs: Response(),
+    )
+
+    found = discover_product_documents(_identity(), limit=8, timeout=1)
+    assert [row.url for row in found] == [
+        "https://global.jbl.com/downloads/JBL_Quantum350_SpecSheet.pdf",
+        "https://global.jbl.com/downloads/JBL_Quantum350_OwnersManual.pdf",
+    ]

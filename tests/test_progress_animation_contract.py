@@ -46,6 +46,39 @@ def test_progress_animation_is_shared_by_excel_media_and_price_shells():
     assert "ProgressAnimation" in price
 
 
+def test_price_progress_layout_reserves_visible_animation_space_and_keeps_logic():
+    source = (SRC / "price_desktop.py").read_text(encoding="utf-8")
+    assert 'text="Progreso del proceso"' in source
+    assert "height=190" in source
+    assert "pack_propagate(False)" in source
+    assert "ProgressAnimation(progress_visual, width=220, height=140)" in source
+    assert "run_price_product(identity, output_root, on_event=on_event, max_sources=12)" in source
+    assert 'self.price_tree.pack(side="left", fill="both", expand=True)' in source
+    assert 'self.price_tree.bind("<Double-1>", self._open_price_offer)' in source
+
+
+def test_media_progress_layout_reserves_visible_animation_space_and_keeps_gallery():
+    source = (SRC / "media_progress_desktop.py").read_text(encoding="utf-8")
+    assert 'text="Progreso del proceso"' in source
+    assert "height=190" in source
+    assert "pack_propagate(False)" in source
+    assert "ProgressAnimation(right, width=220, height=140)" in source
+    assert 'self.media_gallery_box.pack(fill="both", expand=True)' in source
+    assert "return super()._start_media_indices(indices)" in source
+
+
+def test_excel_progress_layout_reserves_visible_animation_space_and_keeps_batch_flow():
+    source = (SRC / "pdf_desktop.py").read_text(encoding="utf-8")
+    assert 'text="Progreso del proceso"' in source
+    assert "height=190" in source
+    assert "pack_propagate(False)" in source
+    assert "ProgressAnimation(progress_visual, width=220, height=140)" in source
+    assert "_excel_progress_log" in source
+    assert r"^\[(\d+)/(\d+)\]" in source
+    assert "position - 1" in source
+    assert "result = run_batch(" in source
+
+
 def test_running_price_and_media_progress_do_not_use_fake_stage_percentages():
     media = (SRC / "media_progress_desktop.py").read_text(encoding="utf-8")
     price = (SRC / "price_desktop.py").read_text(encoding="utf-8")

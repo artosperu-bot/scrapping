@@ -40,8 +40,11 @@ def test_solo_pdf_has_direct_document_bootstrap_before_no_source_failure():
     bootstrap = source.index("if not accepted and strategy.pdf:")
     no_source = source.index("if not accepted:")
     assert bootstrap < no_source
-    assert "discover_product_documents(item.identity" in source[bootstrap:no_source]
-    assert "process_pdf_document(" in source[bootstrap:no_source]
+    assert "_ingest_direct_documents(" in source[bootstrap:no_source]
+
+    helper = source.split("def _ingest_direct_documents", 1)[1].split("\n\ndef ", 1)[0]
+    assert "document_candidates = discover_product_documents(identity" in helper
+    assert "process_pdf_document(" in helper
 
 
 def test_web_off_skips_non_pdf_manual_urls():

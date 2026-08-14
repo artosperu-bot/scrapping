@@ -20,6 +20,11 @@ _DOCUMENT_PATTERNS = (
     ("technical_pdf", re.compile(r"\bspecifications?|technical\s+specifications?|especificaciones\b", re.I)),
 )
 _PROMOTIONAL = re.compile(r"\bbrochure|catalog(?:ue)?|promotional|buy\s+now|shop\s+now|oferta|sale\b", re.I)
+_NON_PRODUCT_PDF = re.compile(
+    r"\bprivacy|privacy[_-]?policy|terms(?:[_-]?and[_-]?conditions)?|cookies?|legal|"
+    r"return[_-]?policy|shipping[_-]?policy|accessibility|sitemap\b",
+    re.I,
+)
 
 
 def _compact(value: str | None) -> str:
@@ -159,6 +164,10 @@ def _looks_like_direct_pdf(url: str | None) -> bool:
     return (urlparse(str(url or "")).path or "").lower().endswith(".pdf")
 
 
+def _is_generic_non_product_pdf(url: str, title: str = "", snippet: str = "") -> bool:
+    return bool(_NON_PRODUCT_PDF.search(f"{url} {title} {snippet}"))
+
+
 def resolve_document_candidate_urls(
     identity: ProductIdentity,
     candidate: SearchCandidate,
@@ -188,6 +197,8 @@ def resolve_document_candidate_urls(
     seen: set[str] = set()
     for row in discover_pdf_candidates(response.text, candidate.url):
         if row.url in seen or not _looks_like_direct_pdf(row.url):
+            continue
+        if _is_generic_non_product_pdf(row.url, row.label, ""):
             continue
         seen.add(row.url)
         resolved_row = SearchCandidate(
@@ -224,10 +235,11 @@ def _resolve_valid_candidates(
         for row in rows:
             if row.url in resolved_seen or not _looks_like_direct_pdf(row.url):
                 continue
-            # The parent candidate already passed product identity. A PDF found
-            # inside that landing may have an opaque filename/label, so do not
-            # discard it before download. The PDF body is identity-validated by
-            # process_pdf_document before any evidence can be accepted.
+            if _is_generic_non_product_pdf(row.url, row.title, row.snippet):
+                continue
+            # Parent candidate already passed product identity. Opaque technical
+            # filenames can advance, but the downloaded PDF body is still
+            # identity-validated before any evidence is accepted.
             resolved_seen.add(row.url)
             resolved.append(row)
             if len(resolved) >= limit:
@@ -247,8 +259,6 @@ def _browser_document_pass(
     """Force a browser pass when HTTP produced no concrete usable PDF."""
     per_query = max(6, min(max(limit * 2, 12), 20))
     collected: list[SearchCandidate] = []
-    # Strong-ID queries are intentionally first. Stop as soon as a concrete PDF
-    # is resolved rather than opening a browser for every variant unnecessarily.
     for query in queries[:8]:
         if trace:
             trace.emit("PDF_SEARCH_BROWSER_FALLBACK", query=query, reason="NO_RESOLVABLE_PDF")
@@ -260,13 +270,12 @@ def _browser_document_pass(
                 continue
             if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
                 continue
+            if _is_generic_non_product_pdf(candidate.url, candidate.title, candidate.snippet):
+                continue
             seen.add(candidate.url)
             if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(
                 candidate.url, candidate.title, candidate.snippet
             ):
-                # Direct search hits still need document semantics in the search
-                # result. Opaque PDFs discovered inside an identity-matched
-                # landing are allowed later and body-validated after download.
                 continue
             collected.append(candidate)
         resolved = _resolve_valid_candidates(
@@ -302,6 +311,8 @@ def discover_product_documents(
             seen.add(candidate.url)
             if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
                 continue
+            if _is_generic_non_product_pdf(candidate.url, candidate.title, candidate.snippet):
+                continue
             if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(
                 candidate.url, candidate.title, candidate.snippet
             ):
@@ -312,8 +323,6 @@ def discover_product_documents(
     if resolved:
         return resolved
 
-    # A page result is not success. If the HTTP path found pages but none yielded
-    # a concrete PDF, force a real Chromium search pass before giving up.
     browser_resolved = _browser_document_pass(
         identity,
         queries=queries,
@@ -331,6 +340,8 @@ def discover_product_documents(
             continue
         seen.add(candidate.url)
         if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
+            continue
+        if _is_generic_non_product_pdf(candidate.url, candidate.title, candidate.snippet):
             continue
         if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(
             candidate.url, candidate.title, candidate.snippet

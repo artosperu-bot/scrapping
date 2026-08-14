@@ -34,31 +34,65 @@ class App(MediaProgressApp):
         self.price_tab = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.price_tab, text="8. Precios y competencia")
         ttk.Label(self.price_tab, text="Inteligencia de precios por Part Number/modelo", font=("Segoe UI", 11, "bold")).pack(anchor="w")
-        ttk.Label(self.price_tab, text="Descubre ofertas automáticamente, valida el producto y separa canal de vendedor real.").pack(anchor="w", pady=(1, 7))
+        ttk.Label(self.price_tab, text="Descubre ofertas automáticamente, valida el producto y separa canal de vendedor real.").pack(anchor="w", pady=(1, 8))
 
-        top = ttk.Frame(self.price_tab); top.pack(fill="x")
-        left = ttk.LabelFrame(top, text="Productos", padding=8); left.pack(side="left", fill="y")
-        self.price_product_list = tk.Listbox(left, exportselection=False, width=34, height=8); self.price_product_list.pack(fill="both", expand=True)
-        right = ttk.LabelFrame(top, text="Acciones", padding=8); right.pack(side="left", fill="both", expand=True, padx=(8, 0))
-        self.price_selected_btn = ttk.Button(right, text="BUSCAR PRECIOS", command=self._run_price_selected); self.price_selected_btn.pack(side="left")
-        self.price_all_btn = ttk.Button(right, text="Procesar todos los productos", command=self._run_price_all); self.price_all_btn.pack(side="left", padx=8)
+        top = ttk.Frame(self.price_tab)
+        top.pack(fill="x")
+        left = ttk.LabelFrame(top, text="Productos detectados", padding=10)
+        left.pack(side="left", fill="y")
+        self.price_product_list = tk.Listbox(left, exportselection=False, width=34, height=8)
+        self.price_product_list.pack(fill="both", expand=True)
+
+        right = ttk.LabelFrame(top, text="Acciones y estado actual", padding=10)
+        right.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        actions_row = ttk.Frame(right)
+        actions_row.pack(fill="x")
+        self.price_selected_btn = ttk.Button(actions_row, text="BUSCAR PRECIOS", command=self._run_price_selected)
+        self.price_selected_btn.pack(side="left")
+        self.price_all_btn = ttk.Button(actions_row, text="Procesar todos los productos", command=self._run_price_all)
+        self.price_all_btn.pack(side="left", padx=(8, 0))
         self.price_status = tk.StringVar(value="Analiza un Excel para cargar productos.")
-        ttk.Label(right, textvariable=self.price_status, font=("Segoe UI", 9, "bold"), wraplength=600).pack(anchor="w", pady=(38, 0))
+        ttk.Separator(right, orient="horizontal").pack(fill="x", pady=(10, 8))
+        ttk.Label(right, text="Estado", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        ttk.Label(right, textvariable=self.price_status, wraplength=760, justify="left").pack(anchor="w", fill="x", pady=(3, 0))
 
-        progress = ttk.LabelFrame(self.price_tab, text="Progreso", padding=8); progress.pack(fill="x", pady=(8, 6))
-        self.price_progress_animation = ProgressAnimation(progress, width=180, height=105); self.price_progress_animation.pack(anchor="center", pady=(0, 4))
-        row1 = ttk.Frame(progress); row1.pack(fill="x")
-        ttk.Label(row1, text="Producto actual", width=15).pack(side="left")
-        self.price_product_progress = ttk.Progressbar(row1, maximum=100, mode="determinate"); self.price_product_progress.pack(side="left", fill="x", expand=True, padx=6)
-        self.price_product_percent = tk.StringVar(value="0%"); ttk.Label(row1, textvariable=self.price_product_percent, width=9).pack(side="left")
-        row2 = ttk.Frame(progress); row2.pack(fill="x", pady=(4, 0))
-        ttk.Label(row2, text="Progreso general", width=15).pack(side="left")
-        self.price_overall_progress = ttk.Progressbar(row2, maximum=100, mode="determinate"); self.price_overall_progress.pack(side="left", fill="x", expand=True, padx=6)
-        self.price_overall_percent = tk.StringVar(value="0%"); ttk.Label(row2, textvariable=self.price_overall_percent, width=9).pack(side="left")
+        progress = ttk.LabelFrame(self.price_tab, text="Progreso del proceso", padding=10, height=190)
+        progress.pack(fill="x", pady=(10, 6))
+        progress.pack_propagate(False)
+        progress_info = ttk.Frame(progress)
+        progress_info.pack(side="left", fill="both", expand=True, padx=(0, 12))
+        progress_visual = ttk.Frame(progress)
+        progress_visual.pack(side="right", fill="y")
 
-        summary = ttk.Frame(self.price_tab); summary.pack(fill="x", pady=(0, 5))
-        self.price_summary = tk.StringVar(value="Sin resultados todavía."); ttk.Label(summary, textvariable=self.price_summary, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        box = ttk.LabelFrame(self.price_tab, text="Ofertas validadas", padding=5); box.pack(fill="both", expand=True)
+        ttk.Label(progress_info, text="Seguimiento", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        ttk.Label(progress_info, textvariable=self.price_status, wraplength=720, justify="left").pack(anchor="w", fill="x", pady=(3, 10))
+
+        row1 = ttk.Frame(progress_info)
+        row1.pack(fill="x", pady=(0, 5))
+        ttk.Label(row1, text="Producto actual", width=16).pack(side="left")
+        self.price_product_progress = ttk.Progressbar(row1, maximum=100, mode="determinate")
+        self.price_product_progress.pack(side="left", fill="x", expand=True, padx=(6, 8))
+        self.price_product_percent = tk.StringVar(value="0%")
+        ttk.Label(row1, textvariable=self.price_product_percent, width=9).pack(side="left")
+
+        row2 = ttk.Frame(progress_info)
+        row2.pack(fill="x")
+        ttk.Label(row2, text="Progreso general", width=16).pack(side="left")
+        self.price_overall_progress = ttk.Progressbar(row2, maximum=100, mode="determinate")
+        self.price_overall_progress.pack(side="left", fill="x", expand=True, padx=(6, 8))
+        self.price_overall_percent = tk.StringVar(value="0%")
+        ttk.Label(row2, textvariable=self.price_overall_percent, width=9).pack(side="left")
+
+        self.price_progress_animation = ProgressAnimation(progress_visual, width=220, height=140)
+        self.price_progress_animation.pack(anchor="center")
+
+        summary = ttk.LabelFrame(self.price_tab, text="Resumen", padding=(8, 5))
+        summary.pack(fill="x", pady=(0, 6))
+        self.price_summary = tk.StringVar(value="Sin resultados todavía.")
+        ttk.Label(summary, textvariable=self.price_summary, font=("Segoe UI", 9, "bold"), wraplength=1100, justify="left").pack(anchor="w")
+
+        box = ttk.LabelFrame(self.price_tab, text="Ofertas validadas", padding=5)
+        box.pack(fill="both", expand=True)
         columns = ("product", "channel", "seller", "price", "list_price", "stock", "confidence", "url")
         self.price_tree = ttk.Treeview(box, columns=columns, show="headings", selectmode="browse")
         headings = {"product": "Producto", "channel": "Canal", "seller": "Vendedor", "price": "Precio", "list_price": "Precio lista", "stock": "Stock", "confidence": "Conf.", "url": "Enlace"}
@@ -119,30 +153,53 @@ class App(MediaProgressApp):
         try:
             while True:
                 event = self.price_events.get_nowait(); kind = event.get("type")
-                if kind == "batch_product":
-                    self._price_current = int(event.get("position") or 1); label = str(event.get("label") or "")
-                    self.price_status.set(f"{self._price_current}/{self._price_total} — {label} — buscando"); self._start_price_product_indicator()
-                    overall = int((self._price_completed / max(1, self._price_total)) * 100); self.price_overall_progress["value"] = overall; self.price_overall_percent.set(f"{overall}%")
-                    self.price_progress_animation.set_running(f"Consultando precios · producto {self._price_current} de {self._price_total}")
-                elif kind == "status":
-                    text = str(event.get("message") or event.get("stage") or "Consultando precios…"); self.price_status.set(text); self.price_progress_animation.set_running(text)
-                elif kind == "offer" and event.get("offer"):
-                    self._insert_price_offer(event["offer"], event.get("product_label"))
-                elif kind == "page":
-                    text = f"{event.get('channel')}: {event.get('status')}"; self.price_status.set(text); self.price_progress_animation.set_running(text)
-                elif kind == "done":
-                    self._price_completed += 1; overall = int((self._price_completed / max(1, self._price_total)) * 100); self._set_price_progress(100, overall)
-                    best_by_currency = event.get("best_by_currency") or {}; best_text = " · ".join(format_money(value, currency) for currency, value in sorted(best_by_currency.items())) or "sin oferta válida"
-                    self.price_summary.set(f"{self._price_completed}/{self._price_total} productos · {event.get('offers', 0)} ofertas en este producto · mejores precios: {best_text}")
-                elif kind == "fatal":
-                    self._price_had_error = True; error = str(event.get("error") or "Error de precios"); self.price_product_progress.stop(); self.price_product_progress.configure(mode="determinate")
-                    self.price_status.set(error); self.price_progress_animation.set_error(error); self.emit(error)
-                elif kind == "batch_done":
-                    self._price_running = False; self.price_product_progress.stop(); self.price_selected_btn.configure(state="normal"); self.price_all_btn.configure(state="normal")
-                    if not self._price_had_error and self._price_completed >= self._price_total:
-                        self._set_price_progress(100, 100); self.price_status.set("Proceso completado"); self.price_progress_animation.set_completed("Proceso completado")
-        except queue.Empty: pass
-        self.after(150, self._drain_price_events)
+                try:
+                    if kind == "batch_product":
+                        self._price_current = int(event.get("position") or 1); label = str(event.get("label") or "")
+                        self.price_status.set(f"{self._price_current}/{self._price_total} — {label} — buscando"); self._start_price_product_indicator()
+                        overall = int((self._price_completed / max(1, self._price_total)) * 100); self.price_overall_progress["value"] = overall; self.price_overall_percent.set(f"{overall}%")
+                        self.price_progress_animation.set_running(f"Consultando precios · producto {self._price_current} de {self._price_total}")
+                    elif kind == "status":
+                        text = str(event.get("message") or event.get("stage") or "Consultando precios…"); self.price_status.set(text); self.price_progress_animation.set_running(text)
+                    elif kind == "offer" and event.get("offer"):
+                        self._insert_price_offer(event["offer"], event.get("product_label"))
+                    elif kind == "page":
+                        text = f"{event.get('channel')}: {event.get('status')}"; self.price_status.set(text); self.price_progress_animation.set_running(text)
+                    elif kind == "done":
+                        self._price_completed += 1; overall = int((self._price_completed / max(1, self._price_total)) * 100); self._set_price_progress(100, overall)
+                        best_by_currency = event.get("best_by_currency") or {}; best_text = " · ".join(format_money(value, currency) for currency, value in sorted(best_by_currency.items())) or "sin oferta válida"
+                        self.price_summary.set(f"{self._price_completed}/{self._price_total} productos · {event.get('offers', 0)} ofertas en este producto · mejores precios: {best_text}")
+                    elif kind == "fatal":
+                        self._price_had_error = True; error = str(event.get("error") or "Error de precios"); self.price_product_progress.stop(); self.price_product_progress.configure(mode="determinate")
+                        self.price_status.set(error); self.price_progress_animation.set_error(error); self.emit(error)
+                    elif kind == "batch_done":
+                        self._price_running = False; self.price_product_progress.stop(); self.price_selected_btn.configure(state="normal"); self.price_all_btn.configure(state="normal")
+                        if self._price_had_error:
+                            self.price_product_progress.configure(mode="determinate")
+                            self.price_product_percent.set("Error")
+                        elif self._price_completed >= self._price_total:
+                            self._set_price_progress(100, 100); self.price_status.set("Proceso completado"); self.price_progress_animation.set_completed("Proceso completado")
+                        else:
+                            self._price_had_error = True
+                            error = f"Finalización incompleta: el proceso terminó, pero la interfaz recibió {self._price_completed}/{self._price_total} confirmaciones finales."
+                            self.price_product_progress.configure(mode="determinate")
+                            self.price_product_percent.set("Error")
+                            self.price_status.set(error)
+                            self.price_progress_animation.set_error(error)
+                            self.emit(error)
+                except Exception as exc:
+                    self._price_had_error = True
+                    error = f"Error actualizando interfaz de precios ({kind or 'evento'}): {type(exc).__name__}: {exc}"
+                    try:
+                        self.price_product_progress.stop(); self.price_product_progress.configure(mode="determinate")
+                        self.price_product_percent.set("Error"); self.price_status.set(error); self.price_progress_animation.set_error(error)
+                    except Exception:
+                        pass
+                    self.emit(f"{error}\n{traceback.format_exc()}")
+        except queue.Empty:
+            pass
+        finally:
+            self.after(150, self._drain_price_events)
 
     def _set_price_progress(self, product_pct: int, overall_pct: int):
         self.price_product_progress.stop(); self.price_product_progress.configure(mode="determinate")

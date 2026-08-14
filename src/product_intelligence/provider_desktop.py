@@ -76,6 +76,7 @@ class App(PdfApp):
         self.mistral_key_input = tk.StringVar()
         self.ocr_status = tk.StringVar(value=credential_state("ocr"))
         self.mistral_status = tk.StringVar(value=credential_state("mistral"))
+        self.settings_save_status = tk.StringVar(value="Ajustes cargados")
 
         self._provider_box(
             title="OCR.space",
@@ -100,6 +101,7 @@ class App(PdfApp):
         ttk.Label(row, text="Timeout de proveedor (segundos)").pack(side="left")
         ttk.Spinbox(row, from_=5, to=120, textvariable=self.request_timeout, width=8).pack(side="left", padx=10)
         ttk.Button(row, text="Guardar ajustes", style="Primary.TButton", command=self._save_non_secret_settings).pack(side="right")
+        ttk.Label(row, textvariable=self.settings_save_status, width=34, anchor="e").pack(side="right", padx=(8, 12))
 
         updates = ttk.LabelFrame(self.settings_tab, text="Actualizaciones", style="Card.TLabelframe")
         updates.pack(fill="x")
@@ -169,13 +171,29 @@ class App(PdfApp):
         button.configure(state="normal")
 
     def _save_non_secret_settings(self):
-        self._provider_settings.set("ocr_space_enabled", bool(self.ocr_enabled.get()))
-        self._provider_settings.set("mistral_enabled", bool(self.mistral_enabled.get()))
-        self._provider_settings.set("mistral_model", "mistral-small-latest")
-        self._provider_settings.set("request_timeout", max(5, min(120, int(self.request_timeout.get()))))
-        self._provider_settings.save()
-        self.mistral_model.set("mistral-small-latest")
-        messagebox.showinfo("Configuración", "Ajustes no secretos guardados.")
+        try:
+            expected = {
+                "ocr_space_enabled": bool(self.ocr_enabled.get()),
+                "mistral_enabled": bool(self.mistral_enabled.get()),
+                "mistral_model": "mistral-small-latest",
+                "request_timeout": max(5, min(120, int(self.request_timeout.get()))),
+            }
+            for key, value in expected.items():
+                self._provider_settings.set(key, value)
+            self._provider_settings.save()
+
+            persisted = ProviderSettings(self._provider_settings.path).as_dict()
+            if any(persisted.get(key) != value for key, value in expected.items()):
+                raise OSError("SETTINGS_READBACK_MISMATCH")
+
+            self.mistral_model.set("mistral-small-latest")
+            self.settings_save_status.set("GUARDADO · verificado en disco")
+        except Exception as exc:
+            self.settings_save_status.set("ERROR AL GUARDAR")
+            messagebox.showerror(
+                "Configuración",
+                f"No se pudieron guardar los ajustes. No se asumirá que quedaron guardados.\n\nDetalle: {type(exc).__name__}: {exc}",
+            )
 
     def _check_updates(self, silent: bool = False):
         self.update_status.set(f"Buscando actualizaciones… versión actual v{APP_VERSION}")

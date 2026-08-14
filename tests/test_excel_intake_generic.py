@@ -98,3 +98,23 @@ def test_auxiliary_sheet_is_rejected_by_evidence_not_by_name(tmp_path):
     audits = {sheet.sheet: sheet for sheet in result.sheets}
     assert audits["Cualquier nombre"].accepted is False
     assert audits["Otra hoja cualquiera"].accepted is True
+
+
+def test_header_selection_prefers_real_product_rows_over_upper_semantic_noise(tmp_path):
+    path = _save_workbook(
+        tmp_path,
+        [
+            ["Modelo", "Marca"],
+            ["Esta fila explica cómo completar la plantilla", None],
+            [None, None],
+            ["Part Number", "Descripción"],
+            ["TE-2128S", "Producto uno"],
+            ["IPC-S042", "Producto dos"],
+        ],
+    )
+
+    result = analyze_workbook_intake(str(path))
+    items = detect_items(str(path))
+
+    assert result.sheets[0].header_row == 4
+    assert [item.identity.mpn for item in items] == ["TE-2128S", "IPC-S042"]

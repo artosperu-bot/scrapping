@@ -170,5 +170,20 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeou
             if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
                 continue
             valid.append(candidate)
+
     valid.sort(key=_document_rank, reverse=True)
-    return valid[:limit]
+    resolved: list[SearchCandidate] = []
+    resolved_seen: set[str] = set()
+    for candidate in valid:
+        try:
+            rows = resolve_document_candidate_urls(identity, candidate, timeout=timeout)
+        except requests.RequestException:
+            continue
+        for row in rows:
+            if row.url in resolved_seen:
+                continue
+            resolved_seen.add(row.url)
+            resolved.append(row)
+            if len(resolved) >= limit:
+                return resolved
+    return resolved

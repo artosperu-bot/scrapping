@@ -135,6 +135,11 @@ class ProgressAnimation(ttk.Frame):
             self._after_id = None
 
     def _use_asset(self, asset_name: str, *, animate: bool) -> None:
+        # Progress messages can arrive several times per second. Reusing the
+        # currently-running asset must not rewind it to frame zero each time.
+        if animate and self._asset_name == asset_name and self._frames and self._after_id is not None:
+            return
+
         self._cancel_tick()
         try:
             if self._asset_name != asset_name or not self._frames:

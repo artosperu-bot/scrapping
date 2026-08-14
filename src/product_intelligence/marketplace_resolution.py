@@ -5,9 +5,11 @@ from dataclasses import dataclass, asdict
 from typing import Any
 
 from .attribute_resolver import best_candidate
+from .description_narrator import DescriptionNarrator
 from .identifiers import validate_gtin
 from .models import ProductRecord
 from .normalize import key_norm
+from .provider_runtime import current_settings, emit as emit_provider_event, mistral_narrator_client
 from .semantic_guard import FieldContract, validate_value
 from .smart_derivations import (
     derive_autonomy,
@@ -84,12 +86,44 @@ def _identity_value(rec: ProductRecord, key: str) -> tuple[Any, float]:
     return value, confidence
 
 
+def _description_with_optional_narrator(rec: ProductRecord):
+    """Keep deterministic derive_description() as the permanent fallback."""
+    deterministic = derive_description(rec)
+    if deterministic.value in (None, ""):
+        return deterministic
+
+    settings = current_settings()
+    if not bool(settings.get("mistral_enabled", False)):
+        return deterministic
+
+    narrator = DescriptionNarrator(
+        client=mistral_narrator_client(),
+        enabled=True,
+        model=str(settings.get("mistral_model") or "mistral-small-latest"),
+        timeout=int(settings.get("request_timeout") or 20),
+        audit=lambda event, data: emit_provider_event(event, **data),
+    )
+    narrated = narrator.describe(rec, fallback=lambda _rec: deterministic)
+    if narrated is deterministic or not isinstance(narrated, str) or not narrated.strip():
+        return deterministic
+
+    derived_type = type(deterministic)
+    return derived_type(
+        value=narrated.strip(),
+        confidence=max(.85, float(deterministic.confidence or 0)),
+        reason="FOUND_DERIVED:mistral_grounded_description",
+        source=deterministic.source,
+        evidence_attribute=deterministic.evidence_attribute,
+        evidence_raw=deterministic.evidence_raw,
+    )
+
+
 def _derived(rec: ProductRecord, header: str, description: str | None, canonical: str | None, contract: FieldContract, options: list[Any], external_id: str | None):
     h = key_norm(header)
     intent = key_norm(f"{header} {description or ''} {contract.semantic or ''}")
     derived = None
     if external_id == "53" or canonical == "description" or h in {"descripcion", "description"}:
-        derived = derive_description(rec)
+        derived = _description_with_optional_narrator(rec)
     elif "bluetooth" in intent:
         derived = derive_boolean(rec, "bluetooth")
     elif "resistente al agua" in intent or "water resistance" in intent:
@@ -126,11 +160,6 @@ def _is_barcode_field(field: str, evidence_attribute: str | None) -> bool:
 
 
 def _barcode_guard(value: Any, field: str, evidence_attribute: str | None) -> tuple[bool, str]:
-    """Validate GS1 checksum whenever the candidate has a standard GTIN length.
-
-    Non-standard marketplace identifiers are not silently converted into GTINs. They may pass
-    the generic field contract, but 8/12/13/14 digit values must satisfy their checksum.
-    """
     if not _is_barcode_field(field, evidence_attribute):
         return True, "NOT_BARCODE_FIELD"
     digits = re.sub(r"\D", "", str(value or ""))

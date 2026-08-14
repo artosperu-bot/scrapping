@@ -153,30 +153,53 @@ class App(MediaProgressApp):
         try:
             while True:
                 event = self.price_events.get_nowait(); kind = event.get("type")
-                if kind == "batch_product":
-                    self._price_current = int(event.get("position") or 1); label = str(event.get("label") or "")
-                    self.price_status.set(f"{self._price_current}/{self._price_total} — {label} — buscando"); self._start_price_product_indicator()
-                    overall = int((self._price_completed / max(1, self._price_total)) * 100); self.price_overall_progress["value"] = overall; self.price_overall_percent.set(f"{overall}%")
-                    self.price_progress_animation.set_running(f"Consultando precios · producto {self._price_current} de {self._price_total}")
-                elif kind == "status":
-                    text = str(event.get("message") or event.get("stage") or "Consultando precios…"); self.price_status.set(text); self.price_progress_animation.set_running(text)
-                elif kind == "offer" and event.get("offer"):
-                    self._insert_price_offer(event["offer"], event.get("product_label"))
-                elif kind == "page":
-                    text = f"{event.get('channel')}: {event.get('status')}"; self.price_status.set(text); self.price_progress_animation.set_running(text)
-                elif kind == "done":
-                    self._price_completed += 1; overall = int((self._price_completed / max(1, self._price_total)) * 100); self._set_price_progress(100, overall)
-                    best_by_currency = event.get("best_by_currency") or {}; best_text = " · ".join(format_money(value, currency) for currency, value in sorted(best_by_currency.items())) or "sin oferta válida"
-                    self.price_summary.set(f"{self._price_completed}/{self._price_total} productos · {event.get('offers', 0)} ofertas en este producto · mejores precios: {best_text}")
-                elif kind == "fatal":
-                    self._price_had_error = True; error = str(event.get("error") or "Error de precios"); self.price_product_progress.stop(); self.price_product_progress.configure(mode="determinate")
-                    self.price_status.set(error); self.price_progress_animation.set_error(error); self.emit(error)
-                elif kind == "batch_done":
-                    self._price_running = False; self.price_product_progress.stop(); self.price_selected_btn.configure(state="normal"); self.price_all_btn.configure(state="normal")
-                    if not self._price_had_error and self._price_completed >= self._price_total:
-                        self._set_price_progress(100, 100); self.price_status.set("Proceso completado"); self.price_progress_animation.set_completed("Proceso completado")
-        except queue.Empty: pass
-        self.after(150, self._drain_price_events)
+                try:
+                    if kind == "batch_product":
+                        self._price_current = int(event.get("position") or 1); label = str(event.get("label") or "")
+                        self.price_status.set(f"{self._price_current}/{self._price_total} — {label} — buscando"); self._start_price_product_indicator()
+                        overall = int((self._price_completed / max(1, self._price_total)) * 100); self.price_overall_progress["value"] = overall; self.price_overall_percent.set(f"{overall}%")
+                        self.price_progress_animation.set_running(f"Consultando precios · producto {self._price_current} de {self._price_total}")
+                    elif kind == "status":
+                        text = str(event.get("message") or event.get("stage") or "Consultando precios…"); self.price_status.set(text); self.price_progress_animation.set_running(text)
+                    elif kind == "offer" and event.get("offer"):
+                        self._insert_price_offer(event["offer"], event.get("product_label"))
+                    elif kind == "page":
+                        text = f"{event.get('channel')}: {event.get('status')}"; self.price_status.set(text); self.price_progress_animation.set_running(text)
+                    elif kind == "done":
+                        self._price_completed += 1; overall = int((self._price_completed / max(1, self._price_total)) * 100); self._set_price_progress(100, overall)
+                        best_by_currency = event.get("best_by_currency") or {}; best_text = " · ".join(format_money(value, currency) for currency, value in sorted(best_by_currency.items())) or "sin oferta válida"
+                        self.price_summary.set(f"{self._price_completed}/{self._price_total} productos · {event.get('offers', 0)} ofertas en este producto · mejores precios: {best_text}")
+                    elif kind == "fatal":
+                        self._price_had_error = True; error = str(event.get("error") or "Error de precios"); self.price_product_progress.stop(); self.price_product_progress.configure(mode="determinate")
+                        self.price_status.set(error); self.price_progress_animation.set_error(error); self.emit(error)
+                    elif kind == "batch_done":
+                        self._price_running = False; self.price_product_progress.stop(); self.price_selected_btn.configure(state="normal"); self.price_all_btn.configure(state="normal")
+                        if self._price_had_error:
+                            self.price_product_progress.configure(mode="determinate")
+                            self.price_product_percent.set("Error")
+                        elif self._price_completed >= self._price_total:
+                            self._set_price_progress(100, 100); self.price_status.set("Proceso completado"); self.price_progress_animation.set_completed("Proceso completado")
+                        else:
+                            self._price_had_error = True
+                            error = f"Finalización incompleta: el proceso terminó, pero la interfaz recibió {self._price_completed}/{self._price_total} confirmaciones finales."
+                            self.price_product_progress.configure(mode="determinate")
+                            self.price_product_percent.set("Error")
+                            self.price_status.set(error)
+                            self.price_progress_animation.set_error(error)
+                            self.emit(error)
+                except Exception as exc:
+                    self._price_had_error = True
+                    error = f"Error actualizando interfaz de precios ({kind or 'evento'}): {type(exc).__name__}: {exc}"
+                    try:
+                        self.price_product_progress.stop(); self.price_product_progress.configure(mode="determinate")
+                        self.price_product_percent.set("Error"); self.price_status.set(error); self.price_progress_animation.set_error(error)
+                    except Exception:
+                        pass
+                    self.emit(f"{error}\n{traceback.format_exc()}")
+        except queue.Empty:
+            pass
+        finally:
+            self.after(150, self._drain_price_events)
 
     def _set_price_progress(self, product_pct: int, overall_pct: int):
         self.price_product_progress.stop(); self.price_product_progress.configure(mode="determinate")

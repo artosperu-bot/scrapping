@@ -67,13 +67,14 @@ updater_analysis = Analysis(
 )
 updater_pyz = PYZ(updater_analysis.pure)
 updater_exe = EXE(
-    updater_pyz, updater_analysis.scripts, [], exclude_binaries=True,
+    updater_pyz, updater_analysis.scripts, updater_analysis.binaries, updater_analysis.datas, [],
+    exclude_binaries=False,
     name='ProductIntelligenceUpdater', debug=False, bootloader_ignore_signals=False,
     strip=False, upx=True, console=False, disable_windowed_traceback=False,
     argv_emulation=False, target_arch=None, codesign_identity=None, entitlements_file=None,
 )
 
 coll = COLLECT(
-    exe, updater_exe, a.binaries, a.datas, updater_analysis.binaries, updater_analysis.datas,
+    exe, updater_exe, a.binaries, a.datas,
     strip=False, upx=True, upx_exclude=[], name='ProductIntelligence'
 )

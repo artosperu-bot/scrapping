@@ -119,3 +119,13 @@ def test_release_version_is_0108_everywhere():
     project_source = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'APP_VERSION = "0.10.8"' in version_source
     assert 'version = "0.10.8"' in project_source
+
+
+def test_progress_animation_broken_gif_never_escapes_into_business_workflow():
+    source = (SRC / "progress_animation.py").read_text(encoding="utf-8")
+    assert "_show_fallback" in source
+    assert "except (OSError, EOFError, ValueError)" in source
+    use_asset = source.split("def _use_asset", 1)[1].split("\n    def ", 1)[0]
+    assert "try:" in use_asset
+    assert "_show_fallback" in use_asset
+    assert "except" in use_asset

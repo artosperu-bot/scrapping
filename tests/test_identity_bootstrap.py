@@ -4,6 +4,7 @@ from product_intelligence.identity_bootstrap import (
     build_bootstrap_queries,
     build_context_queries,
     build_deep_queries,
+    build_discovery_fallback_queries,
     derive_context_terms,
     filter_bootstrap_candidates,
     identity_probe_budget,
@@ -16,21 +17,9 @@ from product_intelligence.models import ProductIdentity
 def test_unknown_product_name_discovers_brand_without_hardcoding():
     identity = ProductIdentity(product_name="Armor 22")
     candidates = [
-        SearchCandidate(
-            "https://www.ulefone.com/products/armor-22",
-            "Ulefone Armor 22 Rugged Smartphone",
-            "Official Ulefone Armor 22 product specifications",
-        ),
-        SearchCandidate(
-            "https://www.gsmarena.example/ulefone-armor-22",
-            "Ulefone Armor 22 specifications",
-            "Ulefone Armor 22 rugged phone",
-        ),
-        SearchCandidate(
-            "https://retailer.example/armor-22",
-            "Ulefone Armor 22 8GB 256GB",
-            "Brand Ulefone; model Armor 22",
-        ),
+        SearchCandidate("https://www.ulefone.com/products/armor-22", "Ulefone Armor 22 Rugged Smartphone", "Official Ulefone Armor 22 product specifications"),
+        SearchCandidate("https://www.gsmarena.example/ulefone-armor-22", "Ulefone Armor 22 specifications", "Ulefone Armor 22 rugged phone"),
+        SearchCandidate("https://retailer.example/armor-22", "Ulefone Armor 22 8GB 256GB", "Brand Ulefone; model Armor 22"),
     ]
     result = resolve_identity_from_candidates(identity, candidates)
     assert result.status == "RESOLVED"
@@ -65,6 +54,21 @@ def test_conflicting_brand_candidates_remain_unresolved():
     assert result.status == "IDENTITY_UNRESOLVED"
     assert result.identity.brand is None
     assert result.reason in {"AMBIGUOUS_BRAND", "INSUFFICIENT_EVIDENCE"}
+
+
+def test_same_host_duplicate_noise_cannot_outvote_cross_source_brand():
+    identity = ProductIdentity(mpn="ZX-4109")
+    candidates = [
+        SearchCandidate("https://market.example/a/zx-4109", "Marketplace ZX-4109", "ZX-4109 listing"),
+        SearchCandidate("https://market.example/b/zx-4109", "Marketplace ZX-4109", "ZX-4109 listing"),
+        SearchCandidate("https://market.example/c/zx-4109", "Marketplace ZX-4109", "ZX-4109 listing"),
+        SearchCandidate("https://one.example/zx-4109", "Acme ZX-4109 Sensor", "Acme ZX-4109"),
+        SearchCandidate("https://two.example/acme-zx-4109", "Acme ZX-4109 specifications", "Manufacturer: Acme"),
+    ]
+    result = resolve_identity_from_candidates(identity, candidates)
+    assert result.status == "RESOLVED"
+    assert result.identity.brand == "Acme"
+    assert result.brand_hosts["Acme"] == 2
 
 
 def test_bootstrap_candidate_filter_requires_full_raw_identity_not_partial_noise():
@@ -102,6 +106,14 @@ def test_context_terms_learn_repeated_product_context_without_assigning_brand():
     assert all("flight" not in q.lower() for q in queries[:2])
 
 
+def test_discovery_fallback_queries_are_broad_but_do_not_invent_brand():
+    queries = build_discovery_fallback_queries("MF455dw")
+    assert "MF455dw" in queries
+    assert "MF455dw product" in queries
+    assert all('"' not in q for q in queries)
+    assert all("Canon" not in q for q in queries)
+
+
 def test_page_backed_brand_can_resolve_when_serp_title_does_not_expose_brand():
     identity = ProductIdentity(product_name="Rugged 77")
     candidates = [
@@ -109,24 +121,8 @@ def test_page_backed_brand_can_resolve_when_serp_title_does_not_expose_brand():
         SearchCandidate("https://dealer.example/rugged-77", "Rugged 77 phone", "Product details"),
     ]
     page_signals = [
-        PageIdentitySignal(
-            url="https://maker.example/products/rugged-77",
-            brand="ExampleTech",
-            model="Rugged 77",
-            product_name="ExampleTech Rugged 77",
-            exact_raw_match=True,
-            material=True,
-            structured_brand=True,
-            authority_owned=True,
-        ),
-        PageIdentitySignal(
-            url="https://dealer.example/rugged-77",
-            brand="ExampleTech",
-            model="Rugged 77",
-            product_name="ExampleTech Rugged 77",
-            exact_raw_match=True,
-            material=True,
-        ),
+        PageIdentitySignal(url="https://maker.example/products/rugged-77", brand="ExampleTech", model="Rugged 77", product_name="ExampleTech Rugged 77", exact_raw_match=True, material=True, structured_brand=True, authority_owned=True),
+        PageIdentitySignal(url="https://dealer.example/rugged-77", brand="ExampleTech", model="Rugged 77", product_name="ExampleTech Rugged 77", exact_raw_match=True, material=True),
     ]
     result = resolve_identity_with_page_signals(identity, candidates, page_signals)
     assert result.status == "RESOLVED"

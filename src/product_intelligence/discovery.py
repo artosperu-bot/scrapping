@@ -179,6 +179,8 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
         combined=f"{u} {t} {sn}"
         hay=key_norm(combined)
         hcompact=re.sub(r"[^a-z0-9]","",host)
+        # Discovery hint only. Final manufacturer authority is decided later by
+        # source_authority.py and cannot be manufactured by this hostname signal.
         likely_official=bool(brand and brand in hcompact and not any(m in host for m in MARKETPLACE_HINTS))
         strong_match=bool(strong and _contains_strong_identifier(combined,strong))
         model_match=bool(model and fuzz_contains(model,hay))
@@ -202,7 +204,26 @@ def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=
     return [row.url for row in ranked[:limit]]
 
 
+def _bootstrap_unknown_identity(identity:ProductIdentity,limit:int,timeout:int):
+    if identity.brand:
+        return None
+    try:
+        from .identity_bootstrap import bootstrap_identity
+        result=bootstrap_identity(identity,limit_per_query=max(8,min(limit,18)),timeout=max(5,min(timeout,8)))
+    except Exception:
+        return None
+    if result.status!="RESOLVED" or not result.identity.brand:
+        return result
+    # Resolution came from search evidence; mutating the caller identity here makes
+    # the learned brand available to ranking and later strict page validation.
+    identity.brand=result.identity.brand
+    if not identity.model and result.identity.model:
+        identity.model=result.identity.model
+    return result
+
+
 def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10)->list[SearchCandidate]:
+    bootstrap=_bootstrap_unknown_identity(identity,limit,timeout)
     q=build_query(identity)
     if not q:return []
     strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin,identity.sku] if x),None)
@@ -210,8 +231,18 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10)->list[Searc
     for candidate in [q, str(strong_raw or '').strip()]:
         if candidate and candidate not in queries:queries.append(candidate)
 
+    # Once a brand has been resolved from evidence, use a small adaptive expansion
+    # immediately instead of waiting for a first fully accepted product page.
+    if bootstrap is not None and bootstrap.status=="RESOLVED":
+        try:
+            from .identity_bootstrap import build_deep_queries
+            for candidate in build_deep_queries(identity,bootstrap.official_domain_hint)[:3]:
+                if candidate and candidate not in queries:queries.append(candidate)
+        except Exception:
+            pass
+
     urls=[]
-    for query in queries[:2]:
+    for query in queries[:3]:
         urls.extend(_provider_search(query,max(6,min(timeout,10))))
     ranked=_rank_candidates(urls,identity,limit)
 

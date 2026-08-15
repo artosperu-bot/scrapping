@@ -2,10 +2,14 @@ from importlib import import_module
 from product_intelligence.modern_desktop import main
 from product_intelligence.provider_desktop import main as provider_main
 from product_intelligence.workspace_desktop import main as workspace_main
+from product_intelligence.organized_desktop import main as organized_main
+from product_intelligence.managed_desktop import main as managed_main
 
-# Preserve the validated modern/PDF/provider extension-chain imports because
+# Preserve the validated modern/PDF/provider/workspace extension-chain imports because
 # regression contracts use them as evidence that those layers remain present.
-# The persistent workspace shell is only the final additive launcher.
+# The managed shell is the final additive launcher and does not replace the engines.
 import_module("product_intelligence.pdf_desktop")
 import_module("product_intelligence.provider_desktop")
-workspace_main()
+import_module("product_intelligence.workspace_desktop")
+import_module("product_intelligence.organized_desktop")
+managed_main()

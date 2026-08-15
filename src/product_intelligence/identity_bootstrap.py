@@ -24,7 +24,11 @@ _CONTEXT_STOPWORDS = {
     "buy", "shop", "official", "product", "products", "specification", "specifications", "specs",
     "manual", "datasheet", "review", "reviews", "new", "the", "a", "an", "for", "with", "from",
     "and", "or", "of", "to", "in", "on", "by", "online", "price", "sale", "amazon", "ebay",
-    "walmart", "support", "page", "pdf", "download", "tracking", "history",
+    "walmart", "support", "page", "pdf", "download", "tracking", "history", "http", "https", "www",
+    "com", "net", "org", "phone", "smartphone", "laptop", "monitor", "printer", "mouse", "keyboard",
+    "cable", "ssd", "drive", "storage", "wireless", "wired", "headphone", "headphones", "router",
+    "gaming", "memory", "desktop", "external", "internal", "black", "blue", "device", "technology",
+    "data", "best", "download", "manuals", "barcode", "productindetail", "icecat",
 }
 _EXPLICIT_BRAND = re.compile(
     r"(?:brand|manufacturer|marca|fabricante)\s*[:\-]\s*([A-Za-z0-9][A-Za-z0-9&.+_-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.+_-]*){0,2})",
@@ -126,6 +130,13 @@ def build_bootstrap_queries(identity: ProductIdentity) -> list[str]:
     ]))
 
 
+def build_discovery_fallback_queries(raw: str) -> list[str]:
+    raw = str(raw or "").strip()
+    if not raw:
+        return []
+    return [raw, f"{raw} product", f"{raw} specifications"]
+
+
 def build_context_queries(raw: str, terms: list[str]) -> list[str]:
     quoted = f'"{raw}"'
     out: list[str] = []
@@ -193,7 +204,7 @@ def _candidate_has_full_raw(candidate: SearchCandidate, raw: str) -> bool:
 
 
 def filter_bootstrap_candidates(raw: str, candidates: list[SearchCandidate]) -> list[SearchCandidate]:
-    """Discovery stays broad, but identity resolution requires the complete model/identifier."""
+    """Discovery may be broad, but identity scoring requires the complete model/identifier."""
     out: list[SearchCandidate] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -233,9 +244,10 @@ def derive_context_terms(raw: str, candidates: list[SearchCandidate]) -> list[st
         key=lambda term: (len(host_sets[term]), counts[term], len(term)),
         reverse=True,
     )
-    # Prefer terms corroborated by at least two result occurrences; host diversity wins.
-    good = [term for term in ranked if counts[term] >= 2]
-    return [labels[term] for term in good[:5]]
+    # Context used for query expansion must be independently corroborated whenever possible.
+    corroborated = [term for term in ranked if len(host_sets[term]) >= 2]
+    fallback = [term for term in ranked if counts[term] >= 3 and term not in corroborated]
+    return [labels[term] for term in (corroborated + fallback)[:5]]
 
 
 def _clean_brand_phrase(value: str) -> str | None:
@@ -245,7 +257,8 @@ def _clean_brand_phrase(value: str) -> str | None:
     if not tokens:
         return None
     token = tokens[0].strip("-_.")
-    if len(token) < 2 or token.isdigit():
+    norm = key_norm(token)
+    if len(token) < 2 or token.isdigit() or norm in _CONTEXT_STOPWORDS:
         return None
     return token
 
@@ -260,9 +273,8 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
     for match in _EXPLICIT_BRAND.finditer(f"{title} {snippet}"):
         brand = _clean_brand_phrase(match.group(1))
         if brand:
-            out.append((brand, 4.5, "explicit_brand_label"))
+            out.append((brand, 5.0, "explicit_brand_label"))
 
-    # Prefer the first meaningful title token after removing editorial prefixes.
     raw_pattern = re.compile(re.escape(raw), re.I)
     match = raw_pattern.search(title)
     if match:
@@ -270,7 +282,7 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
         if prefix:
             brand = _clean_brand_phrase(prefix)
             if brand:
-                out.append((brand, 3.0, "brand_before_raw_in_title"))
+                out.append((brand, 3.5, "brand_before_raw_in_title"))
     elif _is_strong_code(raw) and (snippet_match or url_match or _candidate_has_full_raw(candidate, raw)):
         segment = re.split(r"[|:–—•]", title)[0].strip()
         brand = _clean_brand_phrase(segment)
@@ -285,11 +297,12 @@ def _rank_brand_scores(
     page_signals: list[PageIdentitySignal] | None = None,
 ):
     raw = _raw_value(identity)
-    scores: dict[str, float] = {}
+    filtered = filter_bootstrap_candidates(raw, candidates)
     labels: dict[str, str] = {}
     hosts_by_brand: dict[str, set[str]] = {}
     official_hosts: dict[str, tuple[float, str]] = {}
     model_by_brand: dict[str, list[tuple[float, str]]] = {}
+    host_contribs: dict[str, dict[str, float]] = defaultdict(dict)
 
     def add(brand: str | None, score: float, host: str, *, model: str | None = None, official_hint: bool = False):
         brand = str(brand or "").strip()
@@ -297,14 +310,14 @@ def _rank_brand_scores(
         if not key or len(key) < 2:
             return
         labels.setdefault(key, brand)
-        prior_hosts = hosts_by_brand.setdefault(key, set())
-        if host and prior_hosts and host not in prior_hosts:
-            score += 2.0
+        host_key = host or f"unknown:{key}"
         if any(marker in host for marker in MARKETPLACE_HINTS):
-            score -= 2.0
-        scores[key] = scores.get(key, 0.0) + score
+            score -= 2.5
+        # Critical invariant: one domain gets at most one contribution per brand.
+        # Duplicate result pages from Amazon/PSREF/etc. cannot outvote independent sources.
+        host_contribs[key][host_key] = max(host_contribs[key].get(host_key, float("-inf")), score)
         if host:
-            prior_hosts.add(host)
+            hosts_by_brand.setdefault(key, set()).add(host)
         if model:
             model_by_brand.setdefault(key, []).append((score, model))
         if official_hint and host and not any(marker in host for marker in MARKETPLACE_HINTS):
@@ -312,7 +325,7 @@ def _rank_brand_scores(
             if current is None or score > current[0]:
                 official_hosts[key] = (score, host)
 
-    for candidate in filter_bootstrap_candidates(raw, candidates):
+    for candidate in filtered:
         host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
         title_match, snippet_match, url_match = _candidate_text_matches_raw(candidate, raw)
         base = 2.0 if title_match else 1.0
@@ -324,6 +337,19 @@ def _rank_brand_scores(
             hay = key_norm(f"{candidate.title} {candidate.snippet}")
             score = base + evidence_score + (0.8 if any(x in hay for x in ("official", "manufacturer", "fabricante")) else 0.0)
             add(brand, score, host, official_hint=False)
+
+    # Repeated context near an exact identifier is useful weak brand evidence, but only
+    # across independent domains. This helps brands hidden in snippets without trusting
+    # any single publisher/retailer title.
+    for term in derive_context_terms(raw, filtered)[:5]:
+        norm = key_norm(term)
+        if not norm or norm in _CONTEXT_STOPWORDS:
+            continue
+        for candidate in filtered:
+            host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
+            hay = key_norm(f"{candidate.title} {candidate.snippet}")
+            if norm in hay:
+                add(term, 4.25, host)
 
     for signal in page_signals or []:
         if not signal.material or not signal.exact_raw_match:
@@ -348,6 +374,11 @@ def _rank_brand_scores(
             model=signal.model or signal.product_name,
             official_hint=bool(signal.authority_owned and signal.structured_brand),
         )
+
+    scores = {
+        key: round(sum(max(0.0, value) for value in contributions.values()), 6)
+        for key, contributions in host_contribs.items()
+    }
     return scores, labels, hosts_by_brand, official_hosts, model_by_brand
 
 
@@ -379,20 +410,18 @@ def _finalize_resolution(
     ]
     has_page = bool(matching_page)
     page_authority = any(s.authority_owned for s in matching_page)
-    decisive_page = has_page and best_score >= 10.0 and margin >= 3.0
-    decisive_cross_source = host_count >= 2 and best_score >= 11.0 and (
-        margin >= 3.0 or best_score >= max(1.0, runner_score) * 1.35
+    decisive_page = has_page and best_score >= 9.0 and margin >= 2.5
+    decisive_cross_source = host_count >= 2 and best_score >= 8.5 and (
+        margin >= 2.5 or best_score >= max(1.0, runner_score) * 1.35
     )
-    # Strong repeated textual dominance may resolve an ambiguous catalog code even
-    # when search dedupe leaves one host, but requires a large safety margin.
-    decisive_dominance = best_score >= 24.0 and margin >= 12.0 and best_score >= max(1.0, runner_score) * 1.8
-    decisive_serp = not page_signals and host_count >= 2 and best_score >= 9.0 and margin >= 3.0
+    decisive_dominance = best_score >= 18.0 and margin >= 9.0 and best_score >= max(1.0, runner_score) * 1.7
+    decisive_serp = not page_signals and host_count >= 2 and best_score >= 8.5 and margin >= 2.5
     resolved = decisive_page or decisive_cross_source or decisive_dominance or decisive_serp
     if not resolved:
         return IdentityBootstrapResult(
             identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED",
             confidence=min(0.74, best_score / max(1.0, best_score + runner_score + 2.0)),
-            reason="AMBIGUOUS_BRAND" if len(ranked) > 1 and margin < 3.0 else "INSUFFICIENT_EVIDENCE",
+            reason="AMBIGUOUS_BRAND" if len(ranked) > 1 and margin < 2.5 else "INSUFFICIENT_EVIDENCE",
             raw_input=raw, search_results_found=len(filtered), candidate_urls=[c.url for c in filtered],
             brand_scores={labels[k]: round(v, 3) for k, v in scores.items()},
             brand_hosts={labels[k]: len(hosts_by_brand.get(k, set())) for k in scores},
@@ -488,7 +517,7 @@ def _probe_candidate_page(identity: ProductIdentity, candidate: SearchCandidate)
         observed = derive_observed_identity(identity, page)
         page_assessment = classify_page_type(derive_page_signals(fetched.html, fetched.final_url, page))
         page_text = str(page.get("text") or "")
-        exact_raw = _candidate_has_full_raw(SearchCandidate(fetched.final_url, page_text[:2000], ""), raw)
+        exact_raw = _candidate_has_full_raw(SearchCandidate(fetched.final_url, page_text[:4000], ""), raw)
         strong_match = False
         if _is_strong_code(raw):
             observed_ids = [*observed.mpns, *observed.gtins, *observed.eans, *observed.upcs]
@@ -620,17 +649,26 @@ def bootstrap_identity(identity: ProductIdentity, *, limit_per_query: int = 18, 
                 seen_urls.add(row.url)
                 collected.append(row)
 
-    # 1) Exact raw query first.
+    # 1) Exact quoted query first.
     search_and_add(base_queries[0])
+
+    # If public engines return no exact candidates for a quoted code/model, broaden
+    # discovery only; filter_bootstrap_candidates still requires the full identity.
+    if not collected:
+        for query in build_discovery_fallback_queries(raw)[:2]:
+            search_and_add(query)
+            if collected:
+                break
+
     result = resolve_identity_from_candidates(identity, collected)
 
-    # 2) If ambiguous, learn repeated context from exact results and refine discovery.
+    # 2) Learn repeated context from exact candidates and refine discovery.
     if result.status != "RESOLVED":
         for query in build_context_queries(raw, derive_context_terms(raw, collected))[:2]:
             search_and_add(query)
         result = resolve_identity_from_candidates(identity, collected)
 
-    # 3) Probe only the highest-value exact candidates, never the whole result set.
+    # 3) Probe a bounded set of independent exact pages.
     fresh_pool = [c for c in collected if c.url not in probed_urls]
     fresh_signals = _probe_top_candidates(identity, fresh_pool, max_probes=probe_limit)
     page_signals.extend(fresh_signals)
@@ -641,7 +679,7 @@ def bootstrap_identity(identity: ProductIdentity, *, limit_per_query: int = 18, 
         if page_result.status == "RESOLVED" or result.status != "RESOLVED":
             result = page_result
 
-    # 4) Only then spend the remaining generic queries.
+    # 4) Spend remaining generic queries only if needed.
     if result.status != "RESOLVED":
         for query in base_queries[1:]:
             search_and_add(query)

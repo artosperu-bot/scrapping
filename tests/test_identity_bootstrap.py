@@ -3,6 +3,7 @@ from product_intelligence.identity_bootstrap import (
     PageIdentitySignal,
     build_bootstrap_queries,
     build_deep_queries,
+    identity_probe_budget,
     resolve_identity_from_candidates,
     resolve_identity_with_page_signals,
 )
@@ -145,6 +146,13 @@ def test_page_signal_without_exact_product_binding_cannot_resolve_brand():
 
     assert result.status == "IDENTITY_UNRESOLVED"
     assert result.identity.brand is None
+
+
+def test_identity_page_probe_budget_is_bounded_for_fast_bootstrap():
+    max_probes, timeout_seconds = identity_probe_budget()
+
+    assert max_probes <= 4
+    assert timeout_seconds <= 8
 
 
 def test_bootstrap_queries_do_not_invent_brand_before_resolution():

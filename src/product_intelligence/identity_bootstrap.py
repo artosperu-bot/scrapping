@@ -17,14 +17,16 @@ from .web_fetch import fetch_page
 
 _GENERIC_LEADING = {
     "buy", "shop", "official", "product", "products", "specification", "specifications",
-    "specs", "manual", "datasheet", "review", "reviews", "new", "the", "a", "an",
+    "specs", "manual", "datasheet", "review", "reviews", "new", "used", "refurbished", "renewed",
+    "preowned", "pre-owned", "open-box", "openbox", "the", "a", "an",
     "teardown", "unboxing", "hands", "on", "guide", "of", "for", "with", "by",
     "please", "visit", "overview", "welcome", "featuring", "want", "get", "explore",
     "comparison", "compare", "this", "you", "can", "learn", "click", "here", "view", "see",
 }
 _CONTEXT_STOPWORDS = {
     "buy", "shop", "official", "product", "products", "specification", "specifications", "specs",
-    "manual", "datasheet", "review", "reviews", "new", "the", "a", "an", "for", "with", "from",
+    "manual", "datasheet", "review", "reviews", "new", "used", "refurbished", "renewed", "preowned",
+    "pre-owned", "open-box", "openbox", "the", "a", "an", "for", "with", "from",
     "and", "or", "of", "to", "in", "on", "by", "online", "price", "sale", "amazon", "ebay",
     "walmart", "support", "page", "pdf", "download", "downloads", "tracking", "history", "http", "https", "www",
     "com", "net", "org", "phone", "smartphone", "laptop", "monitor", "printer", "mouse", "keyboard",
@@ -34,6 +36,7 @@ _CONTEXT_STOPWORDS = {
     "data", "best", "manuals", "barcode", "productindetail", "icecat", "please", "visit", "overview",
     "welcome", "featuring", "want", "get", "explore", "ratings", "rating", "comparison", "compare",
     "this", "you", "can", "meet", "performance", "up", "learn", "click", "here", "view", "see",
+    "multi-function", "multifunction", "multi-functional", "multifunctional", "all-in-one", "allinone", "a4",
 }
 _GENERIC_BRAND_WORDS = {
     "information", "details", "detail", "item", "items", "available", "availability", "discover",
@@ -44,7 +47,9 @@ _GENERIC_BRAND_WORDS = {
     "please", "visit", "please visit", "overview", "download", "downloads", "welcome", "featuring",
     "want", "get", "explore", "rating", "ratings", "comparison", "compare", "this", "you", "you can",
     "can", "meet", "performance", "up", "learn", "click", "here", "view", "see", "multi-functional",
-    "multifunctional", "sensor", "sensors", "adapter", "charger", "camera", "speaker", "television",
+    "multifunctional", "multi-function", "multifunction", "all-in-one", "allinone", "a4",
+    "used", "refurbished", "renewed", "preowned", "pre-owned", "open-box", "openbox",
+    "sensor", "sensors", "adapter", "charger", "camera", "speaker", "television",
 }
 _SECOND_TOKEN_DESCRIPTORS = {
     "mobile", "global", "official", "store", "shop", "series", "model", "models", "item", "items",
@@ -406,6 +411,34 @@ def _label_matches_host(label: str, host: str) -> bool:
     )
 
 
+def _looks_like_sibling_identifier(brand: str, raw: str) -> bool:
+    """Reject model/MPN-like siblings from implicit SERP brand extraction.
+
+    A near-identical alphanumeric code is overwhelmingly more likely to be another
+    variant/model than a brand. Explicit structured/page brand evidence is handled
+    separately and does not need this heuristic to manufacture identity.
+    """
+    candidate = _compact(brand)
+    target = _compact(raw)
+    if len(candidate) < 6 or len(target) < 6:
+        return False
+    if not (re.search(r"[a-z]", candidate) and re.search(r"\d", candidate)):
+        return False
+    if not (re.search(r"[a-z]", target) and re.search(r"\d", target)):
+        return False
+    if len(candidate) == len(target):
+        distance = sum(a != b for a, b in zip(candidate, target))
+        if distance <= 2:
+            return True
+    shorter = min(len(candidate), len(target))
+    common_prefix = 0
+    for a, b in zip(candidate, target):
+        if a != b:
+            break
+        common_prefix += 1
+    return shorter >= 8 and common_prefix >= shorter - 2
+
+
 def _brand_candidate_quality(brand: str | None, raw: str) -> bool:
     brand = str(brand or "").strip()
     if not brand:
@@ -415,6 +448,8 @@ def _brand_candidate_quality(brand: str | None, raw: str) -> bool:
     if not compact or len(compact) < 2 or compact == _compact(raw):
         return False
     if norm in _GENERIC_BRAND_WORDS or norm in _CONTEXT_STOPWORDS:
+        return False
+    if _looks_like_sibling_identifier(brand, raw):
         return False
     if re.fullmatch(r"\d+(?:w|kw|gb|tb|hz|mhz|ghz|mp|mah)?", norm, re.I):
         return False

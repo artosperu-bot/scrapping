@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections import defaultdict
 
 from .evidence_quality import generic_evidence_gate, strict_semantic_gate
+from .evidence_policy import ConsensusFact, resolve_evidence_group
 from .models import Evidence, ProductIdentity, ProductRecord
 from .normalize import canonical_key, key_norm
 from .source_authority import effective_quality, source_family
 
 
 def _evidence_key(ev: Evidence) -> tuple[str, str, str, str]:
-    """A duplicated DOM/JSON rendering is one piece of evidence, not multiple votes."""
     canonical = canonical_key(ev.attribute) or key_norm(ev.attribute)
     value = key_norm(str(ev.normalized_value if ev.normalized_value not in (None, "") else ev.raw_value))
     source = str(ev.source_url or "").strip().lower()
@@ -26,7 +26,6 @@ def _identity_token_supported(value: str | None, identity: ProductIdentity) -> b
 
 
 def _reconcile_identity(identity: ProductIdentity, specs: dict) -> ProductIdentity:
-    """Keep seller/organization metadata separate from product identity."""
     brand_spec = (specs.get("brand") or {}).get("value")
     if brand_spec:
         if not identity.brand or not _identity_token_supported(identity.brand, identity):
@@ -35,6 +34,34 @@ def _reconcile_identity(identity: ProductIdentity, specs: dict) -> ProductIdenti
     if model_spec and not identity.model:
         identity.model = str(model_spec)
     return identity
+
+
+def _consensus_authority(ev: Evidence) -> str:
+    family = source_family(ev)
+    return {
+        "manufacturer": "manufacturer",
+        "official_pdf": "official_pdf",
+        "technical_document": "technical_document",
+        "regulatory": "technical_database",
+        "structured_catalog": "technical_database",
+        "distributor": "authorized_distributor",
+        "secondary": "retailer",
+        "marketplace": "marketplace",
+        "unknown": "third_party",
+    }.get(family, "third_party")
+
+
+def _consensus_identity(ev: Evidence) -> str:
+    level = str(ev.match_level or "").upper()
+    if level == "EXACT":
+        return "EXACT"
+    if level in {"HIGH", "MEDIUM"}:
+        return "COMPATIBLE"
+    return "AMBIGUOUS"
+
+
+def _normalized_fact_value(ev: Evidence) -> str:
+    return key_norm(str(ev.normalized_value if ev.normalized_value not in (None, "") else ev.raw_value))
 
 
 def build_record_strict(identity: ProductIdentity, evidence: list[Evidence], sources: list[str]) -> ProductRecord:
@@ -70,9 +97,52 @@ def build_record_strict(identity: ProductIdentity, evidence: list[Evidence], sou
 
     specs = {}
     conflicts = []
+    consensus_audit: dict[str, dict] = {}
+
     for key, rows in grouped.items():
         rows.sort(key=lambda item: (item[2], item[1], float(item[0].confidence or 0)), reverse=True)
-        top, quality, authority = rows[0]
+        consensus = resolve_evidence_group([
+            ConsensusFact(
+                value=ev.normalized_value if ev.normalized_value not in (None, "") else ev.raw_value,
+                source_url=str(ev.source_url or ""),
+                authority=_consensus_authority(ev),
+                identity_status=_consensus_identity(ev),
+                confidence=float(q_value or 0.0),
+            )
+            for ev, q_value, _authority in rows
+        ])
+        consensus_audit[key] = {
+            "status": consensus.status,
+            "reason": consensus.reason,
+            "supporting_urls": list(consensus.supporting_urls),
+            "rejected_urls": list(consensus.rejected_urls),
+        }
+
+        if consensus.accepted_value is None:
+            rejected.append({
+                "attribute": key,
+                "value": None,
+                "reason": consensus.reason,
+                "source": None,
+            })
+            if consensus.reason == "SOURCE_CONFLICT":
+                values = []
+                for ev, q_value, auth in rows:
+                    values.append({
+                        "value": ev.normalized_value,
+                        "source": ev.source_url,
+                        "source_family": source_family(ev),
+                        "confidence": round(q_value, 4),
+                        "authority_rank": auth,
+                    })
+                conflicts.append({"attribute": key, "values": values[:12], "reason": "SOURCE_CONFLICT"})
+            continue
+
+        accepted_norm = key_norm(str(consensus.accepted_value))
+        matching_rows = [row for row in rows if _normalized_fact_value(row[0]) == accepted_norm]
+        if not matching_rows:
+            matching_rows = rows
+        top, quality, authority = max(matching_rows, key=lambda item: (item[2], item[1], float(item[0].confidence or 0)))
         specs[key] = {
             "value": top.normalized_value,
             "raw_value": top.raw_value,
@@ -84,38 +154,9 @@ def build_record_strict(identity: ProductIdentity, evidence: list[Evidence], sou
             "confidence": round(min(1.0, quality), 4),
             "original_confidence": top.confidence,
             "authority_rank": authority,
+            "consensus_reason": consensus.reason,
+            "supporting_sources": list(consensus.supporting_urls),
         }
-
-        # Duplicates from one source are one vote. A lower-authority source does not create a
-        # material conflict against a higher-authority fact unless it is close enough to matter.
-        values: dict[str, list[tuple[Evidence, float, int]]] = defaultdict(list)
-        for ev, q_value, auth in rows:
-            normalized = key_norm(str(ev.normalized_value if ev.normalized_value not in (None, "") else ev.raw_value))
-            if normalized:
-                values[normalized].append((ev, q_value, auth))
-        if len(values) > 1:
-            distinct = []
-            for same_value_rows in values.values():
-                best = max(same_value_rows, key=lambda item: (item[2], item[1]))
-                ev, q_value, auth = best
-                distinct.append((ev, q_value, auth))
-            distinct.sort(key=lambda item: (item[2], item[1]), reverse=True)
-            winning_authority = distinct[0][2]
-            material = [item for item in distinct if item[2] >= max(1, winning_authority - 1) and item[1] >= .55]
-            if len(material) > 1:
-                conflicts.append({
-                    "attribute": key,
-                    "values": [
-                        {
-                            "value": ev.normalized_value,
-                            "source": ev.source_url,
-                            "source_family": source_family(ev),
-                            "confidence": round(q_value, 4),
-                            "authority_rank": auth,
-                        }
-                        for ev, q_value, auth in material[:12]
-                    ],
-                })
 
     identity = _reconcile_identity(identity, specs)
     record = ProductRecord(
@@ -132,5 +173,6 @@ def build_record_strict(identity: ProductIdentity, evidence: list[Evidence], sou
     record.evidence_graph = {
         "rejected_evidence": rejected[:300],
         "deduplicated_evidence_count": duplicates,
+        "consensus": consensus_audit,
     }
     return record

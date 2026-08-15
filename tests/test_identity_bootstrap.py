@@ -2,7 +2,9 @@ from product_intelligence.discovery import SearchCandidate
 from product_intelligence.identity_bootstrap import (
     PageIdentitySignal,
     build_bootstrap_queries,
+    build_context_queries,
     build_deep_queries,
+    derive_context_terms,
     filter_bootstrap_candidates,
     identity_probe_budget,
     resolve_identity_from_candidates,
@@ -74,6 +76,30 @@ def test_bootstrap_candidate_filter_requires_full_raw_identity_not_partial_noise
     ]
     filtered = filter_bootstrap_candidates(raw, candidates)
     assert [c.url for c in filtered] == ["https://lenovo.example/v15-g4-iru"]
+
+
+def test_generation_alias_gen_4_matches_g4_without_accepting_partial_v15():
+    raw = "V15 G4 IRU"
+    candidates = [
+        SearchCandidate("https://lenovo.example/v15-gen-4-iru", "Lenovo V15 Gen 4 IRU", "Business laptop"),
+        SearchCandidate("https://noise.example/v15", "V15 laptop", "Generic result"),
+    ]
+    filtered = filter_bootstrap_candidates(raw, candidates)
+    assert [c.url for c in filtered] == ["https://lenovo.example/v15-gen-4-iru"]
+
+
+def test_context_terms_learn_repeated_product_context_without_assigning_brand():
+    raw = "A2794"
+    candidates = [
+        SearchCandidate("https://one.example/a2794", "Apple 240W USB-C Charge Cable A2794", "Apple USB-C cable"),
+        SearchCandidate("https://two.example/a2794", "A2794 Apple USB C cable 240W", "Charge cable for Mac"),
+        SearchCandidate("https://three.example/a2794", "AAL2794 flight tracking", "American Airlines flight A2794"),
+    ]
+    terms = derive_context_terms(raw, candidates)
+    queries = build_context_queries(raw, terms)
+    assert "apple" in {term.lower() for term in terms[:3]}
+    assert any('"A2794" "Apple"' in q or '"A2794" "apple"' in q for q in queries)
+    assert all("flight" not in q.lower() for q in queries[:2])
 
 
 def test_page_backed_brand_can_resolve_when_serp_title_does_not_expose_brand():

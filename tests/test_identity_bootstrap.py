@@ -1,8 +1,10 @@
 from product_intelligence.discovery import SearchCandidate
 from product_intelligence.identity_bootstrap import (
+    PageIdentitySignal,
     build_bootstrap_queries,
     build_deep_queries,
     resolve_identity_from_candidates,
+    resolve_identity_with_page_signals,
 )
 from product_intelligence.models import ProductIdentity
 
@@ -71,6 +73,78 @@ def test_conflicting_brand_candidates_remain_unresolved():
     assert result.status == "IDENTITY_UNRESOLVED"
     assert result.identity.brand is None
     assert result.reason in {"AMBIGUOUS_BRAND", "INSUFFICIENT_EVIDENCE"}
+
+
+def test_page_backed_brand_can_resolve_when_serp_title_does_not_expose_brand():
+    identity = ProductIdentity(product_name="Rugged 77")
+    candidates = [
+        SearchCandidate("https://maker.example/products/rugged-77", "Rugged 77 specifications", "Technical product information"),
+        SearchCandidate("https://dealer.example/rugged-77", "Rugged 77 phone", "Product details"),
+    ]
+    page_signals = [
+        PageIdentitySignal(
+            url="https://maker.example/products/rugged-77",
+            brand="ExampleTech",
+            model="Rugged 77",
+            product_name="ExampleTech Rugged 77",
+            exact_raw_match=True,
+            material=True,
+            structured_brand=True,
+        ),
+        PageIdentitySignal(
+            url="https://dealer.example/rugged-77",
+            brand="ExampleTech",
+            model="Rugged 77",
+            product_name="ExampleTech Rugged 77",
+            exact_raw_match=True,
+            material=True,
+        ),
+    ]
+
+    result = resolve_identity_with_page_signals(identity, candidates, page_signals)
+
+    assert result.status == "RESOLVED"
+    assert result.identity.brand == "ExampleTech"
+    assert result.identity.model == "Rugged 77"
+    assert result.brand_hosts["ExampleTech"] == 2
+
+
+def test_page_backed_conflicting_brand_remains_unresolved_even_with_exact_raw_match():
+    identity = ProductIdentity(mpn="ZX-4109")
+    candidates = [
+        SearchCandidate("https://one.example/zx-4109", "ZX-4109", "Product"),
+        SearchCandidate("https://two.example/zx-4109", "ZX-4109", "Product"),
+    ]
+    page_signals = [
+        PageIdentitySignal(url="https://one.example/zx-4109", brand="Acme", model="ZX-4109", exact_raw_match=True, material=True, structured_brand=True),
+        PageIdentitySignal(url="https://two.example/zx-4109", brand="Nova", model="ZX-4109", exact_raw_match=True, material=True, structured_brand=True),
+    ]
+
+    result = resolve_identity_with_page_signals(identity, candidates, page_signals)
+
+    assert result.status == "IDENTITY_UNRESOLVED"
+    assert result.identity.brand is None
+    assert result.reason == "AMBIGUOUS_BRAND"
+
+
+def test_page_signal_without_exact_product_binding_cannot_resolve_brand():
+    identity = ProductIdentity(product_name="Rugged 77")
+    candidates = [SearchCandidate("https://maker.example/category", "Phones", "ExampleTech products")]
+    page_signals = [
+        PageIdentitySignal(
+            url="https://maker.example/category",
+            brand="ExampleTech",
+            product_name="Other Model",
+            exact_raw_match=False,
+            material=True,
+            structured_brand=True,
+        )
+    ]
+
+    result = resolve_identity_with_page_signals(identity, candidates, page_signals)
+
+    assert result.status == "IDENTITY_UNRESOLVED"
+    assert result.identity.brand is None
 
 
 def test_bootstrap_queries_do_not_invent_brand_before_resolution():

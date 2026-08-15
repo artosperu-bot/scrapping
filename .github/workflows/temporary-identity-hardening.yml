@@ -39,3 +39,4 @@ jobs:
           git diff --cached --exit-code && exit 0 || true
           git commit -m 'fix: harden cross-domain identity resolution'
           git push origin HEAD:feat/source-validation-gates-universal
+      # rerun-marker: 2

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,13 +78,7 @@ def extract_pdf_pages(path: str | Path, ocr_page: Callable[[int, bytes], str] | 
         doc.close()
 
 
-def extract_pdf(url: str, match_level: str = "HIGH", confidence: float = .90) -> tuple[str, list[Evidence]]:
-    data = download_bytes(url)
-    doc = fitz.open(stream=data, filetype="pdf")
-    try:
-        pages = _extract_document(doc)
-    finally:
-        doc.close()
+def _evidence_from_pages(pages: list[ExtractedPdfPage], source_url: str, match_level: str, confidence: float) -> list[Evidence]:
     evidence = []
     for page in pages:
         for line in page.text.splitlines():
@@ -94,10 +87,25 @@ def extract_pdf(url: str, match_level: str = "HIGH", confidence: float = .90) ->
                 continue
             evidence.append(Evidence(
                 attribute=m.group(1).strip(), raw_value=m.group(2).strip(), normalized_value=m.group(2).strip(),
-                source_url=url, source_type="official_pdf", page=page.page,
+                source_url=source_url, source_type="official_pdf", page=page.page,
                 selector=f"method={page.method}", match_level=match_level, confidence=confidence,
             ))
-    return "\n".join(page.text for page in pages), evidence
+    return evidence
+
+
+def extract_pdf_bytes(data: bytes, source_url: str, match_level: str = "HIGH", confidence: float = .90) -> tuple[str, list[Evidence]]:
+    if not bytes(data or b"").startswith(b"%PDF-"):
+        raise ValueError("Los bytes no corresponden a un PDF válido")
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        pages = _extract_document(doc)
+    finally:
+        doc.close()
+    return "\n".join(page.text for page in pages), _evidence_from_pages(pages, source_url, match_level, confidence)
+
+
+def extract_pdf(url: str, match_level: str = "HIGH", confidence: float = .90) -> tuple[str, list[Evidence]]:
+    return extract_pdf_bytes(download_bytes(url), url, match_level, confidence)
 
 
 def optional_docling_extract(path: str) -> str | None:

@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from .browser_search import browser_pdf_links, browser_search
 from .discovery import SearchCandidate, _provider_search, _rank_candidates, search_web
 from .models import ProductIdentity
 from .normalize import key_norm
@@ -19,6 +20,11 @@ _DOCUMENT_PATTERNS = (
     ("technical_pdf", re.compile(r"\bspecifications?|technical\s+specifications?|especificaciones\b", re.I)),
 )
 _PROMOTIONAL = re.compile(r"\bbrochure|catalog(?:ue)?|promotional|buy\s+now|shop\s+now|oferta|sale\b", re.I)
+_NON_PRODUCT_PDF = re.compile(
+    r"\bprivacy|privacy[_-]?policy|terms(?:[_-]?and[_-]?conditions)?|cookies?|legal|"
+    r"return[_-]?policy|shipping[_-]?policy|accessibility|sitemap\b",
+    re.I,
+)
 
 
 def _compact(value: str | None) -> str:
@@ -39,6 +45,20 @@ def build_document_queries(identity: ProductIdentity) -> list[str]:
     model = _descriptive_model(identity)
     strong = next((str(x).strip() for x in [identity.mpn, identity.ean, identity.upc, identity.gtin] if x), "")
     queries: list[str] = []
+    if strong:
+        quoted = f'"{strong}"'
+        queries.extend([
+            f"{strong} pdf",
+            f"{quoted} pdf",
+            f"{quoted} filetype:pdf",
+            f"{quoted} manual pdf",
+            f"{quoted} datasheet pdf",
+            f"{quoted} spec sheet pdf",
+            f"{quoted} specifications pdf",
+            f"{quoted} user manual filetype:pdf",
+            f"{quoted} support downloads",
+            quoted,
+        ])
     if brand and model:
         phrase = f'"{brand} {model}"'
         queries.extend([
@@ -48,18 +68,6 @@ def build_document_queries(identity: ProductIdentity) -> list[str]:
             f"{phrase} user manual",
             f"{phrase} filetype:pdf",
             f"{phrase} support downloads",
-        ])
-    if strong:
-        quoted = f'"{strong}"'
-        queries.extend([
-            quoted,
-            f"{quoted} support downloads",
-            f"{quoted} manual pdf",
-            f"{quoted} datasheet",
-            f"{quoted} specifications pdf",
-            f"{quoted} filetype:pdf",
-            f"{quoted} spec sheet pdf",
-            f"{quoted} user manual filetype:pdf",
         ])
     return list(dict.fromkeys(q for q in queries if q.strip()))
 
@@ -101,10 +109,27 @@ def identity_matches_document(identity: ProductIdentity, url: str, title: str = 
     return False
 
 
-def search_web_query_candidates(identity: ProductIdentity, query: str, limit: int = 8, timeout: int = 15) -> list[SearchCandidate]:
+def _search_query_with_fallback(identity: ProductIdentity, query: str, *, limit: int, timeout: int, trace=None) -> list[SearchCandidate]:
+    if trace:
+        trace.emit("PDF_SEARCH_QUERY", query=query, transport="http")
+    http_rows = _provider_search(query, timeout)
+    if trace:
+        trace.emit("PDF_SEARCH_HTTP_RESULT", query=query, result_count=len(http_rows))
+    ranked = _rank_candidates(http_rows, identity, limit)
+    if ranked:
+        return ranked
+    if trace:
+        trace.emit("PDF_SEARCH_BROWSER_FALLBACK", query=query)
+    browser_rows = browser_search(query, timeout=max(timeout, 15), limit=max(limit * 2, 12))
+    if trace:
+        trace.emit("PDF_SEARCH_BROWSER_RESULT", query=query, result_count=len(browser_rows))
+    return _rank_candidates(browser_rows, identity, limit)
+
+
+def search_web_query_candidates(identity: ProductIdentity, query: str, limit: int = 8, timeout: int = 15, trace=None) -> list[SearchCandidate]:
     if not str(query or "").strip():
         return []
-    return _rank_candidates(_provider_search(str(query).strip(), timeout), identity, limit)
+    return _search_query_with_fallback(identity, str(query).strip(), limit=limit, timeout=timeout, trace=trace)
 
 
 def _document_rank(candidate: SearchCandidate) -> tuple[int, int, float]:
@@ -116,25 +141,32 @@ def _document_rank(candidate: SearchCandidate) -> tuple[int, int, float]:
 
 
 def _looks_like_direct_pdf(url: str | None) -> bool:
-    return (urlparse(str(url or "")).path or "").lower().endswith(".pdf")
+    return ".pdf" in str(url or "").lower()
 
 
-def resolve_document_candidate_urls(
-    identity: ProductIdentity,
-    candidate: SearchCandidate,
-    *,
-    timeout: int = 15,
-) -> list[SearchCandidate]:
-    """Turn an identity-matched landing page into concrete PDF candidates.
+def _is_generic_non_product_pdf(url: str, title: str = "", snippet: str = "") -> bool:
+    return bool(_NON_PRODUCT_PDF.search(f"{url} {title} {snippet}"))
 
-    In PDF-only mode HTML may be fetched only as a discovery bridge. It is never
-    returned as evidence. Final candidates from this function are concrete PDFs;
-    downstream PDF ingestion still validates the document contents against the
-    product identity before any evidence is accepted.
-    """
+
+def _resolved_candidate(candidate: SearchCandidate, url: str, label: str = "") -> SearchCandidate:
+    return SearchCandidate(
+        url,
+        label or candidate.title,
+        f"document link from {candidate.url}",
+        max(float(candidate.score or 0), .5),
+        bool(candidate.likely_official),
+    )
+
+
+def resolve_document_candidate_urls(identity: ProductIdentity, candidate: SearchCandidate, *, timeout: int = 15, trace=None) -> list[SearchCandidate]:
+    """Resolve direct/static/rendered PDF links; HTML is discovery-only."""
     if _looks_like_direct_pdf(candidate.url):
+        if trace:
+            trace.emit("PDF_LINK_DISCOVERED", url=candidate.url, direct=True)
         return [candidate]
 
+    if trace:
+        trace.emit("PDF_LANDING_INSPECTED", url=candidate.url)
     response = requests.get(
         candidate.url,
         timeout=timeout,
@@ -146,35 +178,38 @@ def resolve_document_candidate_urls(
     for row in discover_pdf_candidates(response.text, candidate.url):
         if row.url in seen or not _looks_like_direct_pdf(row.url):
             continue
+        if _is_generic_non_product_pdf(row.url, row.label, ""):
+            continue
         seen.add(row.url)
-        resolved.append(SearchCandidate(
-            row.url,
-            row.label or candidate.title,
-            f"document link from {candidate.url}",
-            max(float(candidate.score or 0), .5),
-            bool(candidate.likely_official),
-        ))
+        resolved.append(_resolved_candidate(candidate, row.url, row.label))
+        if trace:
+            trace.emit("PDF_LINK_DISCOVERED", url=row.url, landing_url=candidate.url, rendered=False)
+
+    if not resolved:
+        for url, label in browser_pdf_links(candidate.url, timeout=max(timeout, 15), limit=30):
+            if url in seen or not _looks_like_direct_pdf(url):
+                continue
+            if _is_generic_non_product_pdf(url, label, ""):
+                continue
+            seen.add(url)
+            resolved.append(_resolved_candidate(candidate, url, label))
+            if trace:
+                trace.emit("PDF_LINK_DISCOVERED", url=url, landing_url=candidate.url, rendered=True)
     return resolved
 
 
-def _resolve_valid_candidates(
-    identity: ProductIdentity,
-    candidates: list[SearchCandidate],
-    *,
-    limit: int,
-    timeout: int,
-) -> list[SearchCandidate]:
+def _resolve_valid_candidates(identity: ProductIdentity, candidates: list[SearchCandidate], *, limit: int, timeout: int, trace=None) -> list[SearchCandidate]:
     resolved: list[SearchCandidate] = []
     resolved_seen: set[str] = set()
     for candidate in sorted(candidates, key=_document_rank, reverse=True):
         try:
-            rows = resolve_document_candidate_urls(identity, candidate, timeout=timeout)
+            rows = resolve_document_candidate_urls(identity, candidate, timeout=timeout, trace=trace) if trace else resolve_document_candidate_urls(identity, candidate, timeout=timeout)
         except requests.RequestException:
             continue
         for row in rows:
-            if row.url in resolved_seen:
+            if row.url in resolved_seen or not _looks_like_direct_pdf(row.url):
                 continue
-            if not classify_document_candidate(row.url, row.title, row.snippet):
+            if _is_generic_non_product_pdf(row.url, row.title, row.snippet):
                 continue
             resolved_seen.add(row.url)
             resolved.append(row)
@@ -183,26 +218,58 @@ def _resolve_valid_candidates(
     return resolved
 
 
-def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeout: int = 15) -> list[SearchCandidate]:
+def _browser_document_pass(identity: ProductIdentity, *, queries: list[str], seen: set[str], limit: int, timeout: int, trace=None) -> list[SearchCandidate]:
+    per_query = max(6, min(max(limit * 2, 12), 20))
+    collected: list[SearchCandidate] = []
+    for query in queries[:8]:
+        if trace:
+            trace.emit("PDF_SEARCH_BROWSER_FALLBACK", query=query, reason="NO_RESOLVABLE_PDF")
+        rows = browser_search(query, timeout=max(15, timeout), limit=per_query)
+        if trace:
+            trace.emit("PDF_SEARCH_BROWSER_RESULT", query=query, result_count=len(rows))
+        for candidate in _rank_candidates(rows, identity, per_query):
+            if candidate.url in seen:
+                continue
+            if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
+                continue
+            if _is_generic_non_product_pdf(candidate.url, candidate.title, candidate.snippet):
+                continue
+            seen.add(candidate.url)
+            if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
+                continue
+            collected.append(candidate)
+        resolved = _resolve_valid_candidates(identity, collected, limit=limit, timeout=timeout, trace=trace)
+        if resolved:
+            return resolved
+    return []
+
+
+def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeout: int = 15, trace=None) -> list[SearchCandidate]:
+    queries = build_document_queries(identity)
     seen: set[str] = set()
     valid: list[SearchCandidate] = []
     per_query = max(4, min(limit, 8))
-    for query in build_document_queries(identity):
-        for candidate in search_web_query_candidates(identity, query, limit=per_query, timeout=timeout):
+    for query in queries:
+        candidates = search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace) if trace else search_web_query_candidates(identity, query, limit=per_query, timeout=timeout)
+        for candidate in candidates:
             if candidate.url in seen:
                 continue
             seen.add(candidate.url)
             if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
                 continue
-            if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(
-                candidate.url, candidate.title, candidate.snippet
-            ):
+            if _is_generic_non_product_pdf(candidate.url, candidate.title, candidate.snippet):
+                continue
+            if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
                 continue
             valid.append(candidate)
 
-    resolved = _resolve_valid_candidates(identity, valid, limit=limit, timeout=timeout)
+    resolved = _resolve_valid_candidates(identity, valid, limit=limit, timeout=timeout, trace=trace)
     if resolved:
         return resolved
+
+    browser_resolved = _browser_document_pass(identity, queries=queries, seen=seen, limit=limit, timeout=timeout, trace=trace)
+    if browser_resolved:
+        return browser_resolved
 
     fallback: list[SearchCandidate] = []
     for candidate in search_web(identity, limit=max(12, limit), timeout=max(15, timeout)):
@@ -211,10 +278,9 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeou
         seen.add(candidate.url)
         if not identity_matches_document(identity, candidate.url, candidate.title, candidate.snippet):
             continue
-        if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(
-            candidate.url, candidate.title, candidate.snippet
-        ):
+        if _is_generic_non_product_pdf(candidate.url, candidate.title, candidate.snippet):
+            continue
+        if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
             continue
         fallback.append(candidate)
-
-    return _resolve_valid_candidates(identity, fallback, limit=limit, timeout=timeout)
+    return _resolve_valid_candidates(identity, fallback, limit=limit, timeout=timeout, trace=trace)

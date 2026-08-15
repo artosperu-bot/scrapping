@@ -4,6 +4,7 @@ from product_intelligence.document_discovery import (
     classify_document_candidate,
     discover_product_documents,
     identity_matches_document,
+    resolve_document_candidate_urls,
 )
 from product_intelligence.models import ProductIdentity
 
@@ -142,4 +143,42 @@ def test_pdf_only_falls_back_to_real_product_search_when_document_queries_return
     assert [row.url for row in found] == [
         "https://www.jbl.com.pe/downloads/JBL_Quantum350_SpecSheet.pdf",
         "https://www.jbl.com.pe/downloads/JBL_Quantum350_OwnersManual.pdf",
+    ]
+
+
+def test_landing_uses_rendered_browser_dom_when_static_html_has_no_pdf(monkeypatch):
+    landing = SearchCandidate(
+        "https://www.jbl.com/JBLT530CBLKAM.html",
+        "JBL Tune 530C",
+        "JBLT530CBLKAM Documents & Downloads",
+        .99,
+        True,
+    )
+
+    class Response:
+        text = "<html><body><div id='documents'>Loaded by JS</div></body></html>"
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        "product_intelligence.document_discovery.requests.get",
+        lambda *args, **kwargs: Response(),
+    )
+    browser_calls = []
+    monkeypatch.setattr(
+        "product_intelligence.document_discovery.browser_pdf_links",
+        lambda url, **kwargs: browser_calls.append(url) or [
+            ("https://www.jbl.com/on/demandware.static/JBL_Tune530C_SpecSheet.pdf", "Spec Sheet")
+        ],
+        raising=False,
+    )
+
+    rows = resolve_document_candidate_urls(
+        ProductIdentity(mpn="JBLT530CBLKAM", model="JBLT530CBLKAM"),
+        landing,
+        timeout=1,
+    )
+    assert browser_calls == [landing.url]
+    assert [row.url for row in rows] == [
+        "https://www.jbl.com/on/demandware.static/JBL_Tune530C_SpecSheet.pdf"
     ]

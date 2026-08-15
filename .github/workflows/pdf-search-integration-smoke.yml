@@ -1,0 +1,37 @@
+name: PDF Search Integration Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/product_intelligence/browser_search.py'
+      - 'src/product_intelligence/document_discovery.py'
+      - 'src/product_intelligence/pdf_search_trace.py'
+      - 'tests/integration_pdf_search_smoke.py'
+      - '.github/workflows/pdf-search-integration-smoke.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install desktop profile
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[desktop,dev]'
+      - name: Install Chromium
+        run: playwright install chromium
+      - name: Run live PDF search smoke
+        run: python tests/integration_pdf_search_smoke.py
+      - name: Upload smoke summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-search-smoke
+          path: pdf-search-smoke.json
+          if-no-files-found: warn

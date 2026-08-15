@@ -297,8 +297,6 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
         if brand:
             out.append((brand, 5.5, "explicit_brand_label"))
 
-    # Non-product search collisions (flight numbers, legislation, music catalogues, etc.)
-    # may keep discovery broad, but cannot infer a product brand from title position.
     if _non_product_intent(candidate):
         return out
 
@@ -369,7 +367,6 @@ def _rank_brand_scores(
             score = base + evidence_score + (0.8 if any(x in hay for x in ("official", "manufacturer", "fabricante")) else 0.0)
             add(brand, score, host, official_hint=False)
 
-    # Context terms are discovery refinements only. They must never enter brand scoring.
     for signal in page_signals or []:
         if not signal.material or not signal.exact_raw_match:
             continue
@@ -398,6 +395,26 @@ def _rank_brand_scores(
         key: round(sum(max(0.0, value) for value in contributions.values()), 6)
         for key, contributions in host_contribs.items()
     }
+
+    # If a multi-word brand and its first-word prefix are supported by the same
+    # independent domains, they describe the same identity. Keep the more specific
+    # corroborated label instead of making it compete with its own prefix.
+    for long_key in list(scores):
+        words = str(labels.get(long_key) or "").split()
+        if len(words) < 2:
+            continue
+        short_key = _compact(words[0])
+        long_hosts = hosts_by_brand.get(long_key, set())
+        short_hosts = hosts_by_brand.get(short_key, set())
+        if (
+            short_key in scores
+            and short_key != long_key
+            and len(long_hosts) >= 2
+            and short_hosts
+            and short_hosts.issubset(long_hosts)
+        ):
+            scores.pop(short_key, None)
+
     return scores, labels, hosts_by_brand, official_hosts, model_by_brand
 
 

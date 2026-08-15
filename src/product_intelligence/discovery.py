@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -48,6 +49,30 @@ def _unwrap_ddg(href:str)->str:
     return href
 
 
+def _unwrap_bing(href:str)->str:
+    """Decode Bing tracking URLs without trusting the tracking host as a result."""
+    try:
+        parsed=urlparse(str(href or ""))
+        host=(parsed.hostname or "").lower()
+        if not (host=="bing.com" or host.endswith(".bing.com")) or "/ck/a" not in parsed.path:
+            return href
+        raw=(parse_qs(parsed.query).get("u") or [""])[0]
+        if not raw:
+            return href
+        if raw.startswith("a1"):
+            payload=raw[2:]
+            payload += "=" * (-len(payload) % 4)
+            decoded=base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8", errors="replace")
+            if decoded.startswith(("http://","https://")):
+                return decoded
+        decoded=unquote(raw)
+        if decoded.startswith(("http://","https://")):
+            return decoded
+    except Exception:
+        pass
+    return href
+
+
 def _unwrap_yahoo(href:str)->str:
     m=re.search(r"/RU=([^/]+)/RK=",href)
     if m:return unquote(m.group(1))
@@ -79,8 +104,10 @@ def _search_bing(q:str,timeout:int)->list[tuple[str,str,str]]:
             for li in soup.select("li.b_algo"):
                 a=li.select_one("h2 a")
                 if not a:continue
-                u=a.get("href") or ""
+                u=_unwrap_bing(a.get("href") or "")
                 if not u.startswith("http"):continue
+                host=(urlparse(u).hostname or "").lower()
+                if _is_search_provider_host(host):continue
                 node=li.select_one(".b_caption p")
                 rows.append((u,a.get_text(" ",strip=True),node.get_text(" ",strip=True) if node else ""))
     except requests.RequestException:pass
@@ -94,8 +121,10 @@ def _search_bing_rss(q:str,timeout:int)->list[tuple[str,str,str]]:
         if not r.ok or not r.content:return rows
         root=ET.fromstring(r.content)
         for item in root.findall(".//item"):
-            u=(item.findtext("link") or "").strip()
+            u=_unwrap_bing((item.findtext("link") or "").strip())
             if not u.startswith("http"):continue
+            host=(urlparse(u).hostname or "").lower()
+            if _is_search_provider_host(host):continue
             title=(item.findtext("title") or "").strip()
             raw=(item.findtext("description") or "").strip()
             rows.append((u,title,BeautifulSoup(raw,"html.parser").get_text(" ",strip=True)))
@@ -179,8 +208,6 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
         combined=f"{u} {t} {sn}"
         hay=key_norm(combined)
         hcompact=re.sub(r"[^a-z0-9]","",host)
-        # Discovery hint only. Final manufacturer authority is decided later by
-        # source_authority.py and cannot be manufactured by this hostname signal.
         likely_official=bool(brand and brand in hcompact and not any(m in host for m in MARKETPLACE_HINTS))
         strong_match=bool(strong and _contains_strong_identifier(combined,strong))
         model_match=bool(model and fuzz_contains(model,hay))
@@ -204,49 +231,41 @@ def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=
     return [row.url for row in ranked[:limit]]
 
 
-def _bootstrap_unknown_identity(identity:ProductIdentity,limit:int,timeout:int):
+def _bootstrap_unknown_identity(identity:ProductIdentity,timeout:int):
     if identity.brand:
-        return None
+        return identity,None
     try:
         from .identity_bootstrap import bootstrap_identity
-        result=bootstrap_identity(identity,limit_per_query=max(8,min(limit,18)),timeout=max(5,min(timeout,8)))
+        result=bootstrap_identity(identity,limit_per_query=14,timeout=max(5,min(timeout,8)))
+        if result.status=="RESOLVED" and result.identity.brand:
+            return result.identity,result.official_domain_hint
     except Exception:
-        return None
-    if result.status!="RESOLVED" or not result.identity.brand:
-        return result
-    # Resolution came from search evidence; mutating the caller identity here makes
-    # the learned brand available to ranking and later strict page validation.
-    identity.brand=result.identity.brand
-    if not identity.model and result.identity.model:
-        identity.model=result.identity.model
-    return result
+        pass
+    return identity,None
 
 
 def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10)->list[SearchCandidate]:
-    bootstrap=_bootstrap_unknown_identity(identity,limit,timeout)
-    q=build_query(identity)
+    effective_identity, official_hint = _bootstrap_unknown_identity(identity,timeout)
+    q=build_query(effective_identity)
     if not q:return []
-    strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin,identity.sku] if x),None)
+    strong_raw=next((x for x in [effective_identity.mpn,effective_identity.ean,effective_identity.upc,effective_identity.gtin,effective_identity.sku] if x),None)
     queries=[]
     for candidate in [q, str(strong_raw or '').strip()]:
         if candidate and candidate not in queries:queries.append(candidate)
 
-    # Once a brand has been resolved from evidence, use a small adaptive expansion
-    # immediately instead of waiting for a first fully accepted product page.
-    if bootstrap is not None and bootstrap.status=="RESOLVED":
-        try:
-            from .identity_bootstrap import build_deep_queries
-            for candidate in build_deep_queries(identity,bootstrap.official_domain_hint)[:3]:
-                if candidate and candidate not in queries:queries.append(candidate)
-        except Exception:
-            pass
-
     urls=[]
-    for query in queries[:3]:
+    for query in queries[:2]:
         urls.extend(_provider_search(query,max(6,min(timeout,10))))
-    ranked=_rank_candidates(urls,identity,limit)
+    ranked=_rank_candidates(urls,effective_identity,limit)
 
-    brand=str(identity.brand or '').strip()
+    brand=str(effective_identity.brand or '').strip()
+    if brand:
+        from .identity_bootstrap import build_deep_queries
+        deep_queries=build_deep_queries(effective_identity,official_hint)
+        for dq in deep_queries[:3]:
+            urls.extend(_provider_search(dq,max(6,min(timeout,10))))
+        ranked=_rank_candidates(urls,effective_identity,limit)
+
     if strong_raw and brand and not any(c.likely_official for c in ranked):
         strong=str(strong_raw).strip()
         official_queries=[
@@ -254,26 +273,26 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10)->list[Searc
             f'"{strong}" "{brand}" specifications',
             f'"{strong}" "{brand}" support',
         ]
-        descriptive = _descriptive_model(identity)
+        descriptive = _descriptive_model(effective_identity)
         if descriptive:
             official_queries.append(f'"{descriptive}" "{brand}" official product')
-        for oq in official_queries[:4]:
+        for oq in official_queries[:3]:
             urls.extend(_provider_search(oq,max(6,min(timeout,10))))
-            reranked=_rank_candidates(urls,identity,limit)
+            reranked=_rank_candidates(urls,effective_identity,limit)
             if any(c.likely_official for c in reranked):
                 ranked=reranked
                 break
         else:
-            ranked=_rank_candidates(urls,identity,limit)
+            ranked=_rank_candidates(urls,effective_identity,limit)
     if ranked:return ranked
 
     if strong_raw:
         strong=str(strong_raw).strip()
         retry_queries=[f'"{strong}" product',f'{strong} specifications',f'{strong} manual pdf']
-        for attempt,query in enumerate(retry_queries):
+        for attempt,query in enumerate(retry_queries[:3]):
             if attempt:time.sleep(.15)
             urls.extend(_provider_search(query,max(6,min(timeout,10))))
-            ranked=_rank_candidates(urls,identity,limit)
+            ranked=_rank_candidates(urls,effective_identity,limit)
             if ranked:return ranked
     return []
 

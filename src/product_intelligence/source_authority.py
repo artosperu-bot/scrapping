@@ -7,26 +7,25 @@ import re
 from .models import Evidence
 from .normalize import key_norm
 
-# Source authority is about fitness for a fact, not about product/category hardcoding.
-# Unknown attributes fall back to the generic hierarchy.
 FIELD_SOURCE_ORDER: dict[str, tuple[str, ...]] = {
-    "gtin": ("manufacturer", "official_pdf", "structured_catalog", "distributor", "secondary", "marketplace"),
-    "ean": ("manufacturer", "official_pdf", "structured_catalog", "distributor", "secondary", "marketplace"),
-    "upc": ("manufacturer", "official_pdf", "structured_catalog", "distributor", "secondary", "marketplace"),
-    "bluetooth": ("manufacturer", "official_pdf", "regulatory", "technical_catalog", "secondary", "marketplace"),
-    "battery_life": ("manufacturer", "official_pdf", "technical_catalog", "secondary", "marketplace"),
-    "package_width": ("official_pdf", "manufacturer", "distributor", "secondary", "marketplace"),
-    "package_length": ("official_pdf", "manufacturer", "distributor", "secondary", "marketplace"),
-    "package_height": ("official_pdf", "manufacturer", "distributor", "secondary", "marketplace"),
-    "package_weight": ("official_pdf", "manufacturer", "distributor", "secondary", "marketplace"),
-    "warranty": ("manufacturer", "official_pdf", "distributor", "secondary", "marketplace"),
+    "gtin": ("manufacturer", "official_pdf", "technical_document", "structured_catalog", "distributor", "secondary", "marketplace"),
+    "ean": ("manufacturer", "official_pdf", "technical_document", "structured_catalog", "distributor", "secondary", "marketplace"),
+    "upc": ("manufacturer", "official_pdf", "technical_document", "structured_catalog", "distributor", "secondary", "marketplace"),
+    "bluetooth": ("manufacturer", "official_pdf", "technical_document", "regulatory", "technical_catalog", "secondary", "marketplace"),
+    "battery_life": ("manufacturer", "official_pdf", "technical_document", "technical_catalog", "secondary", "marketplace"),
+    "package_width": ("official_pdf", "manufacturer", "technical_document", "distributor", "secondary", "marketplace"),
+    "package_length": ("official_pdf", "manufacturer", "technical_document", "distributor", "secondary", "marketplace"),
+    "package_height": ("official_pdf", "manufacturer", "technical_document", "distributor", "secondary", "marketplace"),
+    "package_weight": ("official_pdf", "manufacturer", "technical_document", "distributor", "secondary", "marketplace"),
+    "warranty": ("manufacturer", "official_pdf", "technical_document", "distributor", "secondary", "marketplace"),
 }
 
-GENERIC_ORDER = ("manufacturer", "official_pdf", "regulatory", "structured_catalog", "distributor", "secondary", "marketplace", "unknown")
+GENERIC_ORDER = ("manufacturer", "official_pdf", "technical_document", "regulatory", "structured_catalog", "distributor", "secondary", "marketplace", "unknown")
 
 SOURCE_CAPS = {
     "manufacturer": 1.00,
     "official_pdf": .98,
+    "technical_document": .90,
     "regulatory": .96,
     "structured_catalog": .93,
     "distributor": .92,
@@ -41,6 +40,8 @@ def source_family(ev: Evidence) -> str:
     url = key_norm(ev.source_url or "")
     if "official pdf" in source_type:
         return "official_pdf"
+    if "technical pdf" in source_type or "technical document" in source_type or "pdf native" in source_type:
+        return "technical_document"
     if "manufacturer" in source_type or "official" in source_type:
         return "manufacturer"
     if "regulatory" in source_type or "certification" in source_type:
@@ -70,7 +71,6 @@ def authority_cap(canonical: str, ev: Evidence) -> float:
 
 
 def effective_quality(canonical: str, ev: Evidence, base_quality: float) -> tuple[int, float]:
-    """Return (authority priority, capped quality) without manufacturing confidence."""
     cap = authority_cap(canonical, ev)
     return authority_rank(canonical, ev), min(float(base_quality or 0), cap)
 
@@ -108,10 +108,6 @@ def _authority_host(value: str | None) -> str:
 
 
 def classify_source_authority(signals: AuthoritySignals) -> AuthorityAssessment:
-    """Classify site authority from independent ownership signals.
-
-    A brand token in a hostname is deliberately never enough to prove manufacturer ownership.
-    """
     host = _authority_host(signals.url)
     canonical = _authority_host(signals.canonical_host)
     brand = _authority_norm(signals.requested_brand)

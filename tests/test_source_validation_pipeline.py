@@ -1,8 +1,11 @@
 import pytest
 
+import product_intelligence.batch as batch_module
 import product_intelligence.pipeline as pipeline_module
+from product_intelligence.batch import BatchItem, scrape_item
 from product_intelligence.models import ProductIdentity
 from product_intelligence.pipeline import ProductPipeline
+from product_intelligence.source_strategy import SourceStrategy
 from product_intelligence.web_fetch import FetchResult
 
 
@@ -97,3 +100,59 @@ def test_multiple_independent_ownership_signals_allow_manufacturer(monkeypatch):
     assert rec.fetch["source_class"] == "manufacturer"
     assert rec.fetch["source_decision"]["authority"] == "manufacturer"
     assert rec.fetch["source_decision"]["identity"] == "EXACT"
+
+
+def _one_candidate(url: str):
+    return [type("Candidate", (), {
+        "url": url,
+        "likely_official": False,
+        "score": 1.0,
+        "manual_source": False,
+    })()]
+
+
+def test_batch_logs_non_material_source_rejection(monkeypatch, tmp_path):
+    url = "https://brand.example/category"
+    monkeypatch.setattr(batch_module, "search_web", lambda *a, **k: _one_candidate(url))
+
+    class FakePipeline:
+        def process_url(self, *args, **kwargs):
+            raise ValueError(
+                "SOURCE_VALIDATION_REJECTED: PAGE_TYPE_NOT_MATERIAL "
+                "page_type=CATEGORY identity=EXACT authority=manufacturer"
+            )
+
+    monkeypatch.setattr(batch_module, "ProductPipeline", FakePipeline)
+    logs = []
+    rec = scrape_item(
+        BatchItem(row=1, sheet="TEST", identity=ProductIdentity(brand="Brand", model="X100", mpn="ABC-100")),
+        str(tmp_path),
+        log=logs.append,
+        source_strategy=SourceStrategy(web=True, pdf=False, ocr=False, mistral=False),
+    )
+    assert rec is None
+    assert any("PAGE_TYPE=CATEGORY" in line for line in logs)
+    assert any("EVIDENCE_ALLOWED=NO reason=PAGE_TYPE_NOT_MATERIAL" in line for line in logs)
+
+
+def test_batch_logs_cross_model_identity_conflict(monkeypatch, tmp_path):
+    url = "https://brand.example/products/model-26"
+    monkeypatch.setattr(batch_module, "search_web", lambda *a, **k: _one_candidate(url))
+
+    class FakePipeline:
+        def process_url(self, *args, **kwargs):
+            raise ValueError(
+                "SOURCE_VALIDATION_REJECTED: IDENTITY_CONFLICT identity=CONFLICT reasons=MODEL_CODE_CONFLICT"
+            )
+
+    monkeypatch.setattr(batch_module, "ProductPipeline", FakePipeline)
+    logs = []
+    rec = scrape_item(
+        BatchItem(row=1, sheet="TEST", identity=ProductIdentity(brand="Brand", model="Model 22")),
+        str(tmp_path),
+        log=logs.append,
+        source_strategy=SourceStrategy(web=True, pdf=False, ocr=False, mistral=False),
+    )
+    assert rec is None
+    assert any("IDENTITY=CONFLICT" in line for line in logs)
+    assert any("EVIDENCE_ALLOWED=NO reason=IDENTITY_CONFLICT" in line for line in logs)

@@ -53,20 +53,30 @@ def is_pdf_payload(content_type:str|None,data:bytes)->bool:
 
 def validate_pdf_identity(identity:ProductIdentity,text:str,url:str="")->PdfIdentityMatch:
     hay=_compact(f"{url} {text}")
+    text_hay=_compact(text)
     strong=[x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
+    brand=_compact(identity.brand)
+    model=_compact(identity.model or identity.product_name)
     if strong:
-        if any(_compact(x) in hay for x in strong):
-            return PdfIdentityMatch(True,.99,"strong_identifier")
-        model=_compact(identity.model or identity.product_name)
-        brand=_compact(identity.brand)
-        if brand and model and brand in hay and model in hay:
+        matched=next((_compact(x) for x in strong if _compact(x) and _compact(x) in hay),None)
+        if matched:
+            # Once brand identity has been resolved, a direct-discovery PDF must bind
+            # the identifier to that brand in its actual content. This prevents an
+            # incidental phrase such as "A 2794" in an unrelated document from being
+            # accepted as product evidence merely because compact normalization matches.
+            if brand:
+                if brand in text_hay:
+                    return PdfIdentityMatch(True,.99,"strong_identifier_brand")
+                if model and model in text_hay and matched in text_hay:
+                    return PdfIdentityMatch(True,.94,"strong_identifier_model")
+                return PdfIdentityMatch(False,.0,"strong_identifier_without_brand_binding")
+            return PdfIdentityMatch(True,.97,"strong_identifier")
+        if brand and model and brand in text_hay and model in text_hay:
             return PdfIdentityMatch(True,.92,"brand_model")
         return PdfIdentityMatch(False,.0,"strong_identifier_missing")
-    model=_compact(identity.model or identity.product_name)
-    brand=_compact(identity.brand)
-    if brand and model and brand in hay and model in hay:
+    if brand and model and brand in text_hay and model in text_hay:
         return PdfIdentityMatch(True,.92,"brand_model")
-    if model and model in hay:
+    if model and model in text_hay:
         return PdfIdentityMatch(True,.86,"model")
     return PdfIdentityMatch(False,.0,"identity_not_confirmed")
 

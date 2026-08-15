@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -17,6 +18,13 @@ from .web_fetch import fetch_page
 _GENERIC_LEADING = {
     "buy", "shop", "official", "product", "products", "specification", "specifications",
     "specs", "manual", "datasheet", "review", "reviews", "new", "the", "a", "an",
+    "teardown", "unboxing", "hands", "on", "guide", "of", "for", "with", "by",
+}
+_CONTEXT_STOPWORDS = {
+    "buy", "shop", "official", "product", "products", "specification", "specifications", "specs",
+    "manual", "datasheet", "review", "reviews", "new", "the", "a", "an", "for", "with", "from",
+    "and", "or", "of", "to", "in", "on", "by", "online", "price", "sale", "amazon", "ebay",
+    "walmart", "support", "page", "pdf", "download", "tracking", "history",
 }
 _EXPLICIT_BRAND = re.compile(
     r"(?:brand|manufacturer|marca|fabricante)\s*[:\-]\s*([A-Za-z0-9][A-Za-z0-9&.+_-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&.+_-]*){0,2})",
@@ -82,6 +90,29 @@ def identity_probe_budget() -> tuple[int, int]:
     return 4, 8
 
 
+def _normalized_tokens(value: str | None) -> list[str]:
+    raw = re.findall(r"[a-z]+|\d+", key_norm(value or ""))
+    out: list[str] = []
+    i = 0
+    while i < len(raw):
+        token = raw[i]
+        if token in {"gen", "generation"} and i + 1 < len(raw) and raw[i + 1].isdigit():
+            out.append(f"g{raw[i + 1]}")
+            i += 2
+            continue
+        if token == "g" and i + 1 < len(raw) and raw[i + 1].isdigit():
+            out.append(f"g{raw[i + 1]}")
+            i += 2
+            continue
+        if re.fullmatch(r"g\d+", token):
+            out.append(token)
+            i += 1
+            continue
+        out.append(token)
+        i += 1
+    return out
+
+
 def build_bootstrap_queries(identity: ProductIdentity) -> list[str]:
     raw = _raw_value(identity)
     if not raw:
@@ -95,12 +126,22 @@ def build_bootstrap_queries(identity: ProductIdentity) -> list[str]:
     ]))
 
 
+def build_context_queries(raw: str, terms: list[str]) -> list[str]:
+    quoted = f'"{raw}"'
+    out: list[str] = []
+    for term in terms[:3]:
+        term = str(term or "").strip()
+        if term:
+            out.append(f'{quoted} "{term}"')
+    return list(dict.fromkeys(out))
+
+
 def build_deep_queries(identity: ProductIdentity, official_domain_hint: str | None = None) -> list[str]:
     raw = _raw_value(identity)
     if not raw:
         return []
     quoted = f'"{raw}"'
-    brand = str(identity.brand or identity.manufacturer or "").strip()
+    brand = str(identity.brand or getattr(identity, "manufacturer", None) or "").strip()
     brand_part = f' "{brand}"' if brand else ""
     base = f"{quoted}{brand_part}"
     queries = [
@@ -139,14 +180,20 @@ def _candidate_text_matches_raw(candidate: SearchCandidate, raw: str) -> tuple[b
 
 def _candidate_has_full_raw(candidate: SearchCandidate, raw: str) -> bool:
     raw_compact = _compact(raw)
-    if not raw_compact:
+    combined_text = f"{candidate.title} {candidate.snippet} {candidate.url}"
+    combined_compact = _compact(combined_text)
+    if raw_compact and raw_compact in combined_compact:
+        return True
+    raw_tokens = _normalized_tokens(raw)
+    if len(raw_tokens) <= 1:
         return False
-    combined = _compact(f"{candidate.title} {candidate.snippet} {candidate.url}")
-    return raw_compact in combined
+    candidate_tokens = set(_normalized_tokens(combined_text))
+    informative = [t for t in raw_tokens if len(t) >= 2 or any(ch.isdigit() for ch in t)]
+    return bool(informative) and all(token in candidate_tokens for token in informative)
 
 
 def filter_bootstrap_candidates(raw: str, candidates: list[SearchCandidate]) -> list[SearchCandidate]:
-    """Discovery stays broad, but identity bootstrap only ranks full raw-ID matches."""
+    """Discovery stays broad, but identity resolution requires the complete model/identifier."""
     out: list[SearchCandidate] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -160,6 +207,35 @@ def filter_bootstrap_candidates(raw: str, candidates: list[SearchCandidate]) -> 
         seen.add(candidate.url)
         out.append(candidate)
     return out
+
+
+def derive_context_terms(raw: str, candidates: list[SearchCandidate]) -> list[str]:
+    """Learn query refinements from repeated exact-result context without assigning identity."""
+    raw_tokens = set(_normalized_tokens(raw))
+    host_sets: dict[str, set[str]] = defaultdict(set)
+    counts: Counter[str] = Counter()
+    labels: dict[str, str] = {}
+    for candidate in filter_bootstrap_candidates(raw, candidates):
+        host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
+        text = f"{candidate.title} {candidate.snippet}"
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9+.-]{1,24}", text):
+            norm = key_norm(token).strip(".-")
+            if not norm or norm in _CONTEXT_STOPWORDS or norm in raw_tokens:
+                continue
+            if norm.isdigit() or len(norm) < 3:
+                continue
+            labels.setdefault(norm, token.strip(".,:;()[]{}"))
+            counts[norm] += 1
+            if host:
+                host_sets[norm].add(host)
+    ranked = sorted(
+        counts,
+        key=lambda term: (len(host_sets[term]), counts[term], len(term)),
+        reverse=True,
+    )
+    # Prefer terms corroborated by at least two result occurrences; host diversity wins.
+    good = [term for term in ranked if counts[term] >= 2]
+    return [labels[term] for term in good[:5]]
 
 
 def _clean_brand_phrase(value: str) -> str | None:
@@ -178,25 +254,24 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
     title = str(candidate.title or "").strip()
     snippet = str(candidate.snippet or "").strip()
     title_match, snippet_match, url_match = _candidate_text_matches_raw(candidate, raw)
-    if not (title_match or snippet_match or url_match):
+    if not (title_match or snippet_match or url_match or _candidate_has_full_raw(candidate, raw)):
         return []
     out: list[tuple[str, float, str]] = []
     for match in _EXPLICIT_BRAND.finditer(f"{title} {snippet}"):
         brand = _clean_brand_phrase(match.group(1))
         if brand:
             out.append((brand, 4.5, "explicit_brand_label"))
+
+    # Prefer the first meaningful title token after removing editorial prefixes.
     raw_pattern = re.compile(re.escape(raw), re.I)
     match = raw_pattern.search(title)
     if match:
-        prefix = title[:match.start()].strip(" |:-–—•")
+        prefix = title[:match.start()].strip(" |:-–—•()")
         if prefix:
-            segment = re.split(r"[|:–—•]", prefix)[-1].strip()
-            tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9&.+_-]*", segment)
-            if tokens:
-                brand = _clean_brand_phrase(tokens[-1] if not _is_strong_code(raw) else tokens[0])
-                if brand:
-                    out.append((brand, 3.0, "brand_before_raw_in_title"))
-    elif _is_strong_code(raw) and (snippet_match or url_match):
+            brand = _clean_brand_phrase(prefix)
+            if brand:
+                out.append((brand, 3.0, "brand_before_raw_in_title"))
+    elif _is_strong_code(raw) and (snippet_match or url_match or _candidate_has_full_raw(candidate, raw)):
         segment = re.split(r"[|:–—•]", title)[0].strip()
         brand = _clean_brand_phrase(segment)
         if brand:
@@ -248,7 +323,6 @@ def _rank_brand_scores(
         for brand, evidence_score, _reason in _brand_evidence(candidate, raw):
             hay = key_norm(f"{candidate.title} {candidate.snippet}")
             score = base + evidence_score + (0.8 if any(x in hay for x in ("official", "manufacturer", "fabricante")) else 0.0)
-            # SERP hostname similarity is never sufficient for an official-domain hint.
             add(brand, score, host, official_hint=False)
 
     for signal in page_signals or []:
@@ -261,9 +335,9 @@ def _rank_brand_scores(
         score = 7.0 if signal.structured_brand else 4.5
         if signal.strong_identifier_match:
             score += 3.0
-        if signal.model and _compact(raw) in _compact(signal.model):
+        if signal.model and _candidate_has_full_raw(SearchCandidate(signal.url, signal.model, ""), raw):
             score += 1.5
-        if signal.product_name and _compact(raw) in _compact(signal.product_name):
+        if signal.product_name and _candidate_has_full_raw(SearchCandidate(signal.url, signal.product_name, ""), raw):
             score += 1.5
         if signal.authority_owned:
             score += 2.5
@@ -309,8 +383,11 @@ def _finalize_resolution(
     decisive_cross_source = host_count >= 2 and best_score >= 11.0 and (
         margin >= 3.0 or best_score >= max(1.0, runner_score) * 1.35
     )
+    # Strong repeated textual dominance may resolve an ambiguous catalog code even
+    # when search dedupe leaves one host, but requires a large safety margin.
+    decisive_dominance = best_score >= 24.0 and margin >= 12.0 and best_score >= max(1.0, runner_score) * 1.8
     decisive_serp = not page_signals and host_count >= 2 and best_score >= 9.0 and margin >= 3.0
-    resolved = decisive_page or decisive_cross_source or decisive_serp
+    resolved = decisive_page or decisive_cross_source or decisive_dominance or decisive_serp
     if not resolved:
         return IdentityBootstrapResult(
             identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED",
@@ -325,7 +402,7 @@ def _finalize_resolution(
     if not learned.model:
         observed_models = sorted(model_by_brand.get(best_key, []), reverse=True)
         observed_model = observed_models[0][1] if observed_models else None
-        if observed_model and _compact(raw) in _compact(observed_model):
+        if observed_model and _candidate_has_full_raw(SearchCandidate("https://model.invalid", observed_model, ""), raw):
             learned.model = raw if not _is_strong_code(raw) else observed_model
         elif not _is_strong_code(raw):
             learned.model = raw
@@ -411,7 +488,7 @@ def _probe_candidate_page(identity: ProductIdentity, candidate: SearchCandidate)
         observed = derive_observed_identity(identity, page)
         page_assessment = classify_page_type(derive_page_signals(fetched.html, fetched.final_url, page))
         page_text = str(page.get("text") or "")
-        exact_raw = bool(_compact(raw) and _compact(raw) in _compact(page_text))
+        exact_raw = _candidate_has_full_raw(SearchCandidate(fetched.final_url, page_text[:2000], ""), raw)
         strong_match = False
         if _is_strong_code(raw):
             observed_ids = [*observed.mpns, *observed.gtins, *observed.eans, *observed.upcs]
@@ -496,64 +573,93 @@ def _search_raw(query: str, raw: str, *, limit: int = 18, timeout: int = 8) -> l
     return combined[:limit]
 
 
+def _annotate_result(result: IdentityBootstrapResult, executed: list[str], collected: list[SearchCandidate], page_signals: list[PageIdentitySignal]):
+    result.queries_executed = list(executed)
+    result.search_results_found = len(collected)
+    result.candidate_urls = [c.url for c in collected]
+    result.page_probes_attempted = len(page_signals)
+    result.page_probes_succeeded = sum(1 for s in page_signals if s.material and s.exact_raw_match)
+    result.page_signals = [
+        {
+            "url": s.url,
+            "brand": s.brand,
+            "manufacturer": s.manufacturer,
+            "model": s.model,
+            "product_name": s.product_name,
+            "exact_raw_match": s.exact_raw_match,
+            "strong_identifier_match": s.strong_identifier_match,
+            "material": s.material,
+            "structured_brand": s.structured_brand,
+            "authority_owned": s.authority_owned,
+            "reason": s.reason,
+        }
+        for s in page_signals
+    ]
+    return result
+
+
 def bootstrap_identity(identity: ProductIdentity, *, limit_per_query: int = 18, timeout: int = 8) -> IdentityBootstrapResult:
     raw = _raw_value(identity)
-    queries = build_bootstrap_queries(identity)
+    base_queries = build_bootstrap_queries(identity)
+    if not raw or not base_queries:
+        return IdentityBootstrapResult(identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED", reason="NO_RAW_IDENTITY")
+
     collected: list[SearchCandidate] = []
     seen_urls: set[str] = set()
-    result = IdentityBootstrapResult(identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED", reason="NO_SEARCH_RESULTS")
+    executed: list[str] = []
     page_signals: list[PageIdentitySignal] = []
     probed_urls: set[str] = set()
     probe_limit, _probe_timeout = identity_probe_budget()
 
-    for index, query in enumerate(queries):
-        rows = _search_raw(query, raw, limit=limit_per_query, timeout=timeout)
-        for row in rows:
-            if row.url in seen_urls:
-                continue
-            seen_urls.add(row.url)
-            collected.append(row)
+    def search_and_add(query: str):
+        if not query or query in executed:
+            return
+        executed.append(query)
+        for row in _search_raw(query, raw, limit=limit_per_query, timeout=timeout):
+            if row.url not in seen_urls:
+                seen_urls.add(row.url)
+                collected.append(row)
 
-        serp_result = resolve_identity_from_candidates(identity, collected)
-        fresh_pool = [c for c in collected if c.url not in probed_urls]
-        fresh_signals = _probe_top_candidates(identity, fresh_pool, max_probes=max(0, probe_limit - len(page_signals)))
-        for candidate in fresh_pool:
-            if any(s.url == candidate.url for s in fresh_signals):
-                probed_urls.add(candidate.url)
-        page_signals.extend(fresh_signals)
+    # 1) Exact raw query first.
+    search_and_add(base_queries[0])
+    result = resolve_identity_from_candidates(identity, collected)
 
-        if page_signals:
-            result = resolve_identity_with_page_signals(identity, collected, page_signals)
-            if result.status != "RESOLVED" and serp_result.status == "RESOLVED" and len(serp_result.brand_hosts.get(serp_result.identity.brand or "", 0) if False else []) == 0:
-                # no-op: keep stricter page-backed result when page evidence exists
-                pass
-        else:
-            result = serp_result
+    # 2) If ambiguous, learn repeated context from exact results and refine discovery.
+    if result.status != "RESOLVED":
+        for query in build_context_queries(raw, derive_context_terms(raw, collected))[:2]:
+            search_and_add(query)
+        result = resolve_identity_from_candidates(identity, collected)
 
-        result.queries_executed = queries[:index + 1]
-        result.search_results_found = len(collected)
-        result.candidate_urls = [c.url for c in collected]
-        result.page_probes_attempted = len(page_signals)
-        result.page_probes_succeeded = sum(1 for s in page_signals if s.material and s.exact_raw_match)
-        result.page_signals = [
-            {
-                "url": s.url,
-                "brand": s.brand,
-                "manufacturer": s.manufacturer,
-                "model": s.model,
-                "product_name": s.product_name,
-                "exact_raw_match": s.exact_raw_match,
-                "strong_identifier_match": s.strong_identifier_match,
-                "material": s.material,
-                "structured_brand": s.structured_brand,
-                "authority_owned": s.authority_owned,
-                "reason": s.reason,
-            }
-            for s in page_signals
-        ]
-        if result.status == "RESOLVED":
-            break
-        if len(page_signals) >= probe_limit and index >= 2:
-            # queries may still add new exact SERP evidence, but do not keep probing pages indefinitely
-            continue
-    return result
+    # 3) Probe only the highest-value exact candidates, never the whole result set.
+    fresh_pool = [c for c in collected if c.url not in probed_urls]
+    fresh_signals = _probe_top_candidates(identity, fresh_pool, max_probes=probe_limit)
+    page_signals.extend(fresh_signals)
+    for signal in fresh_signals:
+        probed_urls.add(signal.url)
+    if page_signals:
+        page_result = resolve_identity_with_page_signals(identity, collected, page_signals)
+        if page_result.status == "RESOLVED" or result.status != "RESOLVED":
+            result = page_result
+
+    # 4) Only then spend the remaining generic queries.
+    if result.status != "RESOLVED":
+        for query in base_queries[1:]:
+            search_and_add(query)
+            serp_result = resolve_identity_from_candidates(identity, collected)
+            if serp_result.status == "RESOLVED":
+                result = serp_result
+                break
+            if len(page_signals) < probe_limit:
+                fresh_pool = [c for c in collected if c.url not in probed_urls]
+                new_signals = _probe_top_candidates(identity, fresh_pool, max_probes=probe_limit - len(page_signals))
+                page_signals.extend(new_signals)
+                for signal in new_signals:
+                    probed_urls.add(signal.url)
+                if page_signals:
+                    result = resolve_identity_with_page_signals(identity, collected, page_signals)
+                    if result.status == "RESOLVED":
+                        break
+            else:
+                result = serp_result
+
+    return _annotate_result(result, executed, collected, page_signals)

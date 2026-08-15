@@ -53,3 +53,28 @@ def test_duplicate_evidence_is_one_vote():
     assert not rec.conflicts
     assert len(rec.evidence) == 1
     assert "evidence_deduplicated:2" in rec.warnings
+
+
+def test_valid_document_cannot_replace_requested_mpn_with_sibling_code():
+    identity = ProductIdentity(brand="Acme", model="Widget 22", mpn="ABC-22")
+    evidence = [
+        ev("MPN", "ABC-22", "https://docs.example/manual.pdf"),
+        ev("MPN", "ABC-26", "https://docs.example/manual.pdf"),
+        ev("Weight", "200 g", "https://docs.example/manual.pdf"),
+    ]
+    rec = build_record_strict(identity, evidence, ["https://docs.example/manual.pdf"])
+    assert all(str(e.raw_value) != "ABC-26" for e in rec.evidence)
+    rejected = (rec.evidence_graph or {}).get("rejected_evidence", [])
+    assert any("IDENTITY_EVIDENCE_CONFLICT:mpn" in str(row.get("reason")) for row in rejected)
+
+
+def test_valid_family_document_cannot_promote_sibling_model():
+    identity = ProductIdentity(brand="Acme", model="Widget 22")
+    rec = build_record_strict(
+        identity,
+        [ev("Model", "Widget 26 Ultra", "https://docs.example/family-manual.pdf")],
+        ["https://docs.example/family-manual.pdf"],
+    )
+    assert not rec.evidence
+    rejected = (rec.evidence_graph or {}).get("rejected_evidence", [])
+    assert any("IDENTITY_EVIDENCE_CONFLICT:model" in str(row.get("reason")) for row in rejected)

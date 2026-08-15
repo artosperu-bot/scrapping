@@ -25,10 +25,12 @@ def test_process_pdf_document_reuses_existing_pdf_evidence_path(monkeypatch):
     )
 
     assert rec.identity.mpn == "JBLQ350WLBLKAM"
-    assert rec.fetch["source_class"] == "official_pdf"
+    assert rec.fetch["source_class"] == "technical_document"
+    assert rec.fetch["source_decision"]["page_type"] == "DOCUMENT"
+    assert rec.fetch["source_decision"]["identity"] == "EXACT"
     assert rec.fetch["direct_document"] is True
     assert "https://support.jbl.com/q350-manual.pdf" in rec.sources
-    assert any(ev.attribute == "Driver size" and ev.source_type == "official_pdf" for ev in rec.evidence)
+    assert any(ev.attribute == "Driver size" and ev.source_type == "technical_pdf" for ev in rec.evidence)
 
 
 def test_process_pdf_document_rejects_wrong_model(monkeypatch):

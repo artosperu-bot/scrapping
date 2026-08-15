@@ -16,7 +16,10 @@ def test_process_pdf_document_reuses_existing_pdf_evidence_path(monkeypatch):
             confidence=.94,
         )
     ]
-    monkeypatch.setattr("product_intelligence.document_ingestion.extract_pdf", lambda url, match_level, confidence: (text, extracted))
+    monkeypatch.setattr(
+        "product_intelligence.document_ingestion.extract_pdf",
+        lambda url, match_level, confidence, **kwargs: (text, extracted),
+    )
 
     rec = process_pdf_document(
         identity,
@@ -37,7 +40,7 @@ def test_process_pdf_document_rejects_wrong_model(monkeypatch):
     identity = ProductIdentity(brand="JBL", model="Quantum 350", mpn="JBLQ350WLBLKAM")
     monkeypatch.setattr(
         "product_intelligence.document_ingestion.extract_pdf",
-        lambda url, match_level, confidence: ("JBL Quantum 400 user manual", []),
+        lambda url, match_level, confidence, **kwargs: ("JBL Quantum 400 user manual", []),
     )
     try:
         process_pdf_document(identity, "https://support.jbl.com/quantum400.pdf")

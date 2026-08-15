@@ -13,6 +13,19 @@ from .text_extract import extract_text_evidence
 from .evidence_policy import decide_evidence
 
 
+def _pdf_focus_terms(identity: ProductIdentity, target_semantics: list[str] | None) -> list[str]:
+    values = [
+        identity.model,
+        identity.product_name,
+        identity.mpn,
+        identity.ean,
+        identity.upc,
+        identity.gtin,
+        *(target_semantics or []),
+    ]
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value or "").strip()))
+
+
 def process_pdf_document(
     identity: ProductIdentity,
     url: str,
@@ -28,6 +41,7 @@ def process_pdf_document(
     manufacturer-owned documents. Exact document identity is still mandatory.
     """
     source_url = url
+    focus_terms = _pdf_focus_terms(identity, target_semantics)
     fetch_meta = {
         "method": "direct_pdf",
         "status_code": 200,
@@ -39,7 +53,12 @@ def process_pdf_document(
     }
 
     if trace is None and download_dir is None:
-        pdf_text, evidence = extract_pdf(url, "EXACT", confidence)
+        pdf_text, evidence = extract_pdf(
+            url,
+            "EXACT",
+            confidence,
+            focus_terms=focus_terms,
+        )
     else:
         if download_dir is None:
             with TemporaryDirectory(prefix="product-intelligence-pdf-") as tmp:
@@ -58,6 +77,7 @@ def process_pdf_document(
             downloaded.final_url,
             "EXACT",
             confidence,
+            focus_terms=focus_terms,
         )
         fetch_meta.update({
             "method": "downloaded_pdf",
@@ -143,6 +163,7 @@ def process_pdf_document(
         "direct_document": True,
         "identity_reason": match.reason,
         "target_semantics_requested": list(target_semantics or []),
+        "pdf_focus_terms": focus_terms,
     }
     rec.evidence_graph = dict(rec.evidence_graph or {})
     rec.evidence_graph["source_decision"] = source_decision

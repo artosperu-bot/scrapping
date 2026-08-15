@@ -1,0 +1,41 @@
+name: Temporary Identity Hardening
+
+on:
+  push:
+    branches:
+      - feat/source-validation-gates-universal
+    paths:
+      - .github/workflows/temporary-identity-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/source-validation-gates-universal
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Apply generic identity hardening
+        run: python scripts/qa_apply_identity_hardening.py
+      - name: Verify focused identity regressions
+        run: |
+          python -m pytest -q tests/test_identity_general_hardening.py tests/test_identity_remaining_general_failures.py tests/test_identity_bootstrap.py
+      - name: Commit verified production change
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/product_intelligence/identity_bootstrap.py
+          git diff --cached --exit-code && exit 0 || true
+          git commit -m 'fix: harden cross-domain identity resolution'
+          git push origin HEAD:feat/source-validation-gates-universal

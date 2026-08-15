@@ -16,7 +16,7 @@ from .normalize import key_norm
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36"
 SEARCH_PROVIDER_DOMAINS={"google.com","bing.com","duckduckgo.com","brave.com","mojeek.com","yahoo.com"}
 MARKETPLACE_HINTS={"amazon.","ebay.","mercadolibre.","falabella.","ripley.","walmart.","bestbuy."}
-SEARCH_PROVIDER_WORKERS=3
+SEARCH_PROVIDER_WORKERS=6
 
 @dataclass
 class SearchCandidate:
@@ -143,7 +143,6 @@ def _contains_strong_identifier(text:str,strong:list[str])->bool:
 
 
 def _descriptive_model(identity:ProductIdentity)->str:
-    """Choose human model/name text for search-result matching, not a strong identifier duplicated as model."""
     strong = {_compact(str(x)) for x in [identity.mpn, identity.ean, identity.upc, identity.gtin, identity.sku] if x}
     for value in [identity.model, identity.product_name]:
         text = str(value or "").strip()
@@ -196,15 +195,14 @@ def _rank_candidates(urls:list[tuple[str,str,str]], identity:ProductIdentity, li
     return out[:limit]
 
 
-def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=12)->list[str]:
-    """Run an explicit query through the free providers while retaining identity validation."""
+def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=8)->list[str]:
     if not str(query or "").strip():
         return []
     ranked=_rank_candidates(_provider_search(str(query).strip(),timeout),identity,max(limit*2,limit))
     return [row.url for row in ranked[:limit]]
 
 
-def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[SearchCandidate]:
+def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10)->list[SearchCandidate]:
     q=build_query(identity)
     if not q:return []
     strong_raw=next((x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin,identity.sku] if x),None)
@@ -213,8 +211,8 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
         if candidate and candidate not in queries:queries.append(candidate)
 
     urls=[]
-    for query in queries:
-        urls.extend(_provider_search(query,timeout))
+    for query in queries[:2]:
+        urls.extend(_provider_search(query,max(6,min(timeout,10))))
     ranked=_rank_candidates(urls,identity,limit)
 
     brand=str(identity.brand or '').strip()
@@ -223,19 +221,13 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
         official_queries=[
             f'"{strong}" "{brand}" official product',
             f'"{strong}" "{brand}" specifications',
-            f'"{strong}" "{brand}" datasheet',
-            f'"{strong}" "{brand}" manual',
             f'"{strong}" "{brand}" support',
         ]
         descriptive = _descriptive_model(identity)
         if descriptive:
-            official_queries.extend([
-                f'"{descriptive}" "{brand}" official product',
-                f'"{descriptive}" "{brand}" specifications',
-                f'"{descriptive}" "{brand}" manual datasheet',
-            ])
-        for oq in official_queries:
-            urls.extend(_provider_search(oq,max(8,min(timeout,15))))
+            official_queries.append(f'"{descriptive}" "{brand}" official product')
+        for oq in official_queries[:4]:
+            urls.extend(_provider_search(oq,max(6,min(timeout,10))))
             reranked=_rank_candidates(urls,identity,limit)
             if any(c.likely_official for c in reranked):
                 ranked=reranked
@@ -246,16 +238,10 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=20)->list[Searc
 
     if strong_raw:
         strong=str(strong_raw).strip()
-        retry_queries=[]
-        for candidate in [
-            f'"{strong}" product', f'{strong} specifications', f'{strong} specs',
-            f'{strong} datasheet', f'{strong} manual pdf', f'{strong} support'
-        ]:
-            if candidate and candidate not in queries and candidate not in retry_queries:
-                retry_queries.append(candidate)
-        for attempt,query in enumerate(retry_queries[:6]):
-            if attempt:time.sleep(.35)
-            urls.extend(_provider_search(query,max(8,min(timeout,15))))
+        retry_queries=[f'"{strong}" product',f'{strong} specifications',f'{strong} manual pdf']
+        for attempt,query in enumerate(retry_queries):
+            if attempt:time.sleep(.15)
+            urls.extend(_provider_search(query,max(6,min(timeout,10))))
             ranked=_rank_candidates(urls,identity,limit)
             if ranked:return ranked
     return []
@@ -275,8 +261,7 @@ def _field_search_terms(field:str)->list[str]:
     return list(dict.fromkeys(terms))
 
 
-def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12,timeout:int=15)->list[SearchCandidate]:
-    """Free second-pass discovery for unresolved workbook semantics."""
+def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12,timeout:int=10)->list[SearchCandidate]:
     base=build_query(identity)
     if not base:return []
     terms=[]
@@ -284,9 +269,9 @@ def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12
         for term in _field_search_terms(str(field)):
             if term and term not in terms:terms.append(term)
     urls=[]
-    for field in terms[:12]:
-        for query in [f'{base} "{field}"',f'{base} "{field}" specifications',f'{base} "{field}" manual datasheet']:
-            urls.extend(_provider_search(query,max(8,min(timeout,15))))
+    for field in terms[:6]:
+        for query in [f'{base} "{field}"',f'{base} "{field}" specifications']:
+            urls.extend(_provider_search(query,max(6,min(timeout,10))))
     return _rank_candidates(urls,identity,limit)
 
 

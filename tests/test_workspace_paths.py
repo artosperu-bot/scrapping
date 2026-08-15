@@ -10,7 +10,7 @@ from product_intelligence.workspace_paths import (
 
 
 def test_sanitize_workspace_name_is_windows_safe():
-    assert sanitize_workspace_name('Trabajo: JBL / agosto? *') == 'Trabajo_ JBL _ agosto_ _'
+    assert sanitize_workspace_name('Trabajo: JBL / agosto? *') == 'Trabajo_ JBL _ agosto'
     assert sanitize_workspace_name('CON') == 'CON_Trabajo'
 
 
@@ -32,12 +32,16 @@ def test_clean_results_preserves_excel_folder_and_removes_generated_content(tmp_
     layout = ensure_workspace_layout(tmp_path, 'abc12345', 'Trabajo Uno')
     original = layout['Excel'] / 'entrada.xlsx'
     original.write_bytes(b'excel')
+    (layout['root'] / 'resultado.xlsx').write_bytes(b'generated')
+    (layout['root'] / 'resumen.json').write_text('{}', encoding='utf-8')
     for name in ('Scraping', 'PDF', 'multimedia', 'prices', 'Logs'):
         (layout[name] / 'result.txt').write_text('x', encoding='utf-8')
 
     clean_workspace_results(layout['root'])
 
     assert original.read_bytes() == b'excel'
+    assert not (layout['root'] / 'resultado.xlsx').exists()
+    assert not (layout['root'] / 'resumen.json').exists()
     for name in ('Scraping', 'PDF', 'multimedia', 'prices', 'Logs'):
         assert list((layout['root'] / name).iterdir()) == []
 

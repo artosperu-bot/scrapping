@@ -55,13 +55,44 @@ def main() -> int:
             bootstrap = bootstrap_identity(identity, limit_per_query=16, timeout=8)
             bootstrap_elapsed = round(time.monotonic() - started, 2)
 
-            # The expected brand below is a QA oracle only. It is never supplied to
-            # bootstrap_identity() or scrape_item().
+            # QA oracle only: expected_brand is never supplied to bootstrap or scraper.
             brand_pass = bootstrap.status == "RESOLVED" and (bootstrap.identity.brand or "").casefold() == expected_brand.casefold()
             if not brand_pass:
                 failures += 1
+                row = {
+                    "input": raw,
+                    "input_brand": raw_identity.brand,
+                    "identity_status": bootstrap.status,
+                    "resolved_brand": bootstrap.identity.brand,
+                    "resolved_model": bootstrap.identity.model,
+                    "identity_confidence": round(float(bootstrap.confidence or 0), 3),
+                    "identity_reason": bootstrap.reason,
+                    "official_domain_hint": bootstrap.official_domain_hint,
+                    "identity_queries": len(bootstrap.queries_executed),
+                    "queries_executed": bootstrap.queries_executed,
+                    "identity_results_found": bootstrap.search_results_found,
+                    "candidate_urls": len(bootstrap.candidate_urls),
+                    "brand_scores": bootstrap.brand_scores,
+                    "brand_hosts": bootstrap.brand_hosts,
+                    "page_probes_attempted": bootstrap.page_probes_attempted,
+                    "page_probes_succeeded": bootstrap.page_probes_succeeded,
+                    "page_signals": bootstrap.page_signals,
+                    "brand_gate": "FAIL",
+                    "material_evidence": 0,
+                    "specification_count": 0,
+                    "accepted_sources": [],
+                    "false_manufacturer_urls": [],
+                    "bootstrap_seconds": bootstrap_elapsed,
+                    "scrape_seconds": 0.0,
+                    "elapsed_seconds": bootstrap_elapsed,
+                    "status": "IDENTITY_FAIL_CLOSED",
+                    "logs": [],
+                }
+                rows.append(row)
+                print(json.dumps({k: v for k, v in row.items() if k != "logs"}, ensure_ascii=False))
+                continue
 
-            run_identity = bootstrap.identity.model_copy(deep=True) if bootstrap.status == "RESOLVED" else raw_identity.model_copy(deep=True)
+            run_identity = bootstrap.identity.model_copy(deep=True)
             logs = []
             scrape_started = time.monotonic()
             with TemporaryDirectory(prefix=f"identity-bootstrap-{index}-") as tmp:
@@ -102,7 +133,10 @@ def main() -> int:
                 "candidate_urls": len(bootstrap.candidate_urls),
                 "brand_scores": bootstrap.brand_scores,
                 "brand_hosts": bootstrap.brand_hosts,
-                "brand_gate": "PASS" if brand_pass else "FAIL",
+                "page_probes_attempted": bootstrap.page_probes_attempted,
+                "page_probes_succeeded": bootstrap.page_probes_succeeded,
+                "page_signals": bootstrap.page_signals,
+                "brand_gate": "PASS",
                 "material_evidence": material,
                 "specification_count": len(rec.specifications or {}) if rec is not None else 0,
                 "accepted_sources": list(rec.sources or []) if rec is not None else [],
@@ -127,7 +161,7 @@ def main() -> int:
         "identity_resolved": sum(1 for r in rows if r["identity_status"] == "RESOLVED"),
         "identity_brand_pass": sum(1 for r in rows if r["brand_gate"] == "PASS"),
         "scraped": sum(1 for r in rows if r["status"] == "SCRAPED"),
-        "fail_closed": sum(1 for r in rows if r["status"] == "FAIL_CLOSED"),
+        "fail_closed": sum(1 for r in rows if "FAIL_CLOSED" in r["status"]),
         "false_manufacturer_count": sum(len(r["false_manufacturer_urls"]) for r in rows),
         "ocr_or_mistral_executed": bool(forbidden),
         "total_elapsed_seconds": round(sum(r["elapsed_seconds"] for r in rows), 2),
@@ -136,10 +170,6 @@ def main() -> int:
     payload = {"summary": summary, "products": rows, "provider_events": provider_events}
     Path("identity-resolution-benchmark.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print("IDENTITY_RESOLUTION_SUMMARY=" + json.dumps(summary, ensure_ascii=False))
-
-    # Brand resolution is the hard gate here. Scraping may still fail closed when
-    # public sources do not yield material evidence, but must never use OCR/Mistral
-    # or invent manufacturer authority.
     return 1 if failures else 0
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import re
 
 from .evidence_quality import generic_evidence_gate, strict_semantic_gate
 from .evidence_policy import ConsensusFact, resolve_evidence_group
@@ -25,14 +26,49 @@ def _identity_token_supported(value: str | None, identity: ProductIdentity) -> b
     return bool(needle and needle in text)
 
 
-def _explicit_identity_value(clean: list[Evidence], canonical: str, identity: ProductIdentity) -> str | None:
-    """Use explicit exact product-level identity facts to repair merchant-shaped identity.
+def _compact_identity(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", key_norm(str(value or "")))
 
-    This is deliberately narrower than specification consensus: the value must come from an
-    EXACT source, pass the generic/semantic gates already applied, and appear in the product's
-    own name/model text. That lets `Brand: Acme` repair a merchant organization accidentally
-    stored as brand without letting an unrelated seller name overwrite product identity.
+
+def _identity_bound_evidence_ok(canonical: str, ev: Evidence, identity: ProductIdentity) -> tuple[bool, str]:
+    """Prevent secondary identifiers mentioned inside a valid document from becoming product identity facts.
+
+    Manuals/datasheets often list family models, compatible SKUs, accessories or regional codes. The
+    document itself may be valid for the requested product while one extracted identity-shaped line is
+    not the primary product identity. If the user supplied that identity dimension, contradictory
+    extracted values fail closed instead of entering record evidence/consensus.
     """
+    expected = {
+        "mpn": identity.mpn,
+        "ean": identity.ean,
+        "upc": identity.upc,
+        "gtin": identity.gtin,
+        "model": identity.model or identity.product_name,
+        "brand": identity.brand,
+    }.get(canonical)
+    if not expected:
+        return True, "NO_REQUESTED_IDENTITY_VALUE"
+
+    value = ev.normalized_value if ev.normalized_value not in (None, "") else ev.raw_value
+    exp = _compact_identity(expected)
+    got = _compact_identity(value)
+    if not exp or not got:
+        return False, "IDENTITY_VALUE_EMPTY"
+
+    if canonical in {"mpn", "ean", "upc", "gtin"}:
+        return (got == exp, "IDENTITY_VALUE_MATCH" if got == exp else f"IDENTITY_EVIDENCE_CONFLICT:{canonical}")
+
+    if canonical == "brand":
+        compatible = got == exp or got in exp or exp in got
+        return (compatible, "IDENTITY_VALUE_MATCH" if compatible else "IDENTITY_EVIDENCE_CONFLICT:brand")
+
+    # Model/name values may include the brand or a descriptive suffix, but the requested model
+    # must remain the dominant token sequence. A sibling model such as 26 vs 22 is rejected.
+    compatible = exp in got or got in exp
+    return (compatible, "IDENTITY_VALUE_MATCH" if compatible else "IDENTITY_EVIDENCE_CONFLICT:model")
+
+
+def _explicit_identity_value(clean: list[Evidence], canonical: str, identity: ProductIdentity) -> str | None:
     candidates: list[Evidence] = []
     for ev in clean:
         if canonical_key(ev.attribute) != canonical:
@@ -113,17 +149,22 @@ def build_record_strict(identity: ProductIdentity, evidence: list[Evidence], sou
             duplicates += 1
             continue
         seen.add(evidence_key)
-        clean.append(ev)
         canonical = canonical_key(ev.attribute)
         if canonical:
+            identity_ok, identity_reason = _identity_bound_evidence_ok(canonical, ev, identity)
+            if not identity_ok:
+                rejected.append({"attribute": ev.attribute, "value": ev.raw_value, "reason": identity_reason, "source": ev.source_url})
+                continue
             semantic_ok, semantic_reason = strict_semantic_gate(canonical, ev)
             if not semantic_ok:
                 additional.setdefault(ev.attribute, []).append(ev)
                 rejected.append({"attribute": ev.attribute, "value": ev.raw_value, "reason": semantic_reason, "source": ev.source_url})
                 continue
+            clean.append(ev)
             authority, capped_quality = effective_quality(canonical, ev, quality)
             grouped[canonical].append((ev, capped_quality, authority))
         else:
+            clean.append(ev)
             additional.setdefault(ev.attribute, []).append(ev)
 
     specs = {}
@@ -150,12 +191,7 @@ def build_record_strict(identity: ProductIdentity, evidence: list[Evidence], sou
         }
 
         if consensus.accepted_value is None:
-            rejected.append({
-                "attribute": key,
-                "value": None,
-                "reason": consensus.reason,
-                "source": None,
-            })
+            rejected.append({"attribute": key, "value": None, "reason": consensus.reason, "source": None})
             if consensus.reason == "SOURCE_CONFLICT":
                 values = []
                 for ev, q_value, auth in rows:

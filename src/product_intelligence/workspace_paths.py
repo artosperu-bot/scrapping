@@ -53,14 +53,20 @@ def ensure_workspace_layout(root: str | Path, workspace_id: str, name: str) -> d
 
 
 def clean_workspace_results(path: str | Path) -> None:
+    """Clear generated workspace content while preserving the dedicated Excel bucket."""
     base = Path(path)
     base.mkdir(parents=True, exist_ok=True)
+    excel = base / "Excel"
+    excel.mkdir(parents=True, exist_ok=True)
+    for child in list(base.iterdir()):
+        if child == excel:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
     for folder in _RESULT_DIRS:
-        target = base / folder
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-    (base / "Excel").mkdir(parents=True, exist_ok=True)
+        (base / folder).mkdir(parents=True, exist_ok=True)
 
 
 def delete_workspace_files(path: str | Path) -> None:

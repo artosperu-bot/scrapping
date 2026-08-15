@@ -37,12 +37,7 @@ def _page_rows(page, selector: str, script: str):
 
 
 def _pdf_link_rows(page):
-    """Read rendered PDF-link candidates without letting navigation races escape.
-
-    Some commerce/support pages replace the document while Playwright is
-    evaluating the locator, which destroys the execution context. That is a
-    transient discovery miss, not a fatal product failure.
-    """
+    """Read rendered PDF-link candidates without letting navigation races escape."""
     try:
         return page.locator(
             "a[href], [data-url], [data-href], [data-file], [data-download-url]"
@@ -54,6 +49,20 @@ def _pdf_link_rows(page):
         )
     except Exception:
         return []
+
+
+def _launch_chromium(playwright):
+    """Return a browser when Chromium is installed; otherwise fail soft.
+
+    Playwright can be importable while its browser binary is still absent
+    (for example before the packaging workflow's install step). Browser
+    fallback is optional discovery capacity and must never crash the core
+    search pipeline merely because that optional binary is unavailable.
+    """
+    try:
+        return playwright.chromium.launch(headless=True)
+    except Exception:
+        return None
 
 
 def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
@@ -84,36 +93,41 @@ def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
         ),
     ]
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        try:
-            page = browser.new_page(user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/151 Safari/537.36"
-            ))
-            combined = []
-            seen = set()
-            for search_url, selector, script in engines:
-                try:
-                    page.goto(
-                        search_url,
-                        wait_until="domcontentloaded",
-                        timeout=max(5, timeout) * 1000,
-                    )
-                except Exception:
-                    continue
-                raw = _page_rows(page, selector, script)
-                rows = _extract_result_rows(raw)
-                for row in rows:
-                    if row[0] in seen:
+    try:
+        with sync_playwright() as p:
+            browser = _launch_chromium(p)
+            if browser is None:
+                return []
+            try:
+                page = browser.new_page(user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/151 Safari/537.36"
+                ))
+                combined = []
+                seen = set()
+                for search_url, selector, script in engines:
+                    try:
+                        page.goto(
+                            search_url,
+                            wait_until="domcontentloaded",
+                            timeout=max(5, timeout) * 1000,
+                        )
+                    except Exception:
                         continue
-                    seen.add(row[0])
-                    combined.append(row)
-                    if len(combined) >= limit:
-                        return combined[:limit]
-            return combined[:limit]
-        finally:
-            browser.close()
+                    raw = _page_rows(page, selector, script)
+                    rows = _extract_result_rows(raw)
+                    for row in rows:
+                        if row[0] in seen:
+                            continue
+                        seen.add(row[0])
+                        combined.append(row)
+                        if len(combined) >= limit:
+                            return combined[:limit]
+                return combined[:limit]
+            finally:
+                browser.close()
+    except Exception:
+        return []
 
 
 def browser_pdf_links(url: str, *, timeout: int = 20, limit: int = 30) -> list[tuple[str, str]]:
@@ -130,37 +144,41 @@ def browser_pdf_links(url: str, *, timeout: int = 20, limit: int = 30) -> list[t
     except ImportError:
         return []
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        try:
-            page = browser.new_page(user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/151 Safari/537.36"
-            ))
-            try:
-                page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=max(5, timeout) * 1000,
-                )
-                page.wait_for_timeout(1200)
-            except Exception:
+    try:
+        with sync_playwright() as p:
+            browser = _launch_chromium(p)
+            if browser is None:
                 return []
+            try:
+                page = browser.new_page(user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/151 Safari/537.36"
+                ))
+                try:
+                    page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=max(5, timeout) * 1000,
+                    )
+                    page.wait_for_timeout(1200)
+                except Exception:
+                    return []
 
-            raw = _pdf_link_rows(page)
-            found: list[tuple[str, str]] = []
-            seen = set()
-            for row in raw:
-                href = str(row.get("href") or "").strip()
-                if not href.startswith("http") or href in seen:
-                    continue
-                path_and_query = href.lower()
-                if ".pdf" not in path_and_query:
-                    continue
-                seen.add(href)
-                found.append((href, str(row.get("text") or "").strip()))
-                if len(found) >= limit:
-                    break
-            return found
-        finally:
-            browser.close()
+                raw = _pdf_link_rows(page)
+                found: list[tuple[str, str]] = []
+                seen = set()
+                for row in raw:
+                    href = str(row.get("href") or "").strip()
+                    if not href.startswith("http") or href in seen:
+                        continue
+                    if ".pdf" not in href.lower():
+                        continue
+                    seen.add(href)
+                    found.append((href, str(row.get("text") or "").strip()))
+                    if len(found) >= limit:
+                        break
+                return found
+            finally:
+                browser.close()
+    except Exception:
+        return []

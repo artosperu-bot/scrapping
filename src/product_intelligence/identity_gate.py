@@ -34,6 +34,15 @@ def _tokens(value: str | None) -> tuple[str, ...]:
     return tuple(x for x in re.split(r"[^a-z0-9]+", str(value or "").lower()) if len(x) >= 2)
 
 
+def _model_code_tokens(value: str | None) -> set[str]:
+    """Return model-discriminating tokens that contain digits.
+
+    Examples: `Model 22` -> {22}; `SM-S928B` -> {sm, s928b} after tokenization,
+    of which only `s928b` is retained. These are more discriminating than generic family words.
+    """
+    return {token for token in _tokens(value) if any(ch.isdigit() for ch in token)}
+
+
 def _requested_strong(requested: ProductIdentity) -> dict[str, str]:
     return {
         key: _norm(getattr(requested, key, None))
@@ -69,8 +78,6 @@ def assess_identity(requested: ProductIdentity, observed: ObservedIdentity) -> I
         else:
             conflicts.extend(f"{kind.upper()}:{x}" for x in sorted(vals))
 
-    # A requested strong identifier must not be contradicted by an observed identifier
-    # of the same family. A different observed MPN is a hard conflict.
     if conflicts:
         return IdentityAssessment(
             status="CONFLICT",
@@ -92,24 +99,33 @@ def assess_identity(requested: ProductIdentity, observed: ObservedIdentity) -> I
     if req_brand and obs_brand and req_brand != obs_brand:
         return IdentityAssessment("CONFLICT", 0.96, ("BRAND_CONFLICT",))
 
-    req_model = _norm(requested.model or requested.product_name)
-    obs_model = _norm(observed.model or observed.product_name)
+    requested_model_text = requested.model or requested.product_name
+    observed_model_text = observed.model or observed.product_name
+    req_model = _norm(requested_model_text)
+    obs_model = _norm(observed_model_text)
     if req_model and obs_model:
         if req_model == obs_model:
             return IdentityAssessment("COMPATIBLE", 0.92, ("EXACT_MODEL_MATCH",))
 
-        req_tokens = set(_tokens(requested.model or requested.product_name))
-        obs_tokens = set(_tokens(observed.model or observed.product_name))
+        req_codes = _model_code_tokens(requested_model_text)
+        obs_codes = _model_code_tokens(observed_model_text)
+        if req_codes and obs_codes and req_codes.isdisjoint(obs_codes):
+            return IdentityAssessment("CONFLICT", 0.98, ("MODEL_CODE_CONFLICT",))
+
+        req_tokens = set(_tokens(requested_model_text))
+        obs_tokens = set(_tokens(observed_model_text))
         shared = req_tokens & obs_tokens
-        # Same brand but a clearly different dominant model is a hard conflict.
         if req_brand and (not obs_brand or req_brand == obs_brand):
-            if req_tokens and obs_tokens and len(shared) < max(1, min(len(req_tokens), len(obs_tokens)) // 2):
+            discriminating_req = req_tokens - {"model", "series", "product", "phone", "laptop", "headphone", "headphones"}
+            discriminating_obs = obs_tokens - {"model", "series", "product", "phone", "laptop", "headphone", "headphones"}
+            discriminating_shared = discriminating_req & discriminating_obs
+            if discriminating_req and discriminating_obs and not discriminating_shared:
                 return IdentityAssessment("CONFLICT", 0.94, ("DOMINANT_MODEL_CONFLICT",))
+            if req_tokens and obs_tokens and len(shared) < max(1, min(len(req_tokens), len(obs_tokens)) // 2):
+                return IdentityAssessment("CONFLICT", 0.92, ("DOMINANT_MODEL_CONFLICT",))
             return IdentityAssessment("AMBIGUOUS", 0.60, ("MODEL_FAMILY_OVERLAP_ONLY",))
 
     if requested_ids and any(observed_ids.values()):
-        # Different identifier kinds without a comparable requested value are useful hints,
-        # but cannot prove exact identity by themselves.
         return IdentityAssessment("AMBIGUOUS", 0.58, ("UNALIGNED_STRONG_IDENTIFIERS",))
 
     if req_brand and obs_brand and req_brand == obs_brand and obs_model:

@@ -209,7 +209,6 @@ def _candidate_has_full_raw(candidate: SearchCandidate, raw: str) -> bool:
 
 
 def filter_bootstrap_candidates(raw: str, candidates: list[SearchCandidate]) -> list[SearchCandidate]:
-    """Discovery may be broad, but identity scoring requires the complete model/identifier."""
     out: list[SearchCandidate] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -226,7 +225,6 @@ def filter_bootstrap_candidates(raw: str, candidates: list[SearchCandidate]) -> 
 
 
 def derive_context_terms(raw: str, candidates: list[SearchCandidate]) -> list[str]:
-    """Learn query refinements from repeated exact-result context without assigning identity."""
     raw_tokens = set(_normalized_tokens(raw))
     raw_compact = _compact(raw)
     host_sets: dict[str, set[str]] = defaultdict(set)
@@ -245,11 +243,7 @@ def derive_context_terms(raw: str, candidates: list[SearchCandidate]) -> list[st
             counts[norm] += 1
             if host:
                 host_sets[norm].add(host)
-    ranked = sorted(
-        counts,
-        key=lambda term: (len(host_sets[term]), counts[term], len(term)),
-        reverse=True,
-    )
+    ranked = sorted(counts, key=lambda term: (len(host_sets[term]), counts[term], len(term)), reverse=True)
     corroborated = [term for term in ranked if len(host_sets[term]) >= 2]
     fallback = [term for term in ranked if counts[term] >= 3 and term not in corroborated]
     return [labels[term] for term in (corroborated + fallback)[:5]]
@@ -271,11 +265,22 @@ def _brand_phrase_tokens(value: str) -> list[str]:
     return cleaned
 
 
+def _brand_like_second_token(token: str) -> bool:
+    token = str(token or "").strip()
+    return bool(
+        token
+        and not any(ch.isdigit() for ch in token)
+        and "." not in token
+        and key_norm(token) not in _CONTEXT_STOPWORDS
+        and re.fullmatch(r"[A-Za-z][A-Za-z&+_-]*", token)
+    )
+
+
 def _clean_brand_phrase(value: str, *, multiword: bool = False) -> str | None:
     tokens = _brand_phrase_tokens(value)
     if not tokens:
         return None
-    if multiword and len(tokens) >= 2:
+    if multiword and len(tokens) >= 2 and _brand_like_second_token(tokens[1]):
         return " ".join(tokens[:2])
     return tokens[0]
 
@@ -285,48 +290,71 @@ def _non_product_intent(candidate: SearchCandidate) -> bool:
     return any(marker in hay for marker in _NON_PRODUCT_INTENT)
 
 
+def _marketplace_host(host: str) -> bool:
+    host = str(host or "").lower()
+    return any(marker in host for marker in MARKETPLACE_HINTS)
+
+
+def _label_matches_host(label: str, host: str) -> bool:
+    label_key = _compact(label)
+    host_key = _compact((host or "").removeprefix("www."))
+    return bool(len(label_key) >= 3 and label_key in host_key)
+
+
+def _add_prefix_evidence(out: list[tuple[str, float, str]], prefix: str, source: str, single_score: float, multi_score: float):
+    prefix = str(prefix or "").strip(" |:-–—•();,.")
+    if not prefix:
+        return
+    # Use the segment nearest the identifier, not an entire sentence/site title.
+    segment = re.split(r"[|:–—•;,]", prefix)[-1].strip()
+    brand = _clean_brand_phrase(segment)
+    if brand:
+        out.append((brand, single_score, f"brand_before_raw_in_{source}"))
+    multi = _clean_brand_phrase(segment, multiword=True)
+    if multi and multi != brand:
+        out.append((multi, multi_score, f"multiword_brand_before_raw_in_{source}"))
+
+
 def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, float, str]]:
     title = str(candidate.title or "").strip()
     snippet = str(candidate.snippet or "").strip()
+    host = (urlparse(candidate.url or "").hostname or "").lower().removeprefix("www.")
     title_match, snippet_match, url_match = _candidate_text_matches_raw(candidate, raw)
     if not (title_match or snippet_match or url_match or _candidate_has_full_raw(candidate, raw)):
         return []
+
     out: list[tuple[str, float, str]] = []
     for match in _EXPLICIT_BRAND.finditer(f"{title} {snippet}"):
         brand = _clean_brand_phrase(match.group(1), multiword=True)
         if brand:
             out.append((brand, 5.5, "explicit_brand_label"))
 
-    if _non_product_intent(candidate):
+    # Marketplaces and known non-product collisions remain valid discovery sources,
+    # but their site/editorial title cannot itself become the product brand.
+    if _marketplace_host(host) or _non_product_intent(candidate):
         return out
 
     raw_pattern = re.compile(re.escape(raw), re.I)
-    match = raw_pattern.search(title)
-    if match:
-        prefix = title[:match.start()].strip(" |:-–—•()")
-        if prefix:
-            brand = _clean_brand_phrase(prefix)
-            if brand:
-                out.append((brand, 3.5, "brand_before_raw_in_title"))
-            multi = _clean_brand_phrase(prefix, multiword=True)
-            if multi and multi != brand:
-                out.append((multi, 3.8, "multiword_brand_before_raw_in_title"))
+    title_raw = raw_pattern.search(title)
+    if title_raw:
+        _add_prefix_evidence(out, title[:title_raw.start()], "title", 3.5, 3.8)
     elif _is_strong_code(raw) and (snippet_match or url_match or _candidate_has_full_raw(candidate, raw)):
         segment = re.split(r"[|:–—•]", title)[0].strip()
         brand = _clean_brand_phrase(segment)
         if brand:
-            out.append((brand, 2.0, "leading_title_brand"))
+            out.append((brand, 1.7, "leading_title_brand"))
         multi = _clean_brand_phrase(segment, multiword=True)
         if multi and multi != brand:
-            out.append((multi, 2.2, "leading_multiword_title_brand"))
+            out.append((multi, 1.9, "leading_multiword_title_brand"))
+
+    snippet_raw = raw_pattern.search(snippet)
+    if snippet_raw:
+        _add_prefix_evidence(out, snippet[:snippet_raw.start()], "snippet", 3.0, 3.3)
+
     return out
 
 
-def _rank_brand_scores(
-    identity: ProductIdentity,
-    candidates: list[SearchCandidate],
-    page_signals: list[PageIdentitySignal] | None = None,
-):
+def _rank_brand_scores(identity: ProductIdentity, candidates: list[SearchCandidate], page_signals: list[PageIdentitySignal] | None = None):
     raw = _raw_value(identity)
     filtered = filter_bootstrap_candidates(raw, candidates)
     labels: dict[str, str] = {}
@@ -334,22 +362,25 @@ def _rank_brand_scores(
     official_hosts: dict[str, tuple[float, str]] = {}
     model_by_brand: dict[str, list[tuple[float, str]]] = {}
     host_contribs: dict[str, dict[str, float]] = defaultdict(dict)
+    explicit_keys: set[str] = set()
 
-    def add(brand: str | None, score: float, host: str, *, model: str | None = None, official_hint: bool = False):
+    def add(brand: str | None, score: float, host: str, *, model: str | None = None, official_hint: bool = False, explicit: bool = False):
         brand = str(brand or "").strip()
         key = _compact(brand)
         if not key or len(key) < 2:
             return
         labels.setdefault(key, brand)
         host_key = host or f"unknown:{key}"
-        if any(marker in host for marker in MARKETPLACE_HINTS):
+        if _marketplace_host(host):
             score -= 2.5
         host_contribs[key][host_key] = max(host_contribs[key].get(host_key, float("-inf")), score)
         if host:
             hosts_by_brand.setdefault(key, set()).add(host)
+        if explicit:
+            explicit_keys.add(key)
         if model:
             model_by_brand.setdefault(key, []).append((score, model))
-        if official_hint and host and not any(marker in host for marker in MARKETPLACE_HINTS):
+        if official_hint and host and not _marketplace_host(host):
             current = official_hosts.get(key)
             if current is None or score > current[0]:
                 official_hosts[key] = (score, host)
@@ -362,10 +393,15 @@ def _rank_brand_scores(
             base += 0.5
         if url_match:
             base += 0.5
-        for brand, evidence_score, _reason in _brand_evidence(candidate, raw):
+        for brand, evidence_score, reason in _brand_evidence(candidate, raw):
             hay = key_norm(f"{candidate.title} {candidate.snippet}")
             score = base + evidence_score + (0.8 if any(x in hay for x in ("official", "manufacturer", "fabricante")) else 0.0)
-            add(brand, score, host, official_hint=False)
+            is_explicit = reason == "explicit_brand_label"
+            # A publisher/site naming itself in its own title is weak evidence of a
+            # product brand. It may still contribute, but cannot dominate cross-source evidence.
+            if not is_explicit and _label_matches_host(brand, host):
+                score = min(score, 1.2)
+            add(brand, score, host, explicit=is_explicit)
 
     for signal in page_signals or []:
         if not signal.material or not signal.exact_raw_match:
@@ -389,6 +425,7 @@ def _rank_brand_scores(
             host,
             model=signal.model or signal.product_name,
             official_hint=bool(signal.authority_owned and signal.structured_brand),
+            explicit=bool(signal.structured_brand),
         )
 
     scores = {
@@ -396,12 +433,11 @@ def _rank_brand_scores(
         for key, contributions in host_contribs.items()
     }
 
-    # If a multi-word brand and its first-word prefix are supported by the same
-    # independent domains, they describe the same identity. Keep the more specific
-    # corroborated label instead of making it compete with its own prefix.
+    # Collapse a one-word prefix only when the specific multi-word form has real
+    # corroboration and is not merely a model/spec suffix.
     for long_key in list(scores):
         words = str(labels.get(long_key) or "").split()
-        if len(words) < 2:
+        if len(words) != 2 or not _brand_like_second_token(words[1]):
             continue
         short_key = _compact(words[0])
         long_hosts = hosts_by_brand.get(long_key, set())
@@ -412,22 +448,20 @@ def _rank_brand_scores(
             and len(long_hosts) >= 2
             and short_hosts
             and short_hosts.issubset(long_hosts)
+            and (long_key in explicit_keys or scores[long_key] >= scores[short_key] + 1.0)
         ):
             scores.pop(short_key, None)
 
     return scores, labels, hosts_by_brand, official_hosts, model_by_brand
 
 
-def _finalize_resolution(
-    identity: ProductIdentity,
-    candidates: list[SearchCandidate],
-    page_signals: list[PageIdentitySignal] | None = None,
-) -> IdentityBootstrapResult:
+def _finalize_resolution(identity: ProductIdentity, candidates: list[SearchCandidate], page_signals: list[PageIdentitySignal] | None = None) -> IdentityBootstrapResult:
     raw = _raw_value(identity)
     if not raw:
         return IdentityBootstrapResult(identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED", reason="NO_RAW_IDENTITY")
     if identity.brand:
         return IdentityBootstrapResult(identity=identity.model_copy(deep=True), status="RESOLVED", confidence=1.0, reason="BRAND_PROVIDED", raw_input=raw)
+
     filtered = filter_bootstrap_candidates(raw, candidates)
     scores, labels, hosts_by_brand, official_hosts, model_by_brand = _rank_brand_scores(identity, filtered, page_signals)
     if not scores:
@@ -435,10 +469,13 @@ def _finalize_resolution(
             identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED", reason="INSUFFICIENT_EVIDENCE",
             raw_input=raw, search_results_found=len(filtered), candidate_urls=[c.url for c in filtered],
         )
+
     ranked = sorted(scores.items(), key=lambda row: row[1], reverse=True)
     best_key, best_score = ranked[0]
+    runner_key = ranked[1][0] if len(ranked) > 1 else None
     runner_score = ranked[1][1] if len(ranked) > 1 else 0.0
     host_count = len(hosts_by_brand.get(best_key, set()))
+    runner_host_count = len(hosts_by_brand.get(runner_key, set())) if runner_key else 0
     margin = best_score - runner_score
     matching_page = [
         s for s in (page_signals or [])
@@ -446,13 +483,18 @@ def _finalize_resolution(
     ]
     has_page = bool(matching_page)
     page_authority = any(s.authority_owned for s in matching_page)
+
     decisive_page = has_page and best_score >= 9.0 and margin >= 2.5
     decisive_cross_source = host_count >= 2 and best_score >= 8.5 and (
         margin >= 2.5 or best_score >= max(1.0, runner_score) * 1.35
     )
+    decisive_host_diversity = (
+        host_count >= 3 and runner_host_count <= 1 and best_score >= 7.5 and best_score > runner_score
+    )
     decisive_dominance = best_score >= 18.0 and margin >= 9.0 and best_score >= max(1.0, runner_score) * 1.7
     decisive_serp = not page_signals and host_count >= 2 and best_score >= 8.5 and margin >= 2.5
-    resolved = decisive_page or decisive_cross_source or decisive_dominance or decisive_serp
+    resolved = decisive_page or decisive_cross_source or decisive_host_diversity or decisive_dominance or decisive_serp
+
     if not resolved:
         return IdentityBootstrapResult(
             identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED",
@@ -462,6 +504,7 @@ def _finalize_resolution(
             brand_scores={labels[k]: round(v, 3) for k, v in scores.items()},
             brand_hosts={labels[k]: len(hosts_by_brand.get(k, set())) for k in scores},
         )
+
     learned = identity.model_copy(deep=True)
     learned.brand = labels[best_key]
     if not learned.model:
@@ -471,6 +514,7 @@ def _finalize_resolution(
             learned.model = raw if not _is_strong_code(raw) else observed_model
         elif not _is_strong_code(raw):
             learned.model = raw
+
     confidence = min(0.99, 0.74 + min(best_score, 20.0) * 0.011 + min(host_count, 3) * 0.025 + (0.03 if page_authority else 0.0))
     return IdentityBootstrapResult(
         identity=learned,
@@ -491,11 +535,7 @@ def resolve_identity_from_candidates(identity: ProductIdentity, candidates: list
     return _finalize_resolution(identity, candidates, None)
 
 
-def resolve_identity_with_page_signals(
-    identity: ProductIdentity,
-    candidates: list[SearchCandidate],
-    page_signals: list[PageIdentitySignal],
-) -> IdentityBootstrapResult:
+def resolve_identity_with_page_signals(identity: ProductIdentity, candidates: list[SearchCandidate], page_signals: list[PageIdentitySignal]) -> IdentityBootstrapResult:
     result = _finalize_resolution(identity, candidates, page_signals)
     result.page_probes_attempted = len(page_signals)
     result.page_probes_succeeded = sum(1 for s in page_signals if s.material and s.exact_raw_match)
@@ -586,19 +626,14 @@ def _probe_candidate_page(identity: ProductIdentity, candidate: SearchCandidate)
 def _candidate_probe_rank(candidate: SearchCandidate, raw: str) -> tuple:
     title_match, snippet_match, url_match = _candidate_text_matches_raw(candidate, raw)
     host = (urlparse(candidate.url or "").hostname or "").lower()
-    marketplace = any(marker in host for marker in MARKETPLACE_HINTS)
+    marketplace = _marketplace_host(host)
     technical = any(token in key_norm(f"{candidate.title} {candidate.snippet} {candidate.url}") for token in (
         "specification", "specifications", "datasheet", "manual", "support", "product",
     ))
     return (0 if title_match else 1, 0 if url_match else 1, 0 if technical else 1, 1 if marketplace else 0, 0 if snippet_match else 1)
 
 
-def _probe_top_candidates(
-    identity: ProductIdentity,
-    candidates: list[SearchCandidate],
-    *,
-    max_probes: int | None = None,
-) -> list[PageIdentitySignal]:
+def _probe_top_candidates(identity: ProductIdentity, candidates: list[SearchCandidate], *, max_probes: int | None = None) -> list[PageIdentitySignal]:
     raw = _raw_value(identity)
     budget_probes, _timeout = identity_probe_budget()
     max_probes = budget_probes if max_probes is None else max(0, min(max_probes, budget_probes))

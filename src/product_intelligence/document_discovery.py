@@ -41,6 +41,7 @@ def _descriptive_model(identity: ProductIdentity) -> str:
 
 
 def build_document_queries(identity: ProductIdentity) -> list[str]:
+    """Return a bounded, high-yield query set instead of many near-duplicates."""
     brand = str(identity.brand or "").strip()
     model = _descriptive_model(identity)
     strong = next((str(x).strip() for x in [identity.mpn, identity.ean, identity.upc, identity.gtin] if x), "")
@@ -49,27 +50,20 @@ def build_document_queries(identity: ProductIdentity) -> list[str]:
         quoted = f'"{strong}"'
         queries.extend([
             f"{strong} pdf",
-            f"{quoted} pdf",
             f"{quoted} filetype:pdf",
-            f"{quoted} manual pdf",
             f"{quoted} datasheet pdf",
-            f"{quoted} spec sheet pdf",
-            f"{quoted} specifications pdf",
-            f"{quoted} user manual filetype:pdf",
+            f"{quoted} manual pdf",
             f"{quoted} support downloads",
-            quoted,
         ])
     if brand and model:
         phrase = f'"{brand} {model}"'
         queries.extend([
-            f"{phrase} manual pdf",
             f"{phrase} datasheet pdf",
-            f"{phrase} specifications pdf",
-            f"{phrase} user manual",
+            f"{phrase} manual pdf",
             f"{phrase} filetype:pdf",
             f"{phrase} support downloads",
         ])
-    return list(dict.fromkeys(q for q in queries if q.strip()))
+    return list(dict.fromkeys(q for q in queries if q.strip()))[:9]
 
 
 def classify_document_candidate(url: str, title: str = "", snippet: str = "") -> str | None:
@@ -120,13 +114,13 @@ def _search_query_with_fallback(identity: ProductIdentity, query: str, *, limit:
         return ranked
     if trace:
         trace.emit("PDF_SEARCH_BROWSER_FALLBACK", query=query)
-    browser_rows = browser_search(query, timeout=max(timeout, 15), limit=max(limit * 2, 12))
+    browser_rows = browser_search(query, timeout=max(timeout, 10), limit=max(limit * 2, 10))
     if trace:
         trace.emit("PDF_SEARCH_BROWSER_RESULT", query=query, result_count=len(browser_rows))
     return _rank_candidates(browser_rows, identity, limit)
 
 
-def search_web_query_candidates(identity: ProductIdentity, query: str, limit: int = 8, timeout: int = 15, trace=None) -> list[SearchCandidate]:
+def search_web_query_candidates(identity: ProductIdentity, query: str, limit: int = 6, timeout: int = 8, trace=None) -> list[SearchCandidate]:
     if not str(query or "").strip():
         return []
     return _search_query_with_fallback(identity, str(query).strip(), limit=limit, timeout=timeout, trace=trace)
@@ -158,8 +152,7 @@ def _resolved_candidate(candidate: SearchCandidate, url: str, label: str = "") -
     )
 
 
-def resolve_document_candidate_urls(identity: ProductIdentity, candidate: SearchCandidate, *, timeout: int = 15, trace=None) -> list[SearchCandidate]:
-    """Resolve direct/static/rendered PDF links; HTML is discovery-only."""
+def resolve_document_candidate_urls(identity: ProductIdentity, candidate: SearchCandidate, *, timeout: int = 8, trace=None) -> list[SearchCandidate]:
     if _looks_like_direct_pdf(candidate.url):
         if trace:
             trace.emit("PDF_LINK_DISCOVERED", url=candidate.url, direct=True)
@@ -186,7 +179,7 @@ def resolve_document_candidate_urls(identity: ProductIdentity, candidate: Search
             trace.emit("PDF_LINK_DISCOVERED", url=row.url, landing_url=candidate.url, rendered=False)
 
     if not resolved:
-        for url, label in browser_pdf_links(candidate.url, timeout=max(timeout, 15), limit=30):
+        for url, label in browser_pdf_links(candidate.url, timeout=max(timeout, 10), limit=20):
             if url in seen or not _looks_like_direct_pdf(url):
                 continue
             if _is_generic_non_product_pdf(url, label, ""):
@@ -201,7 +194,7 @@ def resolve_document_candidate_urls(identity: ProductIdentity, candidate: Search
 def _resolve_valid_candidates(identity: ProductIdentity, candidates: list[SearchCandidate], *, limit: int, timeout: int, trace=None) -> list[SearchCandidate]:
     resolved: list[SearchCandidate] = []
     resolved_seen: set[str] = set()
-    for candidate in sorted(candidates, key=_document_rank, reverse=True):
+    for candidate in sorted(candidates, key=_document_rank, reverse=True)[:12]:
         try:
             rows = resolve_document_candidate_urls(identity, candidate, timeout=timeout, trace=trace) if trace else resolve_document_candidate_urls(identity, candidate, timeout=timeout)
         except requests.RequestException:
@@ -219,12 +212,12 @@ def _resolve_valid_candidates(identity: ProductIdentity, candidates: list[Search
 
 
 def _browser_document_pass(identity: ProductIdentity, *, queries: list[str], seen: set[str], limit: int, timeout: int, trace=None) -> list[SearchCandidate]:
-    per_query = max(6, min(max(limit * 2, 12), 20))
+    per_query = max(6, min(max(limit * 2, 10), 16))
     collected: list[SearchCandidate] = []
-    for query in queries[:8]:
+    for query in queries[:3]:
         if trace:
             trace.emit("PDF_SEARCH_BROWSER_FALLBACK", query=query, reason="NO_RESOLVABLE_PDF")
-        rows = browser_search(query, timeout=max(15, timeout), limit=per_query)
+        rows = browser_search(query, timeout=max(10, timeout), limit=per_query)
         if trace:
             trace.emit("PDF_SEARCH_BROWSER_RESULT", query=query, result_count=len(rows))
         for candidate in _rank_candidates(rows, identity, per_query):
@@ -244,12 +237,12 @@ def _browser_document_pass(identity: ProductIdentity, *, queries: list[str], see
     return []
 
 
-def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeout: int = 15, trace=None) -> list[SearchCandidate]:
+def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeout: int = 8, trace=None) -> list[SearchCandidate]:
     queries = build_document_queries(identity)
     seen: set[str] = set()
     valid: list[SearchCandidate] = []
-    per_query = max(4, min(limit, 8))
-    for query in queries:
+    per_query = max(4, min(limit, 6))
+    for query in queries[:6]:
         candidates = search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace) if trace else search_web_query_candidates(identity, query, limit=per_query, timeout=timeout)
         for candidate in candidates:
             if candidate.url in seen:
@@ -262,6 +255,8 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeou
             if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
                 continue
             valid.append(candidate)
+        if len(valid) >= 8:
+            break
 
     resolved = _resolve_valid_candidates(identity, valid, limit=limit, timeout=timeout, trace=trace)
     if resolved:
@@ -272,7 +267,7 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeou
         return browser_resolved
 
     fallback: list[SearchCandidate] = []
-    for candidate in search_web(identity, limit=max(12, limit), timeout=max(15, timeout)):
+    for candidate in search_web(identity, limit=max(8, limit), timeout=max(10, timeout)):
         if candidate.url in seen:
             continue
         seen.add(candidate.url)
@@ -283,4 +278,6 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 8, timeou
         if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
             continue
         fallback.append(candidate)
+        if len(fallback) >= 8:
+            break
     return _resolve_valid_candidates(identity, fallback, limit=limit, timeout=timeout, trace=trace)

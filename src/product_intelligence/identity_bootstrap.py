@@ -305,7 +305,6 @@ def _add_prefix_evidence(out: list[tuple[str, float, str]], prefix: str, source:
     prefix = str(prefix or "").strip(" |:-–—•();,.")
     if not prefix:
         return
-    # Use the segment nearest the identifier, not an entire sentence/site title.
     segment = re.split(r"[|:–—•;,]", prefix)[-1].strip()
     brand = _clean_brand_phrase(segment)
     if brand:
@@ -329,8 +328,6 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
         if brand:
             out.append((brand, 5.5, "explicit_brand_label"))
 
-    # Marketplaces and known non-product collisions remain valid discovery sources,
-    # but their site/editorial title cannot itself become the product brand.
     if _marketplace_host(host) or _non_product_intent(candidate):
         return out
 
@@ -397,10 +394,8 @@ def _rank_brand_scores(identity: ProductIdentity, candidates: list[SearchCandida
             hay = key_norm(f"{candidate.title} {candidate.snippet}")
             score = base + evidence_score + (0.8 if any(x in hay for x in ("official", "manufacturer", "fabricante")) else 0.0)
             is_explicit = reason == "explicit_brand_label"
-            # A publisher/site naming itself in its own title is weak evidence of a
-            # product brand. It may still contribute, but cannot dominate cross-source evidence.
             if not is_explicit and _label_matches_host(brand, host):
-                score = min(score, 1.2)
+                score = min(score, 2.0)
             add(brand, score, host, explicit=is_explicit)
 
     for signal in page_signals or []:
@@ -433,8 +428,6 @@ def _rank_brand_scores(identity: ProductIdentity, candidates: list[SearchCandida
         for key, contributions in host_contribs.items()
     }
 
-    # Collapse a one-word prefix only when the specific multi-word form has real
-    # corroboration and is not merely a model/spec suffix.
     for long_key in list(scores):
         words = str(labels.get(long_key) or "").split()
         if len(words) != 2 or not _brand_like_second_token(words[1]):
@@ -488,9 +481,7 @@ def _finalize_resolution(identity: ProductIdentity, candidates: list[SearchCandi
     decisive_cross_source = host_count >= 2 and best_score >= 8.5 and (
         margin >= 2.5 or best_score >= max(1.0, runner_score) * 1.35
     )
-    decisive_host_diversity = (
-        host_count >= 3 and runner_host_count <= 1 and best_score >= 7.5 and best_score > runner_score
-    )
+    decisive_host_diversity = host_count >= 3 and runner_host_count <= 1 and best_score >= 7.5 and best_score > runner_score
     decisive_dominance = best_score >= 18.0 and margin >= 9.0 and best_score >= max(1.0, runner_score) * 1.7
     decisive_serp = not page_signals and host_count >= 2 and best_score >= 8.5 and margin >= 2.5
     resolved = decisive_page or decisive_cross_source or decisive_host_diversity or decisive_dominance or decisive_serp

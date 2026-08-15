@@ -16,6 +16,10 @@ on:
       - 'tests/integration_source_validation_benchmark.py'
       - '.github/workflows/source-validation-benchmark.yml'
 
+concurrency:
+  group: source-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   benchmark:
     runs-on: ubuntu-latest

@@ -84,6 +84,11 @@ def _is_strong_code(value: str) -> bool:
     )
 
 
+def identity_probe_budget() -> tuple[int, int]:
+    """Bound bootstrap page validation independently from deep scraping."""
+    return 4, 8
+
+
 def build_bootstrap_queries(identity: ProductIdentity) -> list[str]:
     raw = _raw_value(identity)
     if not raw:
@@ -363,8 +368,9 @@ def _structured_brand_present(page: dict, brand: str | None) -> bool:
 
 def _probe_candidate_page(identity: ProductIdentity, candidate: SearchCandidate) -> PageIdentitySignal:
     raw = _raw_value(identity)
+    _max_probes, probe_timeout = identity_probe_budget()
     try:
-        fetched = fetch_page(candidate.url, browser_fallback=False)
+        fetched = fetch_page(candidate.url, timeout=probe_timeout, browser_fallback=False)
         if int(fetched.status_code or 0) >= 400 or not fetched.html:
             return PageIdentitySignal(url=candidate.url, reason=f"HTTP_{fetched.status_code}")
         page = extract_page(fetched.html, fetched.final_url, [raw] if raw else [])
@@ -408,8 +414,12 @@ def _candidate_probe_rank(candidate: SearchCandidate, raw: str) -> tuple:
     )
 
 
-def _probe_top_candidates(identity: ProductIdentity, candidates: list[SearchCandidate], *, max_probes: int = 6) -> list[PageIdentitySignal]:
+def _probe_top_candidates(identity: ProductIdentity, candidates: list[SearchCandidate], *, max_probes: int | None = None) -> list[PageIdentitySignal]:
     raw = _raw_value(identity)
+    budget_probes, _timeout = identity_probe_budget()
+    max_probes = budget_probes if max_probes is None else max(0, min(max_probes, budget_probes))
+    if max_probes <= 0:
+        return []
     ordered = sorted(candidates, key=lambda c: _candidate_probe_rank(c, raw))
     signals: list[PageIdentitySignal] = []
     seen_hosts: set[str] = set()
@@ -451,9 +461,8 @@ def bootstrap_identity(identity: ProductIdentity, *, limit_per_query: int = 18, 
     result = IdentityBootstrapResult(identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED", reason="NO_SEARCH_RESULTS")
     probed_urls: set[str] = set()
     page_signals: list[PageIdentitySignal] = []
+    probe_limit, _probe_timeout = identity_probe_budget()
 
-    # High-value bootstrap queries first. The fourth manufacturer query is only used
-    # when the first three still cannot resolve identity.
     for index, query in enumerate(queries):
         rows = _search_raw(query, limit=limit_per_query, timeout=timeout)
         for row in rows:
@@ -467,7 +476,7 @@ def bootstrap_identity(identity: ProductIdentity, *, limit_per_query: int = 18, 
             result = serp_result
         else:
             fresh_probe_pool = [c for c in collected if c.url not in probed_urls]
-            fresh_signals = _probe_top_candidates(identity, fresh_probe_pool, max_probes=max(0, 6 - len(page_signals)))
+            fresh_signals = _probe_top_candidates(identity, fresh_probe_pool, max_probes=max(0, probe_limit - len(page_signals)))
             for signal in fresh_signals:
                 probed_urls.add(signal.url)
             page_signals.extend(fresh_signals)
@@ -489,7 +498,7 @@ def bootstrap_identity(identity: ProductIdentity, *, limit_per_query: int = 18, 
         ]
         if result.status == "RESOLVED":
             break
-        if len(page_signals) >= 6 and index >= 2:
+        if len(page_signals) >= probe_limit and index >= 2:
             break
 
     return result

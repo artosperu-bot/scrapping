@@ -19,16 +19,20 @@ _GENERIC_LEADING = {
     "buy", "shop", "official", "product", "products", "specification", "specifications",
     "specs", "manual", "datasheet", "review", "reviews", "new", "the", "a", "an",
     "teardown", "unboxing", "hands", "on", "guide", "of", "for", "with", "by",
+    "please", "visit", "overview", "welcome", "featuring", "want", "get", "explore",
+    "comparison", "compare", "this", "you", "can", "learn", "click", "here", "view", "see",
 }
 _CONTEXT_STOPWORDS = {
     "buy", "shop", "official", "product", "products", "specification", "specifications", "specs",
     "manual", "datasheet", "review", "reviews", "new", "the", "a", "an", "for", "with", "from",
     "and", "or", "of", "to", "in", "on", "by", "online", "price", "sale", "amazon", "ebay",
-    "walmart", "support", "page", "pdf", "download", "tracking", "history", "http", "https", "www",
+    "walmart", "support", "page", "pdf", "download", "downloads", "tracking", "history", "http", "https", "www",
     "com", "net", "org", "phone", "smartphone", "laptop", "monitor", "printer", "mouse", "keyboard",
     "cable", "ssd", "drive", "storage", "wireless", "wired", "headphone", "headphones", "router",
     "gaming", "memory", "desktop", "external", "internal", "black", "blue", "device", "technology",
-    "data", "best", "download", "manuals", "barcode", "productindetail", "icecat",
+    "data", "best", "manuals", "barcode", "productindetail", "icecat", "please", "visit", "overview",
+    "welcome", "featuring", "want", "get", "explore", "ratings", "rating", "comparison", "compare",
+    "this", "you", "can", "meet", "performance", "up", "learn", "click", "here", "view", "see",
 }
 _GENERIC_BRAND_WORDS = {
     "information", "details", "detail", "item", "items", "available", "availability", "discover",
@@ -36,10 +40,15 @@ _GENERIC_BRAND_WORDS = {
     "specification", "specifications", "specs", "manual", "manuals", "datasheet", "support",
     "store", "shop", "shopping", "online", "price", "prices", "review", "reviews", "benchmark",
     "benchmarks", "global", "official", "website", "site", "home", "catalog", "catalogue",
+    "please", "visit", "please visit", "overview", "download", "downloads", "welcome", "featuring",
+    "want", "get", "explore", "rating", "ratings", "comparison", "compare", "this", "you", "you can",
+    "can", "meet", "performance", "up", "learn", "click", "here", "view", "see", "multi-functional",
+    "multifunctional",
 }
 _SECOND_TOKEN_DESCRIPTORS = {
     "mobile", "global", "official", "store", "shop", "series", "model", "models", "item", "items",
     "information", "details", "detail", "setup", "support", "product", "products", "specifications",
+    "pro", "plus", "ultra", "max", "mini", "air", "gaming", "professional", "business",
 }
 _NON_PRODUCT_INTENT = {
     "flight", "airline", "airlines", "airport", "arrival", "departure",
@@ -177,8 +186,10 @@ def build_discovery_fallback_queries(raw: str) -> list[str]:
     if len(parts) >= 2 and len(parts[-1]) >= 4:
         variants.append(parts[-1])
     out: list[str] = []
+    intents = ("", "product", "model", "part number", "mpn", "manual", "datasheet")
     for value in variants:
-        out.extend([value, f"{value} product"])
+        for intent in intents:
+            out.append(f"{value} {intent}".strip())
     return list(dict.fromkeys(out))
 
 
@@ -263,7 +274,7 @@ def _candidate_has_full_raw(candidate: SearchCandidate, raw: str) -> bool:
 
 
 def _registrable_domain(host: str | None) -> str:
-    host = str(host or "").lower().split(":", 1)[0].removeprefix("www.").strip(".")
+    host = str(host or "").lower().split(":,", 1)[0].removeprefix("www.").strip(".")
     if not host:
         return ""
     parts = [p for p in host.split(".") if p]
@@ -407,7 +418,7 @@ def _brand_candidate_quality(brand: str | None, raw: str) -> bool:
     if re.fullmatch(r"\d+(?:w|kw|gb|tb|hz|mhz|ghz|mp|mah)?", norm, re.I):
         return False
     words = norm.split()
-    if words and words[0] in _GENERIC_BRAND_WORDS:
+    if words and (words[0] in _GENERIC_BRAND_WORDS or words[-1] in _GENERIC_BRAND_WORDS):
         return False
     return True
 
@@ -423,6 +434,19 @@ def _add_prefix_evidence(out: list[tuple[str, float, str]], prefix: str, source:
     multi = _clean_brand_phrase(segment, multiword=True)
     if multi and multi != brand:
         out.append((multi, multi_score, f"multiword_brand_before_raw_in_{source}"))
+
+
+def _add_suffix_evidence(out: list[tuple[str, float, str]], suffix: str, source: str, single_score: float, multi_score: float):
+    suffix = str(suffix or "").strip(" |:-–—•();,.")
+    if not suffix:
+        return
+    segment = re.split(r"[|:–—•;,]", suffix)[0].strip()
+    brand = _clean_brand_phrase(segment)
+    if brand:
+        out.append((brand, single_score, f"brand_after_raw_in_{source}"))
+    multi = _clean_brand_phrase(segment, multiword=True)
+    if multi and multi != brand:
+        out.append((multi, multi_score, f"multiword_brand_after_raw_in_{source}"))
 
 
 def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, float, str]]:
@@ -445,6 +469,8 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
     title_raw = raw_pattern.search(title)
     if title_raw:
         _add_prefix_evidence(out, title[:title_raw.start()], "title", 3.5, 3.8)
+        if _is_strong_code(raw):
+            _add_suffix_evidence(out, title[title_raw.end():], "title", 2.8, 3.0)
     elif _is_strong_code(raw) and (snippet_match or url_match or _candidate_has_full_raw(candidate, raw)):
         segment = re.split(r"[|:–—•]", title)[0].strip()
         brand = _clean_brand_phrase(segment)
@@ -457,6 +483,8 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
     snippet_raw = raw_pattern.search(snippet)
     if snippet_raw:
         _add_prefix_evidence(out, snippet[:snippet_raw.start()], "snippet", 3.0, 3.3)
+        if _is_strong_code(raw):
+            _add_suffix_evidence(out, snippet[snippet_raw.end():], "snippet", 2.6, 2.8)
 
     return [(brand, score, reason) for brand, score, reason in out if _brand_candidate_quality(brand, raw)]
 
@@ -634,13 +662,17 @@ def _rank_brand_scores(identity: ProductIdentity, candidates: list[SearchCandida
         short_key = _compact(words[0])
         long_hosts = hosts_by_brand.get(long_key, set())
         short_hosts = hosts_by_brand.get(short_key, set())
+        if short_key not in scores or short_key == long_key or not short_hosts or not long_hosts:
+            continue
+        same_evidence_cluster = long_hosts.issubset(short_hosts) or short_hosts.issubset(long_hosts)
+        if long_key not in explicit_keys and len(short_hosts) >= 2 and same_evidence_cluster:
+            scores.pop(long_key, None)
+            continue
         if (
-            short_key in scores
-            and short_key != long_key
+            long_key in explicit_keys
             and len(long_hosts) >= 2
-            and short_hosts
             and short_hosts.issubset(long_hosts)
-            and (long_key in explicit_keys or scores[long_key] >= scores[short_key] + 1.0)
+            and scores[long_key] >= scores[short_key]
         ):
             scores.pop(short_key, None)
 
@@ -844,7 +876,6 @@ def _probe_candidate_page(identity: ProductIdentity, candidate: SearchCandidate)
 
 def _candidate_probe_rank(candidate: SearchCandidate, raw: str) -> tuple:
     title_match, snippet_match, url_match = _candidate_text_matches_raw(candidate, raw)
-    host = (urlparse(candidate.url or "").hostname or "").lower()
     role = _candidate_role(candidate)
     technical = any(token in key_norm(f"{candidate.title} {candidate.snippet} {candidate.url}") for token in (
         "specification", "specifications", "datasheet", "manual", "support", "product",

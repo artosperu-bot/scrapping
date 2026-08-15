@@ -31,6 +31,33 @@ def test_unknown_brand_pdf_can_still_use_exact_strong_identifier():
     assert match.accepted is True
 
 
+def test_pdf_rejects_url_explicitly_bound_to_sibling_model():
+    identity = ProductIdentity(brand="Brother", model="HL-L2460DW")
+    text = "Brother HL-L2460DW and HL-L2480DW user guide."
+
+    match = validate_pdf_identity(
+        identity,
+        text,
+        "https://download.brother.com/welcome/doc101428/cv_hll2480dw_use_psg_e.pdf",
+    )
+
+    assert match.accepted is False
+    assert match.reason == "sibling_model_url_conflict"
+
+
+def test_pdf_keeps_exact_requested_model_url_binding():
+    identity = ProductIdentity(brand="Dell", model="P2422H")
+    text = "Dell P2422H Monitor User's Guide."
+
+    match = validate_pdf_identity(
+        identity,
+        text,
+        "https://downloads.dell.com/dell-p2422h-monitor_users-guide.pdf",
+    )
+
+    assert match.accepted is True
+
+
 def test_document_queries_use_every_available_strong_identifier_and_model():
     identity = ProductIdentity(
         brand="ExampleTech",

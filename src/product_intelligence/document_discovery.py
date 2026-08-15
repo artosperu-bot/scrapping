@@ -68,8 +68,9 @@ def build_document_queries(identity: ProductIdentity, official_domain: str | Non
     """Build precision-first document queries from every available identity key.
 
     Search operators accelerate discovery only; downstream content validation remains
-    authoritative. Query ordering intentionally spreads the first search budget across
-    all strong identifiers before deeper per-identifier expansions.
+    authoritative. Query ordering intentionally preserves the historically useful
+    human-verifiable primary query while spreading the bounded search budget across
+    every available strong identifier before deeper expansions.
     """
     brand = str(identity.brand or "").strip()
     model = _descriptive_model(identity)
@@ -77,24 +78,27 @@ def build_document_queries(identity: ProductIdentity, official_domain: str | Non
     domain = _clean_official_domain(official_domain)
     queries: list[str] = []
 
-    # Phase 1: exact PDF intent for every strong identifier so EAN/UPC/GTIN are not
-    # starved behind an MPN when discover_product_documents executes a bounded prefix.
+    # Keep the proven plain Part Number/primary-identifier query first.
+    if strong_values:
+        queries.append(f"{strong_values[0]} pdf")
+
+    # Exact PDF intent for every strong identifier so EAN/UPC/GTIN are not starved
+    # behind the MPN when discovery executes a bounded prefix.
     for strong in strong_values:
         queries.append(f'"{strong}" filetype:pdf')
 
-    # Phase 2: bind identifier to the resolved/descriptive model.
+    # Bind every identifier to the descriptive model.
     if model:
         for strong in strong_values:
             queries.append(f'"{strong}" "{model}" filetype:pdf')
 
-    # Phase 3: bind identifier to the resolved brand. Brand is corroboration, never a
+    # Bind every identifier to the resolved brand. Brand is corroboration, never a
     # substitute for the identifier itself.
     if brand:
         for strong in strong_values:
             queries.append(f'"{brand}" "{strong}" filetype:pdf')
 
-    # Phase 4: resilient plain-text fallbacks for search transports that ignore or
-    # partially support filetype operators.
+    # Resilient plain-text fallbacks for transports that ignore search operators.
     for strong in strong_values:
         quoted = f'"{strong}"'
         queries.extend([

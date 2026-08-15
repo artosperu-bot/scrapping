@@ -25,11 +25,42 @@ def _identity_token_supported(value: str | None, identity: ProductIdentity) -> b
     return bool(needle and needle in text)
 
 
-def _reconcile_identity(identity: ProductIdentity, specs: dict) -> ProductIdentity:
+def _explicit_identity_value(clean: list[Evidence], canonical: str, identity: ProductIdentity) -> str | None:
+    """Use explicit exact product-level identity facts to repair merchant-shaped identity.
+
+    This is deliberately narrower than specification consensus: the value must come from an
+    EXACT source, pass the generic/semantic gates already applied, and appear in the product's
+    own name/model text. That lets `Brand: Acme` repair a merchant organization accidentally
+    stored as brand without letting an unrelated seller name overwrite product identity.
+    """
+    candidates: list[Evidence] = []
+    for ev in clean:
+        if canonical_key(ev.attribute) != canonical:
+            continue
+        if str(ev.match_level or "").upper() != "EXACT":
+            continue
+        value = str(ev.normalized_value if ev.normalized_value not in (None, "") else ev.raw_value or "").strip()
+        if not value or not _identity_token_supported(value, identity):
+            continue
+        candidates.append(ev)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda ev: float(ev.confidence or 0), reverse=True)
+    top_value = str(candidates[0].normalized_value if candidates[0].normalized_value not in (None, "") else candidates[0].raw_value)
+    competing = {
+        key_norm(str(ev.normalized_value if ev.normalized_value not in (None, "") else ev.raw_value))
+        for ev in candidates
+    }
+    return top_value if len(competing) == 1 else None
+
+
+def _reconcile_identity(identity: ProductIdentity, specs: dict, clean: list[Evidence]) -> ProductIdentity:
     brand_spec = (specs.get("brand") or {}).get("value")
-    if brand_spec:
+    explicit_brand = _explicit_identity_value(clean, "brand", identity)
+    brand_value = brand_spec or explicit_brand
+    if brand_value:
         if not identity.brand or not _identity_token_supported(identity.brand, identity):
-            identity.brand = str(brand_spec)
+            identity.brand = str(brand_value)
     model_spec = (specs.get("model") or {}).get("value")
     if model_spec and not identity.model:
         identity.model = str(model_spec)
@@ -158,7 +189,7 @@ def build_record_strict(identity: ProductIdentity, evidence: list[Evidence], sou
             "supporting_sources": list(consensus.supporting_urls),
         }
 
-    identity = _reconcile_identity(identity, specs)
+    identity = _reconcile_identity(identity, specs, clean)
     record = ProductRecord(
         identity=identity,
         specifications=specs,

@@ -20,6 +20,14 @@ class App(OrganizedApp):
         ttk.Button(management, text="Eliminar trabajo", command=self._delete_selected_workspace).pack(side="left", padx=(8, 0))
         ttk.Button(management, text="Eliminar trabajo y archivos...", command=self._delete_selected_workspace_with_files).pack(side="left", padx=(8, 0))
 
+    def _apply_analysis_result(self, data: dict):
+        super()._apply_analysis_result(data)
+        # pick_excel() historically chooses an output directory beside the Excel.
+        # An active workspace owns its own user-safe root, so restore that root
+        # after asynchronous analysis commits the workbook state.
+        if self._active_workspace_id:
+            self._activate_workspace_storage(self._active_workspace_id)
+
 
 def main():
     App().mainloop()

@@ -68,7 +68,6 @@ def main() -> int:
 
     with provider_run_scope(PROVIDER_SETTINGS, audit=audit):
         for index, identity in enumerate(PRODUCTS, 1):
-            label = identity.mpn or identity.model or identity.product_name or f"product-{index}"
             logs: list[str] = []
             started = time.monotonic()
             try:
@@ -93,6 +92,7 @@ def main() -> int:
                     }
                 else:
                     metrics = _score(rec)
+                    safe = json.loads(rec.model_dump_json())
                     row = {
                         "input_brand": identity.brand,
                         "input_model": identity.model,
@@ -100,16 +100,16 @@ def main() -> int:
                         "status": "SCRAPED",
                         "elapsed_seconds": elapsed,
                         **metrics,
-                        "resolved_identity": rec.identity.model_dump(),
-                        "fetch": rec.fetch,
-                        "sources": rec.sources,
+                        "resolved_identity": safe["identity"],
+                        "fetch": safe["fetch"],
+                        "sources": safe["sources"],
                         "source_types": _source_types(rec),
-                        "specifications": rec.specifications,
-                        "additional_attributes": rec.additional_attributes,
-                        "missing_fields": rec.missing_fields,
-                        "conflicts": rec.conflicts,
-                        "warnings": rec.warnings,
-                        "evidence_sample": [ev.model_dump() for ev in rec.evidence[:20]],
+                        "specifications": safe["specifications"],
+                        "additional_attributes": safe["additional_attributes"],
+                        "missing_fields": safe["missing_fields"],
+                        "conflicts": safe["conflicts"],
+                        "warnings": safe["warnings"],
+                        "evidence_sample": safe["evidence"][:20],
                         "logs": logs[-60:],
                     }
             except Exception as exc:
@@ -150,9 +150,6 @@ def main() -> int:
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print("BASELINE_SUMMARY=" + json.dumps(summary, ensure_ascii=False))
-
-    # The test is diagnostic. It only fails if OCR/Mistral actually executed,
-    # because that would invalidate the requested baseline.
     return 1 if forbidden else 0
 
 

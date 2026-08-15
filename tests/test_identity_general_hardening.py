@@ -30,7 +30,7 @@ def test_cross_domain_leading_brand_can_use_retail_as_weak_discovery_evidence():
     candidates = [
         c("https://www.amazon.com/dp/ZX-9911", "ExampleTech Nova Mouse", "ExampleTech ZX-9911 wireless mouse"),
         c("https://www.ebay.com/itm/ZX-9911", "ExampleTech Nova Mouse ZX-9911", "new product"),
-        c("https://catalog.example.org/zx-9911", "ExampleTech Nova Mouse", "MPN ZX-9911"),
+        c("https://catalog.example.org/zx-9911", "ExampleTech Nova Mouse", "MPN ZX-9911. Manufacturer: ExampleTech"),
     ]
     result = resolve_identity_from_candidates(identity, candidates)
     assert result.status == "RESOLVED"

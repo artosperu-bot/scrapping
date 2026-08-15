@@ -107,9 +107,9 @@ def build_record_strict(identity: ProductIdentity, evidence: list[Evidence], sou
                 source_url=str(ev.source_url or ""),
                 authority=_consensus_authority(ev),
                 identity_status=_consensus_identity(ev),
-                confidence=float(q_value or 0.0),
+                confidence=float(ev.confidence or 0.0),
             )
-            for ev, q_value, _authority in rows
+            for ev, _q_value, _authority in rows
         ])
         consensus_audit[key] = {
             "status": consensus.status,

@@ -29,6 +29,7 @@ _CONTEXT_STOPWORDS = {
     "walmart", "support", "page", "pdf", "download", "downloads", "tracking", "history", "http", "https", "www",
     "com", "net", "org", "phone", "smartphone", "laptop", "monitor", "printer", "mouse", "keyboard",
     "cable", "ssd", "drive", "storage", "wireless", "wired", "headphone", "headphones", "router",
+    "sensor", "sensors", "adapter", "charger", "camera", "speaker", "television", "tv", "tablet",
     "gaming", "memory", "desktop", "external", "internal", "black", "blue", "device", "technology",
     "data", "best", "manuals", "barcode", "productindetail", "icecat", "please", "visit", "overview",
     "welcome", "featuring", "want", "get", "explore", "ratings", "rating", "comparison", "compare",
@@ -43,7 +44,7 @@ _GENERIC_BRAND_WORDS = {
     "please", "visit", "please visit", "overview", "download", "downloads", "welcome", "featuring",
     "want", "get", "explore", "rating", "ratings", "comparison", "compare", "this", "you", "you can",
     "can", "meet", "performance", "up", "learn", "click", "here", "view", "see", "multi-functional",
-    "multifunctional",
+    "multifunctional", "sensor", "sensors", "adapter", "charger", "camera", "speaker", "television",
 }
 _SECOND_TOKEN_DESCRIPTORS = {
     "mobile", "global", "official", "store", "shop", "series", "model", "models", "item", "items",
@@ -274,7 +275,7 @@ def _candidate_has_full_raw(candidate: SearchCandidate, raw: str) -> bool:
 
 
 def _registrable_domain(host: str | None) -> str:
-    host = str(host or "").lower().split(":,", 1)[0].removeprefix("www.").strip(".")
+    host = str(host or "").lower().split(":", 1)[0].removeprefix("www.").strip(".")
     if not host:
         return ""
     parts = [p for p in host.split(".") if p]
@@ -470,7 +471,7 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
     if title_raw:
         _add_prefix_evidence(out, title[:title_raw.start()], "title", 3.5, 3.8)
         if _is_strong_code(raw):
-            _add_suffix_evidence(out, title[title_raw.end():], "title", 2.8, 3.0)
+            _add_suffix_evidence(out, title[title_raw.end():], "title", 1.5, 1.7)
     elif _is_strong_code(raw) and (snippet_match or url_match or _candidate_has_full_raw(candidate, raw)):
         segment = re.split(r"[|:–—•]", title)[0].strip()
         brand = _clean_brand_phrase(segment)
@@ -484,7 +485,7 @@ def _brand_evidence(candidate: SearchCandidate, raw: str) -> list[tuple[str, flo
     if snippet_raw:
         _add_prefix_evidence(out, snippet[:snippet_raw.start()], "snippet", 3.0, 3.3)
         if _is_strong_code(raw):
-            _add_suffix_evidence(out, snippet[snippet_raw.end():], "snippet", 2.6, 2.8)
+            _add_suffix_evidence(out, snippet[snippet_raw.end():], "snippet", 1.4, 1.6)
 
     return [(brand, score, reason) for brand, score, reason in out if _brand_candidate_quality(brand, raw)]
 

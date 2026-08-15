@@ -71,6 +71,31 @@ def test_same_host_duplicate_noise_cannot_outvote_cross_source_brand():
     assert result.brand_hosts["Acme"] == 2
 
 
+def test_non_product_intent_noise_cannot_outvote_product_brand():
+    identity = ProductIdentity(mpn="ZX-5000")
+    candidates = [
+        SearchCandidate("https://maker.example/zx-5000", "Acme ZX-5000 Sensor", "Acme ZX-5000 industrial sensor"),
+        SearchCandidate("https://dealer.example/acme-zx-5000", "Acme ZX-5000 specifications", "Manufacturer: Acme"),
+        SearchCandidate("https://flight-one.example/zx-5000", "AirlineCo ZX-5000 flight tracking", "Track airline flight ZX-5000"),
+        SearchCandidate("https://flight-two.example/zx-5000", "AirlineCo ZX-5000 flight history", "Airport status for flight ZX-5000"),
+        SearchCandidate("https://flight-three.example/zx-5000", "AirlineCo ZX-5000 airline status", "Flight ZX-5000 arrival information"),
+    ]
+    result = resolve_identity_from_candidates(identity, candidates)
+    assert result.status == "RESOLVED"
+    assert result.identity.brand == "Acme"
+
+
+def test_multiword_brand_is_preserved_when_cross_source_evidence_agrees():
+    identity = ProductIdentity(mpn="ZX-5100")
+    candidates = [
+        SearchCandidate("https://northstar.example/zx-5100", "North Star ZX-5100 Sensor", "North Star ZX-5100 product"),
+        SearchCandidate("https://dealer.example/north-star-zx-5100", "North Star ZX-5100 specifications", "Manufacturer: North Star"),
+    ]
+    result = resolve_identity_from_candidates(identity, candidates)
+    assert result.status == "RESOLVED"
+    assert result.identity.brand == "North Star"
+
+
 def test_bootstrap_candidate_filter_requires_full_raw_identity_not_partial_noise():
     raw = "V15 G4 IRU"
     candidates = [
@@ -104,6 +129,17 @@ def test_context_terms_learn_repeated_product_context_without_assigning_brand():
     assert "apple" in {term.lower() for term in terms[:3]}
     assert any('"A2794" "Apple"' in q or '"A2794" "apple"' in q for q in queries)
     assert all("flight" not in q.lower() for q in queries[:2])
+
+
+def test_context_terms_never_return_the_raw_identifier_itself():
+    raw = "ZX5000A"
+    candidates = [
+        SearchCandidate("https://one.example/zx5000a", "Acme ZX5000A sensor", "ZX5000A technical product"),
+        SearchCandidate("https://two.example/zx5000a", "ZX5000A Acme specifications", "Acme ZX5000A"),
+        SearchCandidate("https://three.example/zx5000a", "ZX5000A product details", "ZX5000A sensor"),
+    ]
+    terms = derive_context_terms(raw, candidates)
+    assert raw.lower() not in {term.lower() for term in terms}
 
 
 def test_discovery_fallback_queries_are_broad_but_do_not_invent_brand():

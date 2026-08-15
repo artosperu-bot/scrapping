@@ -41,7 +41,6 @@ def _descriptive_model(identity: ProductIdentity) -> str:
 
 
 def build_document_queries(identity: ProductIdentity) -> list[str]:
-    """Return a bounded, high-yield query set instead of many near-duplicates."""
     brand = str(identity.brand or "").strip()
     model = _descriptive_model(identity)
     strong = next((str(x).strip() for x in [identity.mpn, identity.ean, identity.upc, identity.gtin] if x), "")
@@ -50,10 +49,12 @@ def build_document_queries(identity: ProductIdentity) -> list[str]:
         quoted = f'"{strong}"'
         queries.extend([
             f"{strong} pdf",
+            f"{quoted} pdf",
             f"{quoted} filetype:pdf",
             f"{quoted} datasheet pdf",
             f"{quoted} manual pdf",
             f"{quoted} support downloads",
+            quoted,
         ])
     if brand and model:
         phrase = f'"{brand} {model}"'
@@ -63,7 +64,7 @@ def build_document_queries(identity: ProductIdentity) -> list[str]:
             f"{phrase} filetype:pdf",
             f"{phrase} support downloads",
         ])
-    return list(dict.fromkeys(q for q in queries if q.strip()))[:9]
+    return list(dict.fromkeys(q for q in queries if q.strip()))
 
 
 def classify_document_candidate(url: str, title: str = "", snippet: str = "") -> str | None:

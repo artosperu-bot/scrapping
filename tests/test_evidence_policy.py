@@ -1,4 +1,9 @@
-from product_intelligence.evidence_policy import decide_evidence, is_noise_attribute
+from product_intelligence.evidence_policy import (
+    ConsensusFact,
+    decide_evidence,
+    is_noise_attribute,
+    resolve_evidence_group,
+)
 
 
 def test_category_page_evidence_is_blocked():
@@ -57,3 +62,37 @@ def test_weak_third_party_fact_fails_closed():
     )
     assert decision.allowed is False
     assert decision.reason == "INSUFFICIENT_CORROBORATION"
+
+
+def test_two_strong_conflicting_sources_leave_field_empty():
+    result = resolve_evidence_group([
+        ConsensusFact("5000", "https://brand.example/a", "manufacturer", "EXACT", .95),
+        ConsensusFact("6000", "https://support.brand.example/b", "manufacturer_support", "EXACT", .95),
+    ])
+    assert result.accepted_value is None
+    assert result.reason == "SOURCE_CONFLICT"
+
+
+def test_exact_manufacturer_single_source_can_win():
+    result = resolve_evidence_group([
+        ConsensusFact("5000", "https://brand.example/a", "manufacturer", "EXACT", .95),
+    ])
+    assert result.accepted_value == "5000"
+    assert result.reason == "HIGH_AUTHORITY_EXACT"
+
+
+def test_low_authority_single_source_requires_corroboration():
+    result = resolve_evidence_group([
+        ConsensusFact("5000", "https://shop.example/a", "retailer", "EXACT", .95),
+    ])
+    assert result.accepted_value is None
+    assert result.reason == "INSUFFICIENT_CORROBORATION"
+
+
+def test_two_independent_lower_authority_sources_can_corroborate():
+    result = resolve_evidence_group([
+        ConsensusFact("5000", "https://shop-a.example/a", "retailer", "EXACT", .93),
+        ConsensusFact("5000", "https://shop-b.example/b", "retailer", "EXACT", .92),
+    ])
+    assert result.accepted_value == "5000"
+    assert result.reason == "CORROBORATED"

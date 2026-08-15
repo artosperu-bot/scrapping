@@ -36,6 +36,26 @@ def _page_rows(page, selector: str, script: str):
         return []
 
 
+def _pdf_link_rows(page):
+    """Read rendered PDF-link candidates without letting navigation races escape.
+
+    Some commerce/support pages replace the document while Playwright is
+    evaluating the locator, which destroys the execution context. That is a
+    transient discovery miss, not a fatal product failure.
+    """
+    try:
+        return page.locator(
+            "a[href], [data-url], [data-href], [data-file], [data-download-url]"
+        ).evaluate_all(
+            """els => els.map(el => ({
+              href: el.href || el.dataset?.url || el.dataset?.href || el.dataset?.file || el.dataset?.downloadUrl || '',
+              text: (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()
+            }))"""
+        )
+    except Exception:
+        return []
+
+
 def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
     """Use bundled Chromium as a real-browser fallback for search discovery."""
     if not str(query or "").strip():
@@ -127,12 +147,7 @@ def browser_pdf_links(url: str, *, timeout: int = 20, limit: int = 30) -> list[t
             except Exception:
                 return []
 
-            raw = page.locator("a[href], [data-url], [data-href], [data-file], [data-download-url]").evaluate_all(
-                """els => els.map(el => ({
-                  href: el.href || el.dataset?.url || el.dataset?.href || el.dataset?.file || el.dataset?.downloadUrl || '',
-                  text: (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()
-                }))"""
-            )
+            raw = _pdf_link_rows(page)
             found: list[tuple[str, str]] = []
             seen = set()
             for row in raw:

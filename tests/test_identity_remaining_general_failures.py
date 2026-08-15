@@ -57,3 +57,44 @@ def test_zero_result_fallback_queries_include_generic_identifier_intents_without
     assert any("model" in q for q in lower)
     assert any("manual" in q or "datasheet" in q for q in lower)
     assert all("hp" not in q for q in lower)
+
+
+def test_sibling_model_code_cannot_resolve_as_brand_from_serp_text():
+    identity = ProductIdentity(mpn="AB12-CD34X")
+    candidates = [
+        c("https://one.example/ab12-cd34x", "Nova AB12-CD34X smartphone", "Compatible with AB12-CD34Y accessories"),
+        c("https://two.example/ab12-cd34x", "AB12-CD34X Nova specifications", "Compare AB12-CD34X vs AB12-CD34Y"),
+        c("https://three.example/ab12-cd34x", "Nova AB12-CD34X", "Manufacturer: Nova"),
+    ]
+    result = resolve_identity_from_candidates(identity, candidates)
+    assert result.status == "RESOLVED"
+    assert result.identity.brand == "Nova"
+    assert "AB12-CD34Y" not in result.brand_scores
+
+
+def test_condition_words_before_brand_are_not_brand_candidates():
+    identity = ProductIdentity(mpn="ZX-8110")
+    candidates = [
+        c("https://one.example/zx-8110", "Used Acme ZX-8110 Wireless Mouse", "Acme ZX-8110"),
+        c("https://two.example/zx-8110", "Refurbished Acme ZX-8110", "Manufacturer: Acme"),
+        c("https://three.example/zx-8110", "Renewed Acme ZX-8110", "Acme product ZX-8110"),
+    ]
+    result = resolve_identity_from_candidates(identity, candidates)
+    assert result.status == "RESOLVED"
+    assert result.identity.brand == "Acme"
+    forbidden = {"used", "used acme", "refurbished", "refurbished acme", "renewed", "renewed acme"}
+    assert not forbidden.intersection({k.lower() for k in result.brand_scores})
+
+
+def test_generic_product_descriptors_cannot_win_as_brand_across_domains():
+    identity = ProductIdentity(mpn="PR-4550")
+    candidates = [
+        c("https://one.example/pr-4550", "A4 multi-function printer PR-4550", "Acme PR-4550 printer"),
+        c("https://two.example/pr-4550", "multi-function PR-4550 all-in-one", "Manufacturer: Acme"),
+        c("https://three.example/pr-4550", "All-in-One PR-4550", "Acme PR-4550 specifications"),
+    ]
+    result = resolve_identity_from_candidates(identity, candidates)
+    assert result.status == "RESOLVED"
+    assert result.identity.brand == "Acme"
+    forbidden = {"a4", "multi-function", "multifunction", "all-in-one"}
+    assert not forbidden.intersection({k.lower() for k in result.brand_scores})

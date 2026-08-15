@@ -31,13 +31,6 @@ def _compact_identity(value: object) -> str:
 
 
 def _identity_bound_evidence_ok(canonical: str, ev: Evidence, identity: ProductIdentity) -> tuple[bool, str]:
-    """Prevent secondary identifiers mentioned inside a valid document from becoming product identity facts.
-
-    Manuals/datasheets often list family models, compatible SKUs, accessories or regional codes. The
-    document itself may be valid for the requested product while one extracted identity-shaped line is
-    not the primary product identity. If the user supplied that identity dimension, contradictory
-    extracted values fail closed instead of entering record evidence/consensus.
-    """
     expected = {
         "mpn": identity.mpn,
         "ean": identity.ean,
@@ -59,11 +52,12 @@ def _identity_bound_evidence_ok(canonical: str, ev: Evidence, identity: ProductI
         return (got == exp, "IDENTITY_VALUE_MATCH" if got == exp else f"IDENTITY_EVIDENCE_CONFLICT:{canonical}")
 
     if canonical == "brand":
-        compatible = got == exp or got in exp or exp in got
+        # The initial brand can itself be merchant/organization contamination. An explicit
+        # product-brand value is allowed to repair it only when that value is present in the
+        # product's own model/name text; arbitrary unrelated brands remain blocked.
+        compatible = got == exp or got in exp or exp in got or _identity_token_supported(str(value), identity)
         return (compatible, "IDENTITY_VALUE_MATCH" if compatible else "IDENTITY_EVIDENCE_CONFLICT:brand")
 
-    # Model/name values may include the brand or a descriptive suffix, but the requested model
-    # must remain the dominant token sequence. A sibling model such as 26 vs 22 is rejected.
     compatible = exp in got or got in exp
     return (compatible, "IDENTITY_VALUE_MATCH" if compatible else "IDENTITY_EVIDENCE_CONFLICT:model")
 

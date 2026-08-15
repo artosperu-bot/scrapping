@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from .discovery import MARKETPLACE_HINTS, SearchCandidate, search_raw
+from .discovery import MARKETPLACE_HINTS, SearchCandidate, _provider_search
 from .models import ProductIdentity
 from .normalize import key_norm
 
@@ -116,8 +116,6 @@ def _clean_brand_phrase(value: str) -> str | None:
         tokens.pop(0)
     if not tokens:
         return None
-    # Brand resolution is intentionally conservative. A single leading token is
-    # much less likely to absorb a product family/model into the brand value.
     token = tokens[0].strip("-_.")
     if len(token) < 2 or token.isdigit():
         return None
@@ -259,27 +257,37 @@ def resolve_identity_from_candidates(identity: ProductIdentity, candidates: list
     )
 
 
+def _search_raw(query: str, *, limit: int = 18, timeout: int = 8) -> list[SearchCandidate]:
+    rows = _provider_search(query, timeout)
+    out: list[SearchCandidate] = []
+    seen: set[str] = set()
+    for url, title, snippet in rows:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(SearchCandidate(url=url, title=title, snippet=snippet))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def bootstrap_identity(identity: ProductIdentity, *, limit_per_query: int = 18, timeout: int = 8) -> IdentityBootstrapResult:
     queries = build_bootstrap_queries(identity)
     collected: list[SearchCandidate] = []
     seen_urls: set[str] = set()
     result = IdentityBootstrapResult(identity=identity.model_copy(deep=True), status="IDENTITY_UNRESOLVED", reason="NO_SEARCH_RESULTS")
 
-    for query in queries:
-        rows = search_raw(query, limit=limit_per_query, timeout=timeout)
+    for index, query in enumerate(queries):
+        rows = _search_raw(query, limit=limit_per_query, timeout=timeout)
         for row in rows:
             if row.url in seen_urls:
                 continue
             seen_urls.add(row.url)
             collected.append(row)
         result = resolve_identity_from_candidates(identity, collected)
-        result.queries_executed = list(queries[: queries.index(query) + 1])
+        result.queries_executed = queries[: index + 1]
         result.search_results_found = len(collected)
         result.candidate_urls = [c.url for c in collected]
-        if result.status == "RESOLVED" and len(result.brand_hosts.get(result.identity.brand or "", 0) if False else []) > 1:
-            break
-        # The resolver already requires either a decisive score margin or independent
-        # sources, so a resolved result is safe to use as an early-success bootstrap.
         if result.status == "RESOLVED":
             break
 

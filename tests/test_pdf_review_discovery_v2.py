@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import fitz
 
@@ -15,7 +16,7 @@ def _pdf(path: Path, pages: int = 3) -> Path:
     doc = fitz.open()
     for idx in range(pages):
         page = doc.new_page()
-        page.insert_text((72, 72), f"JBL Quantum 350 Wireless page {idx + 1}")
+        page.insert_text((72, 72), f"JBL Quantum 350 Wireless JBLQ350WLBLKAM page {idx + 1}")
     doc.save(path)
     doc.close()
     return path
@@ -177,6 +178,31 @@ def test_review_discovery_does_not_download_pdf(monkeypatch):
 
     assert len(rows) == 1
     assert rows[0].url.endswith("manual.pdf")
+
+
+def test_pdf_over_ten_pages_is_rejected_from_manual_selection(monkeypatch, tmp_path):
+    from product_intelligence import pdf_review
+
+    source = _pdf(tmp_path / "too-long.pdf", pages=11)
+    monkeypatch.setattr(
+        pdf_review,
+        "download_pdf",
+        lambda url, *_args, **_kwargs: SimpleNamespace(path=source, final_url=url),
+    )
+
+    inspection = pdf_review.inspect_pdf_candidate(
+        _identity(),
+        "https://www.jbl.com/JBLQ350WLBLKAM-too-long.pdf",
+        tmp_path / "cache",
+        likely_official=True,
+        identity_score=100,
+    )
+
+    assert inspection.page_count == 11
+    assert inspection.selection_allowed is False
+    assert inspection.identity_accepted is False
+    assert inspection.identity_pending_ocr is False
+    assert inspection.identity_reason == "page_limit_exceeded"
 
 
 def test_render_pdf_page_supports_arbitrary_page_and_zoom(tmp_path):

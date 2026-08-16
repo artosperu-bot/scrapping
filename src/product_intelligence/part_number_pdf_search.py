@@ -24,32 +24,55 @@ class PartNumberPdfSearchResult:
     page_limit_rejected_count: int
 
 
-def _clean_part_number(value: str) -> str:
-    return str(value or "").strip()
+def _clean(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
-def search_product_pdfs_by_part_number(
-    part_number: str,
+def _primary_identifier(identity: ProductIdentity) -> str:
+    return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or "").strip()
+
+
+def search_product_pdfs(
     cache_dir: str | Path,
     *,
+    mpn: str | None = None,
+    ean: str | None = None,
+    upc: str | None = None,
+    gtin: str | None = None,
+    brand: str | None = None,
+    model: str | None = None,
+    product_name: str | None = None,
     limit: int = 8,
     timeout: int = 10,
     log: Callable[[str], None] | None = None,
 ) -> PartNumberPdfSearchResult:
-    """Find only validated PDFs for one product starting from a raw Part Number.
+    """Resolve identity and surface only validated short PDFs from real identifiers.
 
-    Contract:
-    - input is the Part Number only;
-    - web/HTML may be used only to resolve identity and discover document links;
-    - output contains PDFs only, already downloaded and identity-validated;
-    - OCR, Mistral and specification extraction are not invoked here;
-    - PDFs longer than MAX_REVIEW_PDF_PAGES are not surfaced.
+    MPN, EAN, UPC and GTIN retain their semantic roles. A trade code is never copied
+    into `mpn`; when no descriptive model exists it is used only as the temporary
+    `model` placeholder so the shared resolver can recognize code-only input.
     """
-    part = _clean_part_number(part_number)
-    if not part:
-        raise ValueError("part_number_required")
+    mpn = _clean(mpn)
+    ean = _clean(ean)
+    upc = _clean(upc)
+    gtin = _clean(gtin)
+    brand = _clean(brand)
+    model = _clean(model)
+    product_name = _clean(product_name)
+    primary = mpn or ean or upc or gtin
+    if not primary:
+        raise ValueError("product_identifier_required")
 
-    identity = ProductIdentity(model=part, mpn=part)
+    identity = ProductIdentity(
+        brand=brand,
+        product_name=product_name,
+        model=model or product_name or primary,
+        mpn=mpn,
+        ean=ean,
+        upc=upc,
+        gtin=gtin,
+    )
     result = discover_validated_review_pdfs(
         identity,
         cache_dir,
@@ -65,23 +88,20 @@ def search_product_pdfs_by_part_number(
         if pages > MAX_REVIEW_PDF_PAGES:
             page_limit_rejected += 1
             if log:
-                log(
-                    f"[PAGE_LIMIT] REJECTED {row.candidate.url} · pages={pages} "
-                    f"max={MAX_REVIEW_PDF_PAGES}"
-                )
+                log(f"[PAGE_LIMIT] REJECTED {row.candidate.url} · pages={pages} max={MAX_REVIEW_PDF_PAGES}")
             continue
         accepted.append(row)
 
     if log:
         resolved = result.resolved.identity
         log(
-            f"[PART_NUMBER_PDF_RESULT] part={part} brand={resolved.brand or '-'} "
+            f"[PRODUCT_PDF_RESULT] identifier={primary} brand={resolved.brand or '-'} "
             f"model={resolved.model or resolved.product_name or '-'} "
             f"validated={len(accepted)} page_limit_rejected={page_limit_rejected}"
         )
 
     return PartNumberPdfSearchResult(
-        part_number=part,
+        part_number=primary,
         resolved=result.resolved,
         candidates=tuple(accepted),
         discovered_count=result.discovered_count,
@@ -90,4 +110,25 @@ def search_product_pdfs_by_part_number(
         rejected_count=result.rejected_count + page_limit_rejected,
         duplicate_count=result.duplicate_count,
         page_limit_rejected_count=page_limit_rejected,
+    )
+
+
+def search_product_pdfs_by_part_number(
+    part_number: str,
+    cache_dir: str | Path,
+    *,
+    limit: int = 8,
+    timeout: int = 10,
+    log: Callable[[str], None] | None = None,
+) -> PartNumberPdfSearchResult:
+    part = _clean(part_number)
+    if not part:
+        raise ValueError("part_number_required")
+    return search_product_pdfs(
+        cache_dir,
+        mpn=part,
+        model=part,
+        limit=limit,
+        timeout=timeout,
+        log=log,
     )

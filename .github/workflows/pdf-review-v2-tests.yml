@@ -61,3 +61,41 @@ jobs:
       - name: Pass focused gate
         if: steps.pytest.outcome == 'success'
         run: echo 'PDF Review V2 focused tests PASS'
+
+  full-regression-diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Run full regression with junit
+        id: pytest
+        continue-on-error: true
+        run: python -m pytest -q --junitxml=full-regression-junit.xml
+      - name: Annotate full regression failures
+        if: steps.pytest.outcome == 'failure'
+        shell: python
+        run: |
+          import xml.etree.ElementTree as ET
+          root = ET.parse('full-regression-junit.xml').getroot()
+          count = 0
+          for case in root.iter('testcase'):
+              node = case.find('failure')
+              if node is None:
+                  node = case.find('error')
+              if node is None:
+                  continue
+              count += 1
+              name = f"{case.get('classname','')}::{case.get('name','')}"
+              message = (node.get('message') or (node.text or '')).replace('\n', ' ')[:1800]
+              print(f"::error title=Full regression failure::{name} — {message}")
+          if count == 0:
+              print('::error title=Full regression failure::pytest failed without a parsed junit failure')
+          raise SystemExit(1)
+      - name: Pass full regression diagnostic gate
+        if: steps.pytest.outcome == 'success'
+        run: echo 'Full regression diagnostic gate PASS'

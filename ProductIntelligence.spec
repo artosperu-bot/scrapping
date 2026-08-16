@@ -17,19 +17,18 @@ datas=[]; binaries=[]; hiddenimports=[
     'product_intelligence.social_video_downloader',
 ]
 
-for package_name in ('playwright', 'yt_dlp', 'imageio_ffmpeg'):
-    try:
-        d,b,h=collect_all(package_name)
-        datas += d; binaries += b; hiddenimports += h
-    except Exception:
-        pass
+try:
+    d,b,h=collect_all('playwright')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
 
-# Keep explicit calls as a source-level bundle contract for the video downloader.
 try:
     d,b,h=collect_all('yt_dlp')
     datas += d; binaries += b; hiddenimports += h
 except Exception:
     pass
+
 try:
     d,b,h=collect_all('imageio_ffmpeg')
     datas += d; binaries += b; hiddenimports += h

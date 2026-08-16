@@ -63,18 +63,30 @@ def _has_descriptive_model(identity: ProductIdentity) -> bool:
     return False
 
 
-def _best_observed_model(result, original: ProductIdentity) -> str | None:
-    """Recover a descriptive model from exact page probes when Excel model is the MPN.
+def _signal_dict(signal) -> dict:
+    if isinstance(signal, dict):
+        return dict(signal)
+    return {
+        "url": getattr(signal, "url", ""),
+        "brand": getattr(signal, "brand", None),
+        "manufacturer": getattr(signal, "manufacturer", None),
+        "model": getattr(signal, "model", None),
+        "product_name": getattr(signal, "product_name", None),
+        "exact_raw_match": bool(getattr(signal, "exact_raw_match", False)),
+        "strong_identifier_match": bool(getattr(signal, "strong_identifier_match", False)),
+        "material": bool(getattr(signal, "material", False)),
+        "structured_brand": bool(getattr(signal, "structured_brand", False)),
+        "authority_owned": bool(getattr(signal, "authority_owned", False)),
+        "reason": getattr(signal, "reason", ""),
+    }
 
-    The existing bootstrap already probes exact product pages and records observed
-    model/product_name values. We reuse those signals rather than creating another
-    search/resolver or hard-coding vendor-specific parsing.
-    """
+
+def _best_observed_model(result, original: ProductIdentity) -> str | None:
+    """Recover a descriptive model from exact page probes when Excel model is the MPN."""
     strong = _strong_keys(original)
     ranked: list[tuple[int, int, str]] = []
-    for signal in list(getattr(result, "page_signals", []) or []):
-        if not isinstance(signal, dict):
-            continue
+    for raw_signal in list(getattr(result, "page_signals", []) or []):
+        signal = _signal_dict(raw_signal)
         if not signal.get("material") or not signal.get("exact_raw_match"):
             continue
         for field in ("model", "product_name"):
@@ -86,19 +98,73 @@ def _best_observed_model(result, original: ProductIdentity) -> str | None:
             score += 4 if signal.get("structured_brand") else 0
             score += 3 if signal.get("strong_identifier_match") else 0
             score += 2 if field == "model" else 1
-            ranked.append((score, len(value), value))
+            # Prefer a concise model over a full retailer product title when trust is equal.
+            length_penalty = max(0, len(value) - 80) // 20
+            ranked.append((score - length_penalty, -len(value), value))
     if not ranked:
         return None
     ranked.sort(reverse=True)
     return ranked[0][2]
 
 
+def _supplement_bootstrap_pages(identity: ProductIdentity, result, *, max_extra_probes: int = 4):
+    """Reuse the existing identity resolver for a bounded second page-probe pass.
+
+    The normal bootstrap intentionally probes only a few pages. If that pass learns a
+    brand but leaves model==MPN, or remains unresolved, inspect a few *already found*
+    candidate URLs instead of launching a second independent resolver/search system.
+    """
+    try:
+        from .discovery import SearchCandidate
+        from .identity_bootstrap import (
+            PageIdentitySignal,
+            _probe_candidate_page,
+            resolve_identity_with_page_signals,
+        )
+    except Exception:
+        return result
+
+    previous_signals = []
+    seen_urls: set[str] = set()
+    for raw_signal in list(getattr(result, "page_signals", []) or []):
+        data = _signal_dict(raw_signal)
+        url = str(data.get("url") or "")
+        if url:
+            seen_urls.add(url)
+        try:
+            previous_signals.append(PageIdentitySignal(**{key: data.get(key) for key in PageIdentitySignal.__dataclass_fields__}))
+        except Exception:
+            pass
+
+    candidate_urls = [str(url) for url in (getattr(result, "candidate_urls", []) or []) if str(url).strip()]
+    extra_signals = []
+    for url in candidate_urls:
+        if url in seen_urls:
+            continue
+        signal = _probe_candidate_page(identity, SearchCandidate(url=url))
+        extra_signals.append(signal)
+        seen_urls.add(url)
+        if len(extra_signals) >= max(0, int(max_extra_probes)):
+            break
+
+    if not extra_signals:
+        return result
+
+    candidates = [SearchCandidate(url=url) for url in candidate_urls]
+    combined_signals = [*previous_signals, *extra_signals]
+    supplemented = resolve_identity_with_page_signals(identity, candidates, combined_signals)
+    supplemented.queries_executed = list(getattr(result, "queries_executed", []) or [])
+    supplemented.search_results_found = int(getattr(result, "search_results_found", 0) or len(candidate_urls))
+    supplemented.candidate_urls = candidate_urls
+    return supplemented if supplemented.status == "RESOLVED" or getattr(result, "status", "") != "RESOLVED" else result
+
+
 def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> ResolvedPdfIdentity:
     """Resolve Excel code-only identity with the existing shared bootstrap.
 
-    Strong identifiers owned by the Excel row are preserved even when bootstrap
-    enriches brand/model/manufacturer. If Excel placed the MPN in the model field,
-    exact page probes may replace that placeholder with a descriptive model.
+    Strong identifiers owned by the Excel row are preserved. A second *bounded* page
+    probe is allowed only when the existing bootstrap remains incomplete; it reuses
+    the same page probe and resolver and does not hard-code brands or products.
     """
     if identity.brand and _has_descriptive_model(identity):
         return ResolvedPdfIdentity(
@@ -120,6 +186,16 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
     except Exception:
         return ResolvedPdfIdentity(identity, identity, None, "UNRESOLVED", float(identity.confidence or 0.0))
 
+    initial_resolved = getattr(result, "identity", None)
+    incomplete = (
+        str(getattr(result, "status", "")).upper() != "RESOLVED"
+        or initial_resolved is None
+        or not getattr(initial_resolved, "brand", None)
+        or not _has_descriptive_model(initial_resolved)
+    )
+    if incomplete:
+        result = _supplement_bootstrap_pages(identity, result, max_extra_probes=4)
+
     resolved = getattr(result, "identity", None)
     if str(getattr(result, "status", "")).upper() != "RESOLVED" or resolved is None:
         return ResolvedPdfIdentity(identity, identity, None, "UNRESOLVED", float(identity.confidence or 0.0))
@@ -135,13 +211,27 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
         observed_model = _best_observed_model(result, identity)
         if observed_model:
             updates["model"] = observed_model
-            if not getattr(resolved, "product_name", None):
+            product_name = str(getattr(resolved, "product_name", "") or "").strip()
+            if not product_name or _compact(product_name) in _strong_keys(identity):
                 updates["product_name"] = observed_model
 
     if updates:
         resolved = resolved.model_copy(update=updates)
 
     domain = str(getattr(result, "official_domain_hint", "") or "").strip() or None
+    if domain is None:
+        # Reuse trusted authority-owned page signals as the manufacturer-domain hint.
+        from urllib.parse import urlparse
+
+        for raw_signal in list(getattr(result, "page_signals", []) or []):
+            signal = _signal_dict(raw_signal)
+            if not signal.get("authority_owned") or not signal.get("exact_raw_match"):
+                continue
+            host = (urlparse(str(signal.get("url") or "")).hostname or "").lower().removeprefix("www.")
+            if host:
+                domain = host
+                break
+
     return ResolvedPdfIdentity(
         raw=identity,
         identity=resolved,
@@ -213,9 +303,9 @@ def discover_validated_review_pdfs(
 ) -> ReviewDiscoveryResult:
     """Discover, download and validate PDFs before they are shown in Review PDF.
 
-    This stage deliberately performs no OCR, no Mistral and no specification
-    extraction. Only internally validated or trusted-provenance-bound PDFs are
-    surfaced. The user's later confirmed selection is a separate authorization.
+    This stage performs no OCR, no Mistral and no specification extraction. Only
+    internally validated or trusted-provenance-bound PDFs are surfaced. The user's
+    confirmed selection remains a separate authorization boundary.
     """
     resolved, rows = discover_pdf_documents(identity, limit=limit, timeout=timeout)
     cache = Path(cache_dir)

@@ -47,8 +47,23 @@ def scrape_item_with_review(
         return _BASE_SCRAPE_ITEM(item, out_dir, **kwargs)
 
     approved = list(dict.fromkeys(str(url).strip() for url in (approved_urls or []) if str(url).strip()))
-    existing = list(getattr(item, "source_urls", None) or [])
-    reviewed_item = replace(item, source_urls=list(dict.fromkeys([*existing, *approved])))
+    approved_set = set(approved)
+
+    # Preserve every pre-existing manual HTML source, but once review is confirmed no
+    # pre-existing/manual PDF may bypass the user's explicit approved set.
+    existing = [
+        str(url).strip()
+        for url in (getattr(item, "source_urls", None) or [])
+        if str(url).strip() and not batch_module._looks_like_pdf_url(str(url).strip())
+    ]
+    source_url = getattr(item, "source_url", None)
+    if source_url and batch_module._looks_like_pdf_url(source_url) and source_url not in approved_set:
+        source_url = None
+    reviewed_item = replace(
+        item,
+        source_url=source_url,
+        source_urls=list(dict.fromkeys([*existing, *approved])),
+    )
 
     with _RUN_LOCK:
         original_pipeline = batch_module.ProductPipeline

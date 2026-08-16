@@ -96,9 +96,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "v$env:VERSION"
-          gh release view $tag *> $null
+          git fetch --tags --force
+          git rev-parse --verify "refs/tags/$tag" *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag ProductIntelligence-Windows.zip ProductIntelligence-Windows.sha256 --clobber
+            $tagCommit = (git rev-list -n 1 $tag).Trim()
+            if ($tagCommit -ne $env:GITHUB_SHA) {
+              throw "VERSION_ALREADY_RELEASED_FOR_DIFFERENT_COMMIT: tag=$tag tagCommit=$tagCommit current=$env:GITHUB_SHA"
+            }
+            gh release view $tag *> $null
+            if ($LASTEXITCODE -ne 0) {
+              throw "VERSION_TAG_EXISTS_WITHOUT_RELEASE: $tag"
+            }
+            $assetNames = (gh release view $tag --json assets --jq '.assets[].name' | Out-String)
+            if ($assetNames -notmatch 'ProductIntelligence-Windows\.zip' -or $assetNames -notmatch 'ProductIntelligence-Windows\.sha256') {
+              throw "RELEASE_ASSET_MISSING_FOR_EXISTING_VERSION: $tag"
+            }
+            Write-Host "Release $tag already exists for this exact commit with immutable assets; no upload performed."
           } else {
             gh release create $tag ProductIntelligence-Windows.zip ProductIntelligence-Windows.sha256 --target $env:GITHUB_SHA --title "ProductIntelligence $tag" --generate-notes
           }

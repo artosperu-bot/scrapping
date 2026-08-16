@@ -6,6 +6,9 @@ root = Path(SPECPATH)
 datas=[]; binaries=[]; hiddenimports=[
     'product_intelligence.isolated_desktop',
     'product_intelligence.pdf_desktop',
+    'product_intelligence.pdf_review',
+    'product_intelligence.pdf_review_batch',
+    'product_intelligence.pdf_review_shell',
     'product_intelligence.provider_desktop',
     'product_intelligence.provider_runtime',
     'product_intelligence.ocr_space_client',

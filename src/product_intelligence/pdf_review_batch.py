@@ -9,7 +9,6 @@ from .pdf_pipeline import discover_pdf_documents, resolve_pdf_identity
 
 _BASE_SCRAPE_ITEM = batch_module.scrape_item
 _BASE_RUN_BATCH = batch_module.run_batch
-_BASE_DISCOVER = batch_module.discover_product_documents
 _BASE_PROCESS_PDF = batch_module.process_pdf_document
 _RUN_LOCK = RLock()
 _PLAN_LOCK = RLock()
@@ -42,8 +41,7 @@ def _shared_discover(identity, *args, **kwargs):
 
 def _shared_process_pdf(identity, url, *args, **kwargs):
     """Keep the enriched identity all the way from search into PDF validation."""
-    timeout = 8
-    effective = resolve_pdf_identity(identity, timeout=timeout).identity
+    effective = resolve_pdf_identity(identity, timeout=8).identity
     return _BASE_PROCESS_PDF(effective, url, *args, **kwargs)
 
 
@@ -87,8 +85,6 @@ def scrape_item_with_review(
 
         class ReviewedProductPipeline(original_pipeline):
             def process_url(self, *args, **process_kwargs):
-                # HTML remains available as web evidence only when WEB is enabled,
-                # but it cannot auto-follow hidden PDFs after a review decision.
                 process_kwargs["include_pdfs"] = False
                 return super().process_url(*args, **process_kwargs)
 
@@ -104,7 +100,10 @@ def scrape_item_with_review(
             if provenance is not None:
                 process_kwargs["provenance"] = provenance
             effective = resolve_pdf_identity(identity, timeout=8).identity
-            return _BASE_PROCESS_PDF(effective, url, *args, **process_kwargs)
+            # Use the processor active when this reviewed call began. Tests and
+            # downstream adapters may intentionally replace it; selection semantics
+            # must not bypass that binding.
+            return original_process_pdf(effective, url, *args, **process_kwargs)
 
         batch_module.ProductPipeline = ReviewedProductPipeline
         batch_module._ingest_direct_documents = no_automatic_documents
@@ -136,8 +135,6 @@ def run_batch_with_review(*args, reviewed_pdf_urls_by_index=None, pdf_review_fla
         original_process_pdf = batch_module.process_pdf_document
         cursor = {"value": 0}
 
-        # Install the shared engine for the duration of the real Excel batch in
-        # both reviewed and automatic modes. This is not a separate benchmark path.
         batch_module.discover_product_documents = _shared_discover
         batch_module.process_pdf_document = _shared_process_pdf
 

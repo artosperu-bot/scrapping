@@ -4,7 +4,11 @@ import json
 import time
 from dataclasses import asdict, dataclass
 
-from product_intelligence.document_discovery import discover_product_documents
+from product_intelligence.document_discovery import (
+    MAX_LANDING_INSPECTIONS,
+    MAX_QUERY_ATTEMPTS,
+    discover_product_documents,
+)
 from product_intelligence.models import ProductIdentity
 from product_intelligence.pdf_search_trace import PdfSearchTrace
 
@@ -32,6 +36,7 @@ class ProductBenchmark:
     provenance_bound: int
     downloads_before_review: int
     candidates: list[dict]
+    gate_failures: list[str]
 
 
 def _candidate_payload(row) -> dict:
@@ -45,7 +50,24 @@ def _candidate_payload(row) -> dict:
         "likely_official": bool(getattr(row, "likely_official", False)),
         "provenance_parent": str(getattr(provenance, "parent_url", "") or ""),
         "provenance_method": str(getattr(provenance, "discovery_method", "") or ""),
+        "provenance_authority": str(getattr(provenance, "parent_authority", "") or ""),
     }
+
+
+def _gate_failures(*, summary: dict, candidates: list[dict]) -> list[str]:
+    failures: list[str] = []
+    if int(summary["queries"]) > MAX_QUERY_ATTEMPTS:
+        failures.append(f"QUERY_BUDGET_EXCEEDED:{summary['queries']}>{MAX_QUERY_ATTEMPTS}")
+    if int(summary["landing_pages"]) > MAX_LANDING_INSPECTIONS:
+        failures.append(f"LANDING_BUDGET_EXCEEDED:{summary['landing_pages']}>{MAX_LANDING_INSPECTIONS}")
+    if int(summary["downloads_ok"]) != 0:
+        failures.append(f"DOWNLOAD_BEFORE_REVIEW:{summary['downloads_ok']}")
+    for candidate in candidates:
+        if candidate["identity_reason"] == "snippet_only_strong_identifier":
+            failures.append("SNIPPET_ONLY_IDENTITY_SURFACED")
+        if candidate["provenance_parent"] and candidate["provenance_authority"].upper() != "MANUFACTURER":
+            failures.append("THIRD_PARTY_PROVENANCE_SURFACED")
+    return sorted(set(failures))
 
 
 def run() -> dict:
@@ -56,6 +78,8 @@ def run() -> dict:
         rows = discover_product_documents(identity, limit=10, timeout=10, trace=trace)
         elapsed = time.perf_counter() - started
         summary = trace.summary()
+        candidates = [_candidate_payload(row) for row in rows]
+        failures = _gate_failures(summary=summary, candidates=candidates)
         payload = ProductBenchmark(
             product=str(identity.mpn or identity.model),
             elapsed_seconds=round(elapsed, 3),
@@ -70,12 +94,20 @@ def run() -> dict:
             pdf_links=summary["pdf_links"],
             provenance_bound=summary["provenance_bound"],
             downloads_before_review=summary["downloads_ok"],
-            candidates=[_candidate_payload(row) for row in rows],
+            candidates=candidates,
+            gate_failures=failures,
         )
         products.append(payload)
 
     report = {
-        "status": "PASS" if all(row.downloads_before_review == 0 for row in products) else "FAIL",
+        "status": "PASS" if all(not row.gate_failures for row in products) else "FAIL",
+        "limits": {
+            "max_queries_per_product": MAX_QUERY_ATTEMPTS,
+            "max_landings_per_product": MAX_LANDING_INSPECTIONS,
+            "downloads_before_review": 0,
+            "third_party_provenance": 0,
+            "snippet_only_identity_candidates": 0,
+        },
         "products": [asdict(row) for row in products],
         "totals": {
             "queries": sum(row.queries for row in products),

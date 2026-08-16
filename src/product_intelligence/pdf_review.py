@@ -6,7 +6,12 @@ from urllib.parse import urlparse
 
 import fitz
 
-from .document_discovery import classify_document_candidate, discover_product_documents
+from .document_discovery import (
+    DocumentProvenance,
+    can_bind_document_by_provenance,
+    classify_document_candidate,
+    discover_product_documents,
+)
 from .models import ProductIdentity
 from .pdf_download import download_pdf
 from .pdf_evidence import validate_pdf_identity
@@ -21,10 +26,20 @@ class PdfReviewCandidate:
     likely_official: bool = False
     discovery_score: float = 0.0
     review_score: int = 0
+    provenance: DocumentProvenance | None = None
+    identity_status: str = "UNVERIFIED"
+    identity_reason: str = ""
+    identity_score: int = 0
 
     @property
     def host(self) -> str:
         return (urlparse(self.url).hostname or "").lower().removeprefix("www.")
+
+    @property
+    def authority_label(self) -> str:
+        if self.provenance and self.provenance.parent_authority:
+            return self.provenance.parent_authority
+        return "OFFICIAL" if self.likely_official else "SOURCE"
 
 
 @dataclass(frozen=True)
@@ -34,6 +49,7 @@ class PdfInspection:
     local_path: Path
     identity_accepted: bool
     identity_pending_ocr: bool
+    identity_provenance_bound: bool
     identity_confidence: float
     identity_reason: str
     page_count: int
@@ -41,6 +57,7 @@ class PdfInspection:
     ocr_recommended: bool
     preview_png: bytes
     review_score: int
+    provenance: DocumentProvenance | None = None
 
 
 def _document_priority(document_type: str) -> int:
@@ -61,42 +78,63 @@ def score_review_candidate(
     identity_accepted: bool | None = None,
     identity_confidence: float = 0.0,
     native_text_chars: int | None = None,
+    provenance: DocumentProvenance | None = None,
+    identity_score: int = 0,
 ) -> int:
     """Transparent review score only; never an evidence admission gate."""
-    score = 10
-    score += 22 if likely_official else 0
-    score += _document_priority(document_type)
-    score += round(max(0.0, min(1.0, float(discovery_score or 0.0))) * 18)
+    # V2 weighting: identity 40, authority 20, provenance 15,
+    # document type 10, text quality 10, discovery relevance 5.
+    score = round(max(0, min(100, int(identity_score or 0))) * 0.40)
+    score += 20 if likely_official else 8
+    score += 15 if provenance is not None else 0
+    score += round(_document_priority(document_type) / 20 * 10)
+    score += round(max(0.0, min(1.0, float(discovery_score or 0.0))) * 5)
     if identity_accepted is True:
-        score += round(max(0.0, min(1.0, float(identity_confidence or 0.0))) * 24)
+        score = max(score, round(max(0.0, min(1.0, float(identity_confidence or 0.0))) * 40) + (20 if likely_official else 8) + (15 if provenance else 0) + round(_document_priority(document_type) / 20 * 10))
     elif identity_accepted is False:
-        score -= 35
+        score -= 25
     if native_text_chars is not None:
         chars = max(0, int(native_text_chars))
-        score += 6 if chars >= 1000 else 3 if chars >= 100 else 0
+        score += 10 if chars >= 1000 else 6 if chars >= 200 else 2 if chars >= 40 else 0
     return max(0, min(100, int(score)))
 
 
 def discover_review_candidates(identity: ProductIdentity, limit: int = 8) -> list[PdfReviewCandidate]:
+    """Discover metadata candidates only. No PDF is downloaded in this phase."""
     rows = discover_product_documents(identity, limit=max(1, int(limit)))
     out: list[PdfReviewCandidate] = []
+    seen: set[str] = set()
     for row in rows:
+        url = str(row.url or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
         kind = classify_document_candidate(row.url, row.title, row.snippet) or "technical_pdf"
+        provenance = getattr(row, "provenance", None)
+        identity_status = str(getattr(row, "identity_status", "UNVERIFIED") or "UNVERIFIED")
+        identity_reason = str(getattr(row, "identity_reason", "") or "")
+        identity_score = int(getattr(row, "identity_score", 0) or 0)
         out.append(PdfReviewCandidate(
-            url=row.url,
+            url=url,
             title=str(row.title or ""),
             snippet=str(row.snippet or ""),
             document_type=kind,
             likely_official=bool(getattr(row, "likely_official", False)),
             discovery_score=float(getattr(row, "score", 0.0) or 0.0),
+            provenance=provenance,
+            identity_status=identity_status,
+            identity_reason=identity_reason,
+            identity_score=identity_score,
             review_score=score_review_candidate(
                 likely_official=bool(getattr(row, "likely_official", False)),
                 document_type=kind,
                 discovery_score=float(getattr(row, "score", 0.0) or 0.0),
+                provenance=provenance,
+                identity_score=identity_score,
             ),
         ))
     out.sort(key=lambda item: item.review_score, reverse=True)
-    return out
+    return out[: max(1, int(limit))]
 
 
 def _native_text(doc: fitz.Document) -> tuple[str, int]:
@@ -117,11 +155,9 @@ def _ocr_recommended(page_count: int, native_text_chars: int) -> bool:
     return (chars / pages) < 35
 
 
-def _identity_pending_ocr(*, accepted: bool, reason: str, ocr_recommended: bool) -> bool:
-    if accepted or not ocr_recommended:
+def _identity_pending_ocr(*, accepted: bool, reason: str, ocr_recommended: bool, provenance_bound: bool = False) -> bool:
+    if accepted or provenance_bound or not ocr_recommended:
         return False
-    # These states mean native text could not prove the product. They are not accepted
-    # evidence, but an OCR pass may legitimately provide the missing binding later.
     return str(reason or "") in {
         "strong_identifier_missing",
         "strong_identifier_without_brand_binding",
@@ -129,12 +165,27 @@ def _identity_pending_ocr(*, accepted: bool, reason: str, ocr_recommended: bool)
     }
 
 
+def render_pdf_page(local_path: str | Path, page_index: int, zoom: float = 1.35) -> bytes:
+    """Render one page on demand. The caller owns caching policy."""
+    path = Path(local_path)
+    doc = fitz.open(path)
+    try:
+        if doc.page_count < 1:
+            return b""
+        index = max(0, min(int(page_index), int(doc.page_count) - 1))
+        scale = max(0.5, min(3.0, float(zoom or 1.0)))
+        page = doc.load_page(index)
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        return pix.tobytes("png")
+    finally:
+        doc.close()
+
+
 def _preview_first_page(doc: fitz.Document) -> bytes:
     if doc.page_count < 1:
         return b""
     page = doc.load_page(0)
-    matrix = fitz.Matrix(1.35, 1.35)
-    pix = page.get_pixmap(matrix=matrix, alpha=False)
+    pix = page.get_pixmap(matrix=fitz.Matrix(1.35, 1.35), alpha=False)
     return pix.tobytes("png")
 
 
@@ -146,7 +197,10 @@ def inspect_pdf_candidate(
     document_type: str = "technical_pdf",
     likely_official: bool = False,
     discovery_score: float = 0.0,
+    provenance: DocumentProvenance | None = None,
+    identity_score: int = 0,
 ) -> PdfInspection:
+    """Download only the selected preview candidate and inspect native text; never OCR/Mistral."""
     cache = Path(cache_dir)
     cache.mkdir(parents=True, exist_ok=True)
     downloaded = download_pdf(url, cache, timeout=30)
@@ -160,33 +214,47 @@ def inspect_pdf_candidate(
     finally:
         doc.close()
 
+    provenance_bound = (not bool(match.accepted)) and can_bind_document_by_provenance(
+        provenance,
+        internal_identity_reason=str(match.reason),
+    )
+    accepted = bool(match.accepted) or provenance_bound
+    confidence = float(match.confidence)
+    reason = str(match.reason)
+    if provenance_bound:
+        confidence = max(confidence, min(0.96, float(provenance.parent_identity_confidence if provenance else 0.0) * 0.95))
+        reason = "identity_bound_by_provenance"
+
     ocr_recommended = _ocr_recommended(pages, native_chars)
     pending_ocr = _identity_pending_ocr(
-        accepted=bool(match.accepted),
+        accepted=accepted,
         reason=str(match.reason),
         ocr_recommended=ocr_recommended,
+        provenance_bound=provenance_bound,
     )
-    # A pending OCR document receives no identity-acceptance bonus. Its score is merely
-    # an ordering hint; the actual execution still has to prove identity after OCR.
     score = score_review_candidate(
         likely_official=likely_official,
         document_type=document_type,
         discovery_score=discovery_score,
-        identity_accepted=None if pending_ocr else bool(match.accepted),
-        identity_confidence=float(match.confidence),
+        identity_accepted=None if pending_ocr else accepted,
+        identity_confidence=confidence,
         native_text_chars=native_chars,
+        provenance=provenance,
+        identity_score=identity_score,
     )
     return PdfInspection(
         url=url,
         final_url=str(downloaded.final_url or url),
         local_path=local_path,
-        identity_accepted=bool(match.accepted),
+        identity_accepted=accepted,
         identity_pending_ocr=pending_ocr,
-        identity_confidence=float(match.confidence),
-        identity_reason=str(match.reason),
+        identity_provenance_bound=provenance_bound,
+        identity_confidence=confidence,
+        identity_reason=reason,
         page_count=pages,
         native_text_chars=native_chars,
         ocr_recommended=ocr_recommended,
         preview_png=preview,
         review_score=score,
+        provenance=provenance,
     )

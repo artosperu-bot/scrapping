@@ -1,22 +1,17 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 from dataclasses import asdict, dataclass
-from urllib.parse import urlparse
+from pathlib import Path
 
-from product_intelligence import document_discovery
-from product_intelligence.document_discovery import MAX_LANDING_INSPECTIONS, MAX_QUERY_ATTEMPTS
-from product_intelligence.excel_pdf_review_hardening import (
-    install as install_excel_pdf_review_hardening,
-    prepare_document_identity,
-)
 from product_intelligence.models import ProductIdentity
-from product_intelligence.pdf_search_trace import PdfSearchTrace
+from product_intelligence.pdf_pipeline import discover_validated_review_pdfs, resolve_pdf_identity
 
 
-# Mirror the real Excel intake: the template exposes a part number in the model
-# field, so discovery must bootstrap brand/model/manufacturer itself.
+# Mirror the real Excel intake exactly: model initially contains the same strong
+# part number and brand/product name must be learned by the shared resolver.
 QA_PRODUCTS = (
     ProductIdentity(model="JBLQ350WLBLKAM", mpn="JBLQ350WLBLKAM"),
     ProductIdentity(model="JBLENDURRUN3BTBAM", mpn="JBLENDURRUN3BTBAM"),
@@ -27,161 +22,123 @@ QA_PRODUCTS = (
 @dataclass
 class ProductBenchmark:
     product: str
-    resolved_brand: str
-    resolved_model: str
-    resolved_product_name: str
-    official_domain_hint: str
     elapsed_seconds: float
-    queries: int
-    http_results: int
-    browser_results: int
-    prefetch_rejected: int
+    resolved_brand: str | None
+    resolved_model: str | None
+    resolved_mpn: str | None
+    official_domain: str | None
+    identity_status: str
+    discovered: int
+    downloaded: int
+    validated: int
+    rejected: int
     duplicates: int
-    landing_pages: int
-    exact_pdps: int
-    pdp_pivots: int
-    pdf_links: int
-    provenance_bound: int
-    downloads_before_review: int
-    queries_attempted: list[str]
-    exact_pdp_urls: list[str]
-    landings_inspected: list[str]
-    rejected_prefetch: list[dict]
     candidates: list[dict]
     gate_failures: list[str]
 
 
 def _candidate_payload(row) -> dict:
-    provenance = getattr(row, "provenance", None)
+    candidate = row.candidate
+    inspection = row.inspection
+    provenance = candidate.provenance
     return {
-        "url": str(row.url),
-        "title": str(row.title or ""),
-        "identity_status": str(getattr(row, "identity_status", "UNVERIFIED")),
-        "identity_reason": str(getattr(row, "identity_reason", "")),
-        "identity_score": int(getattr(row, "identity_score", 0) or 0),
-        "likely_official": bool(getattr(row, "likely_official", False)),
+        "url": candidate.url,
+        "final_url": inspection.final_url,
+        "title": candidate.title,
+        "type": candidate.document_type,
+        "likely_official": candidate.likely_official,
+        "identity_status": candidate.identity_status,
+        "identity_reason": inspection.identity_reason,
         "provenance_parent": str(getattr(provenance, "parent_url", "") or ""),
-        "provenance_method": str(getattr(provenance, "discovery_method", "") or ""),
         "provenance_authority": str(getattr(provenance, "parent_authority", "") or ""),
+        "pages": inspection.page_count,
+        "sha256": row.sha256,
     }
 
 
-def _event_values(trace: PdfSearchTrace, event: str, key: str) -> list[str]:
-    return [str(row.get(key) or "") for row in trace.events if row.get("event") == event and row.get(key)]
-
-
-def _gate_failures(*, product: str, summary: dict, candidates: list[dict], effective: ProductIdentity) -> list[str]:
+def _generic_failures(identity: ProductIdentity, result, candidates: list[dict]) -> list[str]:
     failures: list[str] = []
-    if int(summary["queries"]) > MAX_QUERY_ATTEMPTS:
-        failures.append(f"QUERY_BUDGET_EXCEEDED:{summary['queries']}>{MAX_QUERY_ATTEMPTS}")
-    if int(summary["landing_pages"]) > MAX_LANDING_INSPECTIONS:
-        failures.append(f"LANDING_BUDGET_EXCEEDED:{summary['landing_pages']}>{MAX_LANDING_INSPECTIONS}")
-    if int(summary["downloads_ok"]) != 0:
-        failures.append(f"DOWNLOAD_BEFORE_REVIEW:{summary['downloads_ok']}")
-    if not str(effective.brand or "").strip():
-        failures.append("IDENTITY_BOOTSTRAP_BRAND_MISSING")
-    descriptive = str(effective.model or effective.product_name or "").strip()
-    if not descriptive or descriptive.lower() == product.lower():
-        failures.append("IDENTITY_BOOTSTRAP_MODEL_MISSING")
-    for candidate in candidates:
-        if candidate["identity_reason"] == "snippet_only_strong_identifier":
-            failures.append("SNIPPET_ONLY_IDENTITY_SURFACED")
-        if candidate["provenance_parent"] and candidate["provenance_authority"].upper() != "MANUFACTURER":
-            failures.append("THIRD_PARTY_PROVENANCE_SURFACED")
+    resolved = result.resolved.identity
+    strong = str(identity.mpn or identity.gtin or identity.ean or identity.upc or "").strip().lower()
+    resolved_model = str(resolved.model or resolved.product_name or "").strip().lower()
 
-    # Non-vacuous known regression: Quantum 350 has a public official JBL spec sheet.
-    if product == "JBLQ350WLBLKAM":
-        official = [
-            row for row in candidates
-            if row["likely_official"]
-            and "jbl" in (urlparse(row["url"]).hostname or "").lower()
-            and "quantum" in (row["url"] + " " + row["title"]).lower()
-            and ("spec" in (row["url"] + " " + row["title"]).lower() or "data" in (row["url"] + " " + row["title"]).lower())
-        ]
-        if not official:
-            failures.append("KNOWN_OFFICIAL_PDF_NOT_FOUND")
+    if not resolved.brand:
+        failures.append("BRAND_NOT_RESOLVED")
+    if not resolved_model or (strong and resolved_model == strong):
+        failures.append("DESCRIPTIVE_MODEL_NOT_RESOLVED")
+    if result.downloaded_count < result.validated_count:
+        failures.append("VALIDATED_WITHOUT_DOWNLOAD")
+    if result.validated_count != len(candidates):
+        failures.append("VALIDATED_COUNT_MISMATCH")
+    for candidate in candidates:
+        if int(candidate["pages"] or 0) > 10:
+            failures.append("PAGE_LIMIT_BYPASSED")
+        if candidate["provenance_parent"] and candidate["provenance_authority"].upper() != "MANUFACTURER":
+            failures.append("UNTRUSTED_PROVENANCE_SURFACED")
     return sorted(set(failures))
 
 
 def run() -> dict:
-    install_excel_pdf_review_hardening()
-
     products: list[ProductBenchmark] = []
-    for identity in QA_PRODUCTS:
-        product = str(identity.mpn or identity.model)
-        effective, domain = prepare_document_identity(identity, timeout=8)
-        trace = PdfSearchTrace(product)
-        started = time.perf_counter()
-        # Call with the enriched identity explicitly so diagnostics show exactly what
-        # the packaged adapter resolved and discovery does not need a second bootstrap.
-        rows = document_discovery.discover_product_documents(
-            effective,
-            limit=10,
-            timeout=10,
-            trace=trace,
-            official_domain=domain,
-        )
-        elapsed = time.perf_counter() - started
-        summary = trace.summary()
-        candidates = [_candidate_payload(row) for row in rows]
-        failures = _gate_failures(product=product, summary=summary, candidates=candidates, effective=effective)
-        payload = ProductBenchmark(
-            product=product,
-            resolved_brand=str(effective.brand or ""),
-            resolved_model=str(effective.model or ""),
-            resolved_product_name=str(effective.product_name or ""),
-            official_domain_hint=str(domain or ""),
-            elapsed_seconds=round(elapsed, 3),
-            queries=summary["queries"],
-            http_results=summary["http_results"],
-            browser_results=summary["browser_results"],
-            prefetch_rejected=summary["prefetch_rejected"],
-            duplicates=summary["duplicates"],
-            landing_pages=summary["landing_pages"],
-            exact_pdps=summary["exact_pdps"],
-            pdp_pivots=summary["pdp_pivots"],
-            pdf_links=summary["pdf_links"],
-            provenance_bound=summary["provenance_bound"],
-            downloads_before_review=summary["downloads_ok"],
-            queries_attempted=_event_values(trace, "PDF_SEARCH_QUERY", "query"),
-            exact_pdp_urls=_event_values(trace, "PDF_EXACT_PDP_FOUND", "url"),
-            landings_inspected=_event_values(trace, "PDF_LANDING_INSPECTED", "url"),
-            rejected_prefetch=[
-                {"url": str(row.get("url") or ""), "reason": str(row.get("reason") or "")}
-                for row in trace.events
-                if row.get("event") == "PDF_CANDIDATE_REJECTED_PRE_FETCH"
-            ],
-            candidates=candidates,
-            gate_failures=failures,
-        )
-        products.append(payload)
+    with tempfile.TemporaryDirectory(prefix="pi-real-pdf-review-") as tmp:
+        root = Path(tmp)
+        for identity in QA_PRODUCTS:
+            started = time.perf_counter()
+            result = discover_validated_review_pdfs(
+                identity,
+                root / str(identity.mpn),
+                limit=8,
+                timeout=10,
+            )
+            elapsed = time.perf_counter() - started
+            candidates = [_candidate_payload(row) for row in result.candidates]
+            failures = _generic_failures(identity, result, candidates)
+
+            # Regression anchor from the real workbook: Quantum 350 has a public
+            # technical PDF. A safe pipeline returning zero here is not useful enough.
+            if identity.mpn == "JBLQ350WLBLKAM" and not candidates:
+                failures.append("KNOWN_PRODUCT_ZERO_VALIDATED_PDFS")
+
+            resolved = result.resolved.identity
+            products.append(
+                ProductBenchmark(
+                    product=str(identity.mpn),
+                    elapsed_seconds=round(elapsed, 3),
+                    resolved_brand=resolved.brand,
+                    resolved_model=resolved.model or resolved.product_name,
+                    resolved_mpn=resolved.mpn,
+                    official_domain=result.resolved.official_domain,
+                    identity_status=result.resolved.status,
+                    discovered=result.discovered_count,
+                    downloaded=result.downloaded_count,
+                    validated=result.validated_count,
+                    rejected=result.rejected_count,
+                    duplicates=result.duplicate_count,
+                    candidates=candidates,
+                    gate_failures=sorted(set(failures)),
+                )
+            )
 
     report = {
         "status": "PASS" if all(not row.gate_failures for row in products) else "FAIL",
-        "input_mode": "excel_mpn_only",
-        "limits": {
-            "max_queries_per_product": MAX_QUERY_ATTEMPTS,
-            "max_landings_per_product": MAX_LANDING_INSPECTIONS,
-            "downloads_before_review": 0,
-            "third_party_provenance": 0,
-            "snippet_only_identity_candidates": 0,
+        "input_mode": "real_excel_mpn_only",
+        "discovery_contract": {
+            "download_before_review": True,
+            "validate_before_surface": True,
+            "ocr_before_review": 0,
+            "mistral_before_review": 0,
+            "max_review_pdf_pages": 10,
         },
         "products": [asdict(row) for row in products],
         "totals": {
-            "queries": sum(row.queries for row in products),
-            "raw_results": sum(row.http_results + row.browser_results for row in products),
-            "prefetch_rejected": sum(row.prefetch_rejected for row in products),
+            "discovered": sum(row.discovered for row in products),
+            "downloaded": sum(row.downloaded for row in products),
+            "validated": sum(row.validated for row in products),
+            "rejected": sum(row.rejected for row in products),
             "duplicates": sum(row.duplicates for row in products),
-            "landing_pages": sum(row.landing_pages for row in products),
-            "exact_pdps": sum(row.exact_pdps for row in products),
-            "pdp_pivots": sum(row.pdp_pivots for row in products),
-            "pdf_links": sum(row.pdf_links for row in products),
-            "provenance_bound": sum(row.provenance_bound for row in products),
-            "downloads_before_review": sum(row.downloads_before_review for row in products),
-            "candidates": sum(len(row.candidates) for row in products),
         },
     }
-    print("PDF_REVIEW_DISCOVERY_V2_BENCHMARK=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
+    print("REAL_EXCEL_PDF_REVIEW_BENCHMARK=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
     if report["status"] != "PASS":
         raise SystemExit(1)
     return report

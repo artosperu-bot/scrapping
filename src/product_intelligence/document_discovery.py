@@ -260,19 +260,19 @@ def _document_semantic_text(url: str, title: str = "", snippet: str = "") -> str
     return _normalize_document_words(f"{url} {title} {snippet}")
 
 
-def _promotion_semantic_text(url: str, title: str = "", snippet: str = "") -> str:
-    """Classify promotion from the document name, not manufacturer CDN folders."""
+def _promotion_semantic_text(url: str, title: str = "") -> str:
+    """Promotion is a property of the document name/title, never search snippet noise."""
     decoded = unquote(str(url or ""))
     try:
         filename = urlparse(decoded).path.rsplit("/", 1)[-1]
     except Exception:
         filename = decoded
-    return _normalize_document_words(f"{filename} {title} {snippet}")
+    return _normalize_document_words(f"{filename} {title}")
 
 
 def classify_document_candidate(url: str, title: str = "", snippet: str = "") -> str | None:
     text = _document_semantic_text(url, title, snippet)
-    if _PROMOTIONAL.search(_promotion_semantic_text(url, title, snippet)):
+    if _PROMOTIONAL.search(_promotion_semantic_text(url, title)):
         return None
     for kind, pattern in _DOCUMENT_PATTERNS:
         if pattern.search(text):

@@ -46,7 +46,9 @@ jobs:
           root = ET.parse('pdf-review-v2-junit.xml').getroot()
           count = 0
           for case in root.iter('testcase'):
-              node = case.find('failure') or case.find('error')
+              node = case.find('failure')
+              if node is None:
+                  node = case.find('error')
               if node is None:
                   continue
               count += 1

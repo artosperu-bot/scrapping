@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from product_intelligence.models import ProductIdentity
 from product_intelligence.part_number_pdf_search import (
     MAX_REVIEW_PDF_PAGES,
+    search_product_pdfs,
     search_product_pdfs_by_part_number,
 )
 
@@ -57,6 +58,40 @@ def test_part_number_service_builds_code_only_identity_and_surfaces_only_short_v
     assert result.page_limit_rejected_count == 1
     assert result.rejected_count == 3
     assert MAX_REVIEW_PDF_PAGES == 10
+
+
+def test_general_search_preserves_ean_semantics_and_does_not_copy_it_to_mpn(monkeypatch, tmp_path):
+    captured = {}
+    resolved_identity = ProductIdentity(brand="Acme", model="Nova 500", ean="0123456789012")
+
+    def fake_discover(identity, _cache_dir, **_kwargs):
+        captured["identity"] = identity
+        return SimpleNamespace(
+            resolved=SimpleNamespace(identity=resolved_identity),
+            candidates=(),
+            discovered_count=0,
+            downloaded_count=0,
+            rejected_count=0,
+            duplicate_count=0,
+        )
+
+    monkeypatch.setattr(
+        "product_intelligence.part_number_pdf_search.discover_validated_review_pdfs",
+        fake_discover,
+    )
+    search_product_pdfs(tmp_path, ean="0123456789012")
+    assert captured["identity"].ean == "0123456789012"
+    assert captured["identity"].mpn is None
+    assert captured["identity"].model == "0123456789012"
+
+
+def test_general_search_requires_at_least_one_strong_identifier(tmp_path):
+    try:
+        search_product_pdfs(tmp_path)
+    except ValueError as exc:
+        assert str(exc) == "product_identifier_required"
+    else:
+        raise AssertionError("search without MPN/EAN/UPC/GTIN must fail closed")
 
 
 def test_part_number_service_rejects_empty_part_number(tmp_path):

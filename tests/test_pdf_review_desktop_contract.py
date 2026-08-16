@@ -23,10 +23,11 @@ def test_pdf_review_workspace_contract_is_present():
         assert token in text, token
 
 
-def test_final_launcher_uses_pdf_review_shell():
+def test_final_launcher_preserves_managed_entry_name_but_routes_to_pdf_review_shell():
     text = Path("run_desktop.py").read_text(encoding="utf-8")
     assert "product_intelligence.pdf_review_shell" in text
-    assert "pdf_review_main()" in text
+    assert "managed_main = pdf_review_main" in text
+    assert "managed_main()" in text
 
 
 def test_pdf_review_workspace_does_not_invoke_ocr_or_mistral_directly():

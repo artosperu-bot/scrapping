@@ -35,6 +35,10 @@ class ProductBenchmark:
     pdf_links: int
     provenance_bound: int
     downloads_before_review: int
+    queries_attempted: list[str]
+    exact_pdp_urls: list[str]
+    landings_inspected: list[str]
+    rejected_prefetch: list[dict]
     candidates: list[dict]
     gate_failures: list[str]
 
@@ -52,6 +56,10 @@ def _candidate_payload(row) -> dict:
         "provenance_method": str(getattr(provenance, "discovery_method", "") or ""),
         "provenance_authority": str(getattr(provenance, "parent_authority", "") or ""),
     }
+
+
+def _event_values(trace: PdfSearchTrace, event: str, key: str) -> list[str]:
+    return [str(row.get(key) or "") for row in trace.events if row.get("event") == event and row.get(key)]
 
 
 def _gate_failures(*, summary: dict, candidates: list[dict]) -> list[str]:
@@ -94,6 +102,14 @@ def run() -> dict:
             pdf_links=summary["pdf_links"],
             provenance_bound=summary["provenance_bound"],
             downloads_before_review=summary["downloads_ok"],
+            queries_attempted=_event_values(trace, "PDF_SEARCH_QUERY", "query"),
+            exact_pdp_urls=_event_values(trace, "PDF_EXACT_PDP_FOUND", "url"),
+            landings_inspected=_event_values(trace, "PDF_LANDING_INSPECTED", "url"),
+            rejected_prefetch=[
+                {"url": str(row.get("url") or ""), "reason": str(row.get("reason") or "")}
+                for row in trace.events
+                if row.get("event") == "PDF_CANDIDATE_REJECTED_PRE_FETCH"
+            ],
             candidates=candidates,
             gate_failures=failures,
         )

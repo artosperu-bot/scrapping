@@ -41,7 +41,8 @@ def scrape_item_with_review(
 
     Web/HTML acquisition is untouched. For an enforced product only, approved PDFs are
     inserted as explicit manual candidates, HTML pages cannot auto-follow PDFs, and
-    direct/gap PDF discovery returns no additional documents.
+    direct/gap PDF discovery returns no additional documents. Review provenance is
+    restored only for an approved URL and never for an automatic/unapproved document.
     """
     if not enforced:
         return _BASE_SCRAPE_ITEM(item, out_dir, **kwargs)
@@ -49,8 +50,6 @@ def scrape_item_with_review(
     approved = list(dict.fromkeys(str(url).strip() for url in (approved_urls or []) if str(url).strip()))
     approved_set = set(approved)
 
-    # Preserve every pre-existing manual HTML source, but once review is confirmed no
-    # pre-existing/manual PDF may bypass the user's explicit approved set.
     existing = [
         str(url).strip()
         for url in (getattr(item, "source_urls", None) or [])
@@ -68,6 +67,7 @@ def scrape_item_with_review(
     with _RUN_LOCK:
         original_pipeline = batch_module.ProductPipeline
         original_ingest = batch_module._ingest_direct_documents
+        original_process_pdf = batch_module.process_pdf_document
 
         class ReviewedProductPipeline(original_pipeline):
             def process_url(self, *args, **process_kwargs):
@@ -77,13 +77,23 @@ def scrape_item_with_review(
         def no_automatic_documents(*_args, **_kwargs):
             return []
 
+        def reviewed_process_pdf(identity, url, *args, **process_kwargs):
+            if str(url) in approved_set:
+                from .pdf_review import provenance_for_review_url
+                provenance = provenance_for_review_url(str(url))
+                if provenance is not None:
+                    process_kwargs["provenance"] = provenance
+            return original_process_pdf(identity, url, *args, **process_kwargs)
+
         batch_module.ProductPipeline = ReviewedProductPipeline
         batch_module._ingest_direct_documents = no_automatic_documents
+        batch_module.process_pdf_document = reviewed_process_pdf
         try:
             return _BASE_SCRAPE_ITEM(reviewed_item, out_dir, **kwargs)
         finally:
             batch_module.ProductPipeline = original_pipeline
             batch_module._ingest_direct_documents = original_ingest
+            batch_module.process_pdf_document = original_process_pdf
 
 
 def run_batch_with_review(*args, reviewed_pdf_urls_by_index=None, pdf_review_flags=None, **kwargs):

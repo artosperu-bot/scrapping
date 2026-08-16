@@ -11,7 +11,7 @@ def test_pdf_review_workspace_contract_is_present():
         'text="Confirmar selección"',
         'self._workspace_tabs["pdf_review"]',
         'self.pdf_review_tree = ttk.Treeview',
-        'self.pdf_review_preview',
+        'self.pdf_review_canvas = tk.Canvas',
         'def _pdf_review_search(',
         'def _pdf_review_inspect_selected(',
         'def _pdf_review_toggle_use(',

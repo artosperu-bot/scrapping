@@ -11,17 +11,15 @@ from PIL import Image, ImageTk
 
 from . import pdf_desktop as pdf_desktop_module
 from .managed_desktop import App as ManagedApp
-from .pdf_review import PdfInspection, PdfReviewCandidate, discover_review_candidates, inspect_pdf_candidate
+from .pdf_review import PdfInspection, PdfReviewCandidate, discover_review_candidates, inspect_pdf_candidate, render_pdf_page
 from .pdf_review_batch import run_batch_with_review, set_desktop_review_plan
 
 
-# The inherited Excel runner resolves this module global at execution time. Replace only
-# the call boundary; the underlying batch implementation remains unchanged.
 pdf_desktop_module.run_batch = run_batch_with_review
 
 
 class App(ManagedApp):
-    """Final additive shell with a user-controlled PDF evidence review workspace."""
+    """Final additive shell with precision-first, user-controlled PDF evidence review."""
 
     def __init__(self):
         self._pdf_review_candidates: dict[int, list[PdfReviewCandidate]] = {}
@@ -29,6 +27,11 @@ class App(ManagedApp):
         self._pdf_review_selected: dict[int, set[str]] = {}
         self._pdf_review_enforced: set[int] = set()
         self._pdf_review_photo = None
+        self._pdf_review_current_url: str | None = None
+        self._pdf_review_page_index = 0
+        self._pdf_review_zoom = 1.0
+        self._pdf_review_fit_mode = "width"
+        self._pdf_review_render_cache: dict[tuple[str, int, int, str], bytes] = {}
         super().__init__()
         self._install_pdf_review_workspace()
         self._pdf_review_refresh_products()
@@ -57,65 +60,93 @@ class App(ManagedApp):
         ttk.Label(header, text="Revisión de documentos PDF", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         ttk.Label(
             header,
-            text="Busca documentos técnicos, revisa la vista previa y decide cuáles pueden aportar evidencia. La revisión no consume OCR ni Mistral.",
-            wraplength=1050,
+            text="Busca documentos del producto exacto, revísalos página por página y decide cuáles pueden aportar evidencia. El preview no consume OCR ni Mistral.",
+            wraplength=1120,
         ).pack(anchor="w", pady=(2, 0))
 
-        controls = ttk.LabelFrame(self.pdf_review_tab, text="Producto y acciones", style="Card.TLabelframe", padding=8)
+        controls = ttk.LabelFrame(self.pdf_review_tab, text="Producto, modo y acciones", style="Card.TLabelframe", padding=8)
         controls.pack(fill="x", pady=(0, 10))
         ttk.Label(controls, text="Producto").pack(side="left")
         self.pdf_review_product = tk.StringVar()
-        self.pdf_review_product_box = ttk.Combobox(controls, textvariable=self.pdf_review_product, state="readonly", width=42)
-        self.pdf_review_product_box.pack(side="left", padx=(8, 10))
+        self.pdf_review_product_box = ttk.Combobox(controls, textvariable=self.pdf_review_product, state="readonly", width=34)
+        self.pdf_review_product_box.pack(side="left", padx=(8, 12))
         self.pdf_review_product_box.bind("<<ComboboxSelected>>", lambda _event: self._pdf_review_refresh_tree())
+
+        self.pdf_review_mode = tk.StringVar(value="reviewed")
+        ttk.Radiobutton(controls, text="Revisar antes de usar", variable=self.pdf_review_mode, value="reviewed", command=self._pdf_review_mode_changed).pack(side="left")
+        ttk.Radiobutton(controls, text="Automático", variable=self.pdf_review_mode, value="automatic", command=self._pdf_review_mode_changed).pack(side="left", padx=(6, 12))
+
         self.pdf_review_search_button = ttk.Button(controls, text="Buscar PDFs", style="Primary.TButton", command=self._pdf_review_search)
         self.pdf_review_search_button.pack(side="left")
         ttk.Button(controls, text="Usar / quitar", command=self._pdf_review_toggle_use).pack(side="left", padx=(8, 0))
         ttk.Button(controls, text="Confirmar selección", command=self._pdf_review_confirm).pack(side="left", padx=(8, 0))
         self.pdf_review_status = tk.StringVar(value="Analiza un Excel y luego busca PDFs para el producto seleccionado.")
-        ttk.Label(controls, textvariable=self.pdf_review_status, wraplength=430, justify="left").pack(side="right", padx=(12, 0))
+        ttk.Label(controls, textvariable=self.pdf_review_status, wraplength=360, justify="left").pack(side="right", padx=(12, 0))
 
         body = ttk.Panedwindow(self.pdf_review_tab, orient="horizontal")
         body.pack(fill="both", expand=True)
 
-        left = ttk.LabelFrame(body, text="PDFs encontrados", style="Card.TLabelframe", padding=6)
+        left = ttk.LabelFrame(body, text="PDFs relevantes", style="Card.TLabelframe", padding=6)
         right = ttk.LabelFrame(body, text="Vista previa y evaluación", style="Card.TLabelframe", padding=8)
         body.add(left, weight=3)
-        body.add(right, weight=2)
+        body.add(right, weight=4)
 
-        columns = ("use", "score", "type", "identity", "text", "ocr", "source")
+        columns = ("use", "score", "document", "type", "identity", "authority", "pages", "text", "ocr", "source")
         self.pdf_review_tree = ttk.Treeview(left, columns=columns, show="headings", style="Modern.Treeview", height=18)
         headings = {
-            "use": "Usar",
-            "score": "Score",
-            "type": "Tipo",
-            "identity": "Identidad",
-            "text": "Texto",
-            "ocr": "OCR",
-            "source": "Fuente",
+            "use": "Usar", "score": "Score", "document": "Documento", "type": "Tipo", "identity": "Identidad",
+            "authority": "Autoridad", "pages": "Págs.", "text": "Texto", "ocr": "OCR", "source": "Fuente",
         }
-        widths = {"use": 55, "score": 60, "type": 105, "identity": 125, "text": 90, "ocr": 95, "source": 260}
+        widths = {"use": 48, "score": 55, "document": 210, "type": 95, "identity": 125, "authority": 105, "pages": 48, "text": 80, "ocr": 90, "source": 160}
         for col in columns:
             self.pdf_review_tree.heading(col, text=headings[col])
             self.pdf_review_tree.column(col, width=widths[col], anchor="w")
-        scroll = ttk.Scrollbar(left, orient="vertical", command=self.pdf_review_tree.yview)
-        self.pdf_review_tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
+        tree_y = ttk.Scrollbar(left, orient="vertical", command=self.pdf_review_tree.yview)
+        tree_x = ttk.Scrollbar(left, orient="horizontal", command=self.pdf_review_tree.xview)
+        self.pdf_review_tree.configure(yscrollcommand=tree_y.set, xscrollcommand=tree_x.set)
+        tree_y.pack(side="right", fill="y")
+        tree_x.pack(side="bottom", fill="x")
         self.pdf_review_tree.pack(side="left", fill="both", expand=True)
         self.pdf_review_tree.bind("<<TreeviewSelect>>", lambda _event: self._pdf_review_inspect_selected())
 
+        reader_bar = ttk.Frame(right, style="Card.TFrame")
+        reader_bar.pack(fill="x", pady=(0, 6))
+        ttk.Button(reader_bar, text="Primera", command=lambda: self._pdf_review_go_page("first")).pack(side="left")
+        ttk.Button(reader_bar, text="Anterior", command=lambda: self._pdf_review_go_page("prev")).pack(side="left", padx=(4, 0))
+        self.pdf_review_page_label = tk.StringVar(value="Página — / —")
+        ttk.Label(reader_bar, textvariable=self.pdf_review_page_label, width=16, anchor="center").pack(side="left", padx=8)
+        ttk.Button(reader_bar, text="Siguiente", command=lambda: self._pdf_review_go_page("next")).pack(side="left")
+        ttk.Button(reader_bar, text="Última", command=lambda: self._pdf_review_go_page("last")).pack(side="left", padx=(4, 10))
+        ttk.Button(reader_bar, text="Zoom -", command=lambda: self._pdf_review_change_zoom(-0.25)).pack(side="left")
+        self.pdf_review_zoom_label = tk.StringVar(value="100%")
+        ttk.Label(reader_bar, textvariable=self.pdf_review_zoom_label, width=7, anchor="center").pack(side="left")
+        ttk.Button(reader_bar, text="Zoom +", command=lambda: self._pdf_review_change_zoom(0.25)).pack(side="left")
+        ttk.Button(reader_bar, text="Ajustar ancho", command=lambda: self._pdf_review_set_fit("width")).pack(side="left", padx=(10, 0))
+        ttk.Button(reader_bar, text="Ajustar página", command=lambda: self._pdf_review_set_fit("page")).pack(side="left", padx=(4, 0))
+
         preview_frame = ttk.Frame(right, style="Card.TFrame")
         preview_frame.pack(fill="both", expand=True)
-        self.pdf_review_preview = ttk.Label(
-            preview_frame,
-            text="Selecciona un PDF para descargarlo y mostrar la primera página.",
-            anchor="center",
-            justify="center",
-        )
-        self.pdf_review_preview.pack(fill="both", expand=True)
+        self.pdf_review_canvas = tk.Canvas(preview_frame, highlightthickness=0, background="#202020")
+        preview_y = ttk.Scrollbar(preview_frame, orient="vertical", command=self.pdf_review_canvas.yview)
+        preview_x = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.pdf_review_canvas.xview)
+        self.pdf_review_canvas.configure(yscrollcommand=preview_y.set, xscrollcommand=preview_x.set)
+        preview_y.pack(side="right", fill="y")
+        preview_x.pack(side="bottom", fill="x")
+        self.pdf_review_canvas.pack(side="left", fill="both", expand=True)
+        self.pdf_review_canvas.create_text(260, 220, text="Selecciona un PDF para abrir la vista previa.", fill="white", tags=("placeholder",))
+        self.pdf_review_canvas.bind("<MouseWheel>", self._pdf_review_mousewheel)
+        self.pdf_review_canvas.bind("<Control-MouseWheel>", self._pdf_review_ctrl_mousewheel)
+        self.pdf_review_canvas.bind("<Configure>", lambda _event: self._pdf_review_rerender_if_fit())
+
         self.pdf_review_detail = tk.StringVar(value="Todavía no hay un documento inspeccionado.")
         ttk.Separator(right, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Label(right, textvariable=self.pdf_review_detail, wraplength=500, justify="left").pack(fill="x")
+        ttk.Label(right, textvariable=self.pdf_review_detail, wraplength=650, justify="left").pack(fill="x")
+
+    def _pdf_review_mode_changed(self):
+        if self.pdf_review_mode.get() == "automatic":
+            self.pdf_review_status.set("Modo Automático: el batch conserva el comportamiento PDF automático actual.")
+        else:
+            self.pdf_review_status.set("Modo Revisar antes de usar: el batch respetará solo la selección que confirmes.")
 
     def _show_workspace(self, key: str):
         super()._show_workspace(key)
@@ -166,9 +197,8 @@ class App(ManagedApp):
         if identity is None:
             messagebox.showerror("Revisión PDF", "El producto no tiene identidad válida.")
             return
-
         self.pdf_review_search_button.configure(state="disabled")
-        self.pdf_review_status.set("Buscando PDFs técnicos…")
+        self.pdf_review_status.set("Buscando y filtrando PDFs del producto exacto…")
         self._pdf_review_selected[index] = set()
         self._pdf_review_enforced.discard(index)
         self._pdf_review_candidates[index] = []
@@ -190,14 +220,13 @@ class App(ManagedApp):
             self.pdf_review_status.set(f"Error buscando PDFs: {error}")
             return
         self._pdf_review_candidates[index] = list(rows)
-        self.pdf_review_status.set(f"Se encontraron {len(rows)} PDF(s). Selecciona uno para previsualizar y validar.")
+        self.pdf_review_status.set(f"{len(rows)} PDF(s) relevantes listos para revisar. Nada se usa hasta confirmar selección en modo revisado.")
         self._pdf_review_refresh_tree()
         if rows and self._pdf_review_product_index() == index:
             first = self.pdf_review_tree.get_children()
             if first:
                 self.pdf_review_tree.selection_set(first[0])
                 self.pdf_review_tree.focus(first[0])
-                self._pdf_review_inspect_selected()
 
     def _pdf_review_refresh_tree(self):
         tree = getattr(self, "pdf_review_tree", None)
@@ -213,12 +242,15 @@ class App(ManagedApp):
         selected = self._pdf_review_selected.get(index, set())
         for pos, row in enumerate(rows):
             inspection = inspections.get(row.url)
-            identity = "Sin revisar"
+            identity = row.identity_status or "Sin revisar"
             text_state = "—"
             ocr_state = "—"
+            pages = "—"
             score = row.review_score
             if inspection is not None:
-                if inspection.identity_accepted:
+                if inspection.identity_provenance_bound:
+                    identity = "PROVENANCE_BOUND"
+                elif inspection.identity_accepted:
                     identity = "ACEPTADA"
                 elif inspection.identity_pending_ocr:
                     identity = "PENDIENTE OCR"
@@ -226,12 +258,12 @@ class App(ManagedApp):
                     identity = "RECHAZADA"
                 text_state = f"{inspection.native_text_chars} chars"
                 ocr_state = "Recomendado" if inspection.ocr_recommended else "No necesario"
+                pages = str(inspection.page_count)
                 score = inspection.review_score
             tree.insert(
-                "",
-                "end",
-                iid=str(pos),
-                values=("✓" if row.url in selected else "", score, row.document_type, identity, text_state, ocr_state, row.host),
+                "", "end", iid=str(pos),
+                values=("✓" if row.url in selected else "", score, row.title or Path(row.url).name, row.document_type,
+                        identity, row.authority_label, pages, text_state, ocr_state, row.host),
             )
 
     def _pdf_review_selected_candidate(self) -> tuple[int, PdfReviewCandidate] | None:
@@ -255,12 +287,12 @@ class App(ManagedApp):
         index, candidate = pair
         inspection = self._pdf_review_inspections.get(index, {}).get(candidate.url)
         if inspection is not None:
-            self._pdf_review_show_inspection(inspection)
+            self._pdf_review_open_inspection(inspection)
             return
         identity = self._identity_for_index(index)
         if identity is None:
             return
-        self.pdf_review_status.set("Descargando e inspeccionando PDF…")
+        self.pdf_review_status.set("Descargando temporalmente el PDF para vista previa…")
         out_var = getattr(self, "out", None)
         output = str(out_var.get() if out_var is not None else "").strip()
         root = Path(output) if output else (Path.home() / "ProductIntelligence_Output")
@@ -270,12 +302,12 @@ class App(ManagedApp):
         def work():
             try:
                 result = inspect_pdf_candidate(
-                    identity,
-                    candidate.url,
-                    cache_dir,
+                    identity, candidate.url, cache_dir,
                     document_type=candidate.document_type,
                     likely_official=candidate.likely_official,
                     discovery_score=candidate.discovery_score,
+                    provenance=candidate.provenance,
+                    identity_score=candidate.identity_score,
                 )
                 self.after(0, lambda: self._pdf_review_inspection_done(index, candidate.url, result, None))
             except Exception as exc:
@@ -292,8 +324,10 @@ class App(ManagedApp):
         if not result.identity_accepted and not result.identity_pending_ocr:
             self._pdf_review_selected.setdefault(index, set()).discard(url)
         self._pdf_review_refresh_tree()
-        self._pdf_review_show_inspection(result)
-        if result.identity_accepted:
+        self._pdf_review_open_inspection(result)
+        if result.identity_provenance_bound:
+            state = "identidad enlazada de forma segura desde la landing validada"
+        elif result.identity_accepted:
             state = "identidad validada"
         elif result.identity_pending_ocr:
             state = "identidad pendiente de OCR; todavía no es evidencia aceptada"
@@ -301,36 +335,113 @@ class App(ManagedApp):
             state = f"rechazado: {result.identity_reason}"
         self.pdf_review_status.set(f"PDF inspeccionado · {state}.")
 
-    def _pdf_review_show_inspection(self, inspection: PdfInspection):
+    def _pdf_review_open_inspection(self, inspection: PdfInspection):
+        self._pdf_review_current_url = inspection.url
+        self._pdf_review_page_index = 0
+        self._pdf_review_zoom = 1.0
+        self._pdf_review_fit_mode = "width"
+        self._pdf_review_update_detail(inspection)
+        self._pdf_review_render_current_page()
+
+    def _current_inspection(self) -> PdfInspection | None:
+        index = self._pdf_review_product_index()
+        if index is None or not self._pdf_review_current_url:
+            return None
+        return self._pdf_review_inspections.get(index, {}).get(self._pdf_review_current_url)
+
+    def _pdf_review_go_page(self, action: str):
+        inspection = self._current_inspection()
+        if inspection is None:
+            return
+        last = max(0, inspection.page_count - 1)
+        if action == "first": self._pdf_review_page_index = 0
+        elif action == "prev": self._pdf_review_page_index = max(0, self._pdf_review_page_index - 1)
+        elif action == "next": self._pdf_review_page_index = min(last, self._pdf_review_page_index + 1)
+        elif action == "last": self._pdf_review_page_index = last
+        self._pdf_review_render_current_page()
+
+    def _pdf_review_change_zoom(self, delta: float):
+        self._pdf_review_fit_mode = "zoom"
+        self._pdf_review_zoom = max(0.5, min(2.0, self._pdf_review_zoom + float(delta)))
+        self._pdf_review_render_current_page()
+
+    def _pdf_review_set_fit(self, mode: str):
+        self._pdf_review_fit_mode = "page" if mode == "page" else "width"
+        self._pdf_review_render_current_page()
+
+    def _pdf_review_rerender_if_fit(self):
+        if self._pdf_review_fit_mode in {"width", "page"} and self._current_inspection() is not None:
+            self.after(80, self._pdf_review_render_current_page)
+
+    def _pdf_review_mousewheel(self, event):
+        self.pdf_review_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        return "break"
+
+    def _pdf_review_ctrl_mousewheel(self, event):
+        self._pdf_review_change_zoom(0.25 if event.delta > 0 else -0.25)
+        return "break"
+
+    def _pdf_review_render_current_page(self):
+        inspection = self._current_inspection()
+        if inspection is None:
+            return
+        index = max(0, min(self._pdf_review_page_index, inspection.page_count - 1))
+        self._pdf_review_page_index = index
+        render_zoom = self._pdf_review_zoom if self._pdf_review_fit_mode == "zoom" else 2.0
+        cache_key = (inspection.url, index, int(render_zoom * 100), self._pdf_review_fit_mode)
+        png = self._pdf_review_render_cache.get(cache_key)
+        if png is None:
+            try:
+                png = render_pdf_page(inspection.local_path, index, render_zoom)
+                self._pdf_review_render_cache[cache_key] = png
+            except Exception as exc:
+                self.pdf_review_status.set(f"No se pudo renderizar página {index + 1}: {exc}")
+                return
         try:
-            image = Image.open(BytesIO(inspection.preview_png))
-            image.thumbnail((520, 620), Image.Resampling.LANCZOS)
+            image = Image.open(BytesIO(png)).convert("RGB")
+            canvas_w = max(200, self.pdf_review_canvas.winfo_width() - 20)
+            canvas_h = max(200, self.pdf_review_canvas.winfo_height() - 20)
+            if self._pdf_review_fit_mode == "width" and image.width > 0:
+                target_w = canvas_w
+                target_h = max(1, round(image.height * target_w / image.width))
+                image = image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            elif self._pdf_review_fit_mode == "page" and image.width > 0 and image.height > 0:
+                ratio = min(canvas_w / image.width, canvas_h / image.height)
+                image = image.resize((max(1, round(image.width * ratio)), max(1, round(image.height * ratio))), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(image)
             self._pdf_review_photo = photo
-            self.pdf_review_preview.configure(image=photo, text="")
-        except Exception:
-            self._pdf_review_photo = None
-            self.pdf_review_preview.configure(image="", text="No se pudo renderizar la vista previa, pero la evaluación textual sigue disponible.")
+            self.pdf_review_canvas.delete("all")
+            self.pdf_review_canvas.create_image(0, 0, image=photo, anchor="nw")
+            self.pdf_review_canvas.configure(scrollregion=(0, 0, image.width, image.height))
+            self.pdf_review_page_label.set(f"Página {index + 1} / {inspection.page_count}")
+            if self._pdf_review_fit_mode == "zoom":
+                self.pdf_review_zoom_label.set(f"{int(self._pdf_review_zoom * 100)}%")
+            else:
+                self.pdf_review_zoom_label.set("Ajustado")
+        except Exception as exc:
+            self.pdf_review_status.set(f"No se pudo mostrar la página: {exc}")
 
-        if inspection.identity_accepted:
+    def _pdf_review_update_detail(self, inspection: PdfInspection):
+        if inspection.identity_provenance_bound:
+            identity_label = "PROVENANCE_BOUND"
+        elif inspection.identity_accepted:
             identity_label = "ACEPTADA"
         elif inspection.identity_pending_ocr:
             identity_label = "PENDIENTE OCR"
         else:
             identity_label = "RECHAZADA"
-        ocr_label = "Sí, durante la ejecución si OCR está habilitado" if inspection.ocr_recommended else "No; el texto nativo es suficiente"
-        pending_note = (
-            "\nIMPORTANTE: pendiente OCR no significa evidencia aceptada. Si lo seleccionas, OCR deberá confirmar la identidad durante la ejecución."
-            if inspection.identity_pending_ocr else ""
-        )
+        ocr_label = "Sí, durante ejecución después de aprobar" if inspection.ocr_recommended else "No; texto nativo suficiente"
+        provenance = ""
+        if inspection.provenance:
+            provenance = f"\nLanding padre: {inspection.provenance.parent_url}\nVínculo: {inspection.provenance.discovery_method} · {inspection.provenance.parent_authority}"
+        pending_note = "\nIMPORTANTE: PENDIENTE OCR no es evidencia; OCR deberá confirmar identidad durante la ejecución." if inspection.identity_pending_ocr else ""
         self.pdf_review_detail.set(
-            f"Score de revisión: {inspection.review_score}/100\n"
+            f"Score: {inspection.review_score}/100\n"
             f"Identidad: {identity_label} · {inspection.identity_reason} · confianza {inspection.identity_confidence:.2f}\n"
             f"Páginas: {inspection.page_count} · texto nativo: {inspection.native_text_chars} caracteres\n"
-            f"OCR recomendado: {ocr_label}\n"
-            f"Archivo local: {inspection.local_path}\n"
+            f"OCR: {ocr_label}{provenance}\n"
             f"URL: {inspection.final_url}{pending_note}\n\n"
-            "La vista previa no ejecuta OCR ni Mistral. Esos proveedores solo pueden intervenir después, durante la ejecución normal."
+            "La vista previa solo usa texto nativo/render de PDF. No ejecuta OCR ni Mistral."
         )
 
     def _pdf_review_toggle_use(self):
@@ -341,37 +452,36 @@ class App(ManagedApp):
         index, candidate = pair
         inspection = self._pdf_review_inspections.get(index, {}).get(candidate.url)
         if inspection is None:
-            messagebox.showinfo("Revisión PDF", "Primero deja que termine la inspección y la vista previa de este PDF.")
+            messagebox.showinfo("Revisión PDF", "Primero abre la vista previa de este PDF.")
             self._pdf_review_inspect_selected()
             return
         if not inspection.identity_accepted and not inspection.identity_pending_ocr:
             messagebox.showwarning("Revisión PDF", "Este PDF fue rechazado por identidad y no puede usarse como evidencia.")
             return
         selected = self._pdf_review_selected.setdefault(index, set())
-        if candidate.url in selected:
-            selected.remove(candidate.url)
-        else:
-            selected.add(candidate.url)
+        if candidate.url in selected: selected.remove(candidate.url)
+        else: selected.add(candidate.url)
         self._pdf_review_enforced.discard(index)
         self._pdf_review_refresh_tree()
-        note = " Los pendientes OCR todavía deberán validar identidad durante la ejecución." if inspection.identity_pending_ocr else ""
-        self.pdf_review_status.set(f"Selección pendiente de confirmar: {len(selected)} PDF(s).{note}")
+        self.pdf_review_status.set(f"Selección pendiente de confirmar: {len(selected)} PDF(s).")
 
     def _pdf_review_confirm(self):
         index = self._pdf_review_product_index()
         if index is None:
             messagebox.showinfo("Revisión PDF", "Selecciona un producto primero.")
             return
+        if self.pdf_review_mode.get() != "reviewed":
+            messagebox.showinfo("Revisión PDF", "El modo Automático no usa una lista manual. Cambia a Revisar antes de usar para imponer tu selección.")
+            return
         selected = self._pdf_review_selected.setdefault(index, set())
         self._pdf_review_enforced.add(index)
-        self.pdf_review_status.set(
-            f"Selección confirmada: {len(selected)} PDF(s). En el próximo Scraping Excel solo estos PDFs podrán aportar evidencia para este producto."
-        )
+        self.pdf_review_status.set(f"Selección confirmada: {len(selected)} PDF(s). Solo estos PDFs podrán aportar evidencia para este producto.")
 
     def run(self):
         rows = list(getattr(self, "product_rows", []) or [])
         reviewed = [sorted(self._pdf_review_selected.get(index, set())) for index in range(len(rows))]
-        flags = [index in self._pdf_review_enforced for index in range(len(rows))]
+        reviewed_mode = getattr(self, "pdf_review_mode", None) is not None and self.pdf_review_mode.get() == "reviewed"
+        flags = [reviewed_mode and index in self._pdf_review_enforced for index in range(len(rows))]
         set_desktop_review_plan(reviewed, flags)
         return super().run()
 

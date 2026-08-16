@@ -1,22 +1,18 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
-from product_intelligence.document_discovery import (
-    MAX_LANDING_INSPECTIONS,
-    MAX_QUERY_ATTEMPTS,
-    discover_product_documents,
-)
-from product_intelligence.models import ProductIdentity
-from product_intelligence.pdf_search_trace import PdfSearchTrace
+from product_intelligence.part_number_pdf_search import search_product_pdfs_by_part_number
 
 
-QA_PRODUCTS = (
-    ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM"),
-    ProductIdentity(brand="JBL", model="Endurance Run 3", mpn="JBLENDURRUN3BTBAM"),
-    ProductIdentity(brand="JBL", model="Tune 530C", mpn="JBLT530CBLKAM"),
+QA_PART_NUMBERS = (
+    "JBLQ350WLBLKAM",
+    "JBLENDURRUN3BTBAM",
+    "JBLT530CBLKAM",
 )
 
 
@@ -24,122 +20,121 @@ QA_PRODUCTS = (
 class ProductBenchmark:
     product: str
     elapsed_seconds: float
-    queries: int
-    http_results: int
-    browser_results: int
-    prefetch_rejected: int
+    resolved_brand: str | None
+    resolved_model: str | None
+    official_domain: str | None
+    identity_status: str
+    identity_diagnostics: dict
+    discovered: int
+    downloaded: int
+    validated: int
+    rejected: int
     duplicates: int
-    landing_pages: int
-    exact_pdps: int
-    pdp_pivots: int
-    pdf_links: int
-    provenance_bound: int
-    downloads_before_review: int
-    queries_attempted: list[str]
-    exact_pdp_urls: list[str]
-    landings_inspected: list[str]
-    rejected_prefetch: list[dict]
+    page_limit_rejected: int
     candidates: list[dict]
+    diagnostic_log: list[str]
     gate_failures: list[str]
 
 
 def _candidate_payload(row) -> dict:
-    provenance = getattr(row, "provenance", None)
+    candidate = row.candidate
+    inspection = row.inspection
+    provenance = candidate.provenance
     return {
-        "url": str(row.url),
-        "title": str(row.title or ""),
-        "identity_status": str(getattr(row, "identity_status", "UNVERIFIED")),
-        "identity_reason": str(getattr(row, "identity_reason", "")),
-        "identity_score": int(getattr(row, "identity_score", 0) or 0),
-        "likely_official": bool(getattr(row, "likely_official", False)),
+        "url": candidate.url,
+        "final_url": inspection.final_url,
+        "title": candidate.title,
+        "type": candidate.document_type,
+        "likely_official": candidate.likely_official,
+        "identity_status": candidate.identity_status,
+        "identity_reason": inspection.identity_reason,
         "provenance_parent": str(getattr(provenance, "parent_url", "") or ""),
-        "provenance_method": str(getattr(provenance, "discovery_method", "") or ""),
         "provenance_authority": str(getattr(provenance, "parent_authority", "") or ""),
+        "pages": inspection.page_count,
+        "sha256": row.sha256,
     }
 
 
-def _event_values(trace: PdfSearchTrace, event: str, key: str) -> list[str]:
-    return [str(row.get(key) or "") for row in trace.events if row.get("event") == event and row.get(key)]
-
-
-def _gate_failures(*, summary: dict, candidates: list[dict]) -> list[str]:
+def _failures(part_number: str, result, candidates: list[dict]) -> list[str]:
     failures: list[str] = []
-    if int(summary["queries"]) > MAX_QUERY_ATTEMPTS:
-        failures.append(f"QUERY_BUDGET_EXCEEDED:{summary['queries']}>{MAX_QUERY_ATTEMPTS}")
-    if int(summary["landing_pages"]) > MAX_LANDING_INSPECTIONS:
-        failures.append(f"LANDING_BUDGET_EXCEEDED:{summary['landing_pages']}>{MAX_LANDING_INSPECTIONS}")
-    if int(summary["downloads_ok"]) != 0:
-        failures.append(f"DOWNLOAD_BEFORE_REVIEW:{summary['downloads_ok']}")
+    resolved = result.resolved.identity
+    resolved_model = str(resolved.model or resolved.product_name or "").strip().lower()
+    if not resolved.brand:
+        failures.append("BRAND_NOT_RESOLVED")
+    if not resolved_model or resolved_model == part_number.lower():
+        failures.append("DESCRIPTIVE_MODEL_NOT_RESOLVED")
+    if result.validated_count != len(candidates):
+        failures.append("VALIDATED_COUNT_MISMATCH")
     for candidate in candidates:
-        if candidate["identity_reason"] == "snippet_only_strong_identifier":
-            failures.append("SNIPPET_ONLY_IDENTITY_SURFACED")
+        if not str(candidate["final_url"] or candidate["url"]).lower().split("?", 1)[0].endswith(".pdf"):
+            failures.append("NON_PDF_SURFACED")
+        if int(candidate["pages"] or 0) > 10:
+            failures.append("PAGE_LIMIT_BYPASSED")
         if candidate["provenance_parent"] and candidate["provenance_authority"].upper() != "MANUFACTURER":
-            failures.append("THIRD_PARTY_PROVENANCE_SURFACED")
+            failures.append("UNTRUSTED_PROVENANCE_SURFACED")
+    if part_number == "JBLQ350WLBLKAM" and not candidates:
+        failures.append("KNOWN_PRODUCT_ZERO_VALIDATED_PDFS")
     return sorted(set(failures))
 
 
 def run() -> dict:
     products: list[ProductBenchmark] = []
-    for identity in QA_PRODUCTS:
-        trace = PdfSearchTrace(identity.mpn or identity.model or "product")
-        started = time.perf_counter()
-        rows = discover_product_documents(identity, limit=10, timeout=10, trace=trace)
-        elapsed = time.perf_counter() - started
-        summary = trace.summary()
-        candidates = [_candidate_payload(row) for row in rows]
-        failures = _gate_failures(summary=summary, candidates=candidates)
-        payload = ProductBenchmark(
-            product=str(identity.mpn or identity.model),
-            elapsed_seconds=round(elapsed, 3),
-            queries=summary["queries"],
-            http_results=summary["http_results"],
-            browser_results=summary["browser_results"],
-            prefetch_rejected=summary["prefetch_rejected"],
-            duplicates=summary["duplicates"],
-            landing_pages=summary["landing_pages"],
-            exact_pdps=summary["exact_pdps"],
-            pdp_pivots=summary["pdp_pivots"],
-            pdf_links=summary["pdf_links"],
-            provenance_bound=summary["provenance_bound"],
-            downloads_before_review=summary["downloads_ok"],
-            queries_attempted=_event_values(trace, "PDF_SEARCH_QUERY", "query"),
-            exact_pdp_urls=_event_values(trace, "PDF_EXACT_PDP_FOUND", "url"),
-            landings_inspected=_event_values(trace, "PDF_LANDING_INSPECTED", "url"),
-            rejected_prefetch=[
-                {"url": str(row.get("url") or ""), "reason": str(row.get("reason") or "")}
-                for row in trace.events
-                if row.get("event") == "PDF_CANDIDATE_REJECTED_PRE_FETCH"
-            ],
-            candidates=candidates,
-            gate_failures=failures,
-        )
-        products.append(payload)
+    with tempfile.TemporaryDirectory(prefix="pi-part-number-pdf-") as tmp:
+        root = Path(tmp)
+        for part_number in QA_PART_NUMBERS:
+            diagnostics: list[str] = []
+            started = time.perf_counter()
+            result = search_product_pdfs_by_part_number(
+                part_number,
+                root / part_number,
+                limit=8,
+                timeout=10,
+                log=diagnostics.append,
+            )
+            elapsed = time.perf_counter() - started
+            candidates = [_candidate_payload(row) for row in result.candidates]
+            resolved = result.resolved.identity
+            products.append(
+                ProductBenchmark(
+                    product=part_number,
+                    elapsed_seconds=round(elapsed, 3),
+                    resolved_brand=resolved.brand,
+                    resolved_model=resolved.model or resolved.product_name,
+                    official_domain=result.resolved.official_domain,
+                    identity_status=result.resolved.status,
+                    identity_diagnostics=dict(result.resolved.diagnostics or {}),
+                    discovered=result.discovered_count,
+                    downloaded=result.downloaded_count,
+                    validated=result.validated_count,
+                    rejected=result.rejected_count,
+                    duplicates=result.duplicate_count,
+                    page_limit_rejected=result.page_limit_rejected_count,
+                    candidates=candidates,
+                    diagnostic_log=diagnostics[-40:],
+                    gate_failures=_failures(part_number, result, candidates),
+                )
+            )
 
     report = {
         "status": "PASS" if all(not row.gate_failures for row in products) else "FAIL",
-        "limits": {
-            "max_queries_per_product": MAX_QUERY_ATTEMPTS,
-            "max_landings_per_product": MAX_LANDING_INSPECTIONS,
-            "downloads_before_review": 0,
-            "third_party_provenance": 0,
-            "snippet_only_identity_candidates": 0,
+        "input_mode": "part_number_only_real_api",
+        "contract": {
+            "surface_only_pdf": True,
+            "validate_before_surface": True,
+            "ocr_before_review": 0,
+            "mistral_before_review": 0,
+            "max_review_pdf_pages": 10,
         },
         "products": [asdict(row) for row in products],
         "totals": {
-            "queries": sum(row.queries for row in products),
-            "raw_results": sum(row.http_results + row.browser_results for row in products),
-            "prefetch_rejected": sum(row.prefetch_rejected for row in products),
+            "discovered": sum(row.discovered for row in products),
+            "downloaded": sum(row.downloaded for row in products),
+            "validated": sum(row.validated for row in products),
+            "rejected": sum(row.rejected for row in products),
             "duplicates": sum(row.duplicates for row in products),
-            "landing_pages": sum(row.landing_pages for row in products),
-            "exact_pdps": sum(row.exact_pdps for row in products),
-            "pdp_pivots": sum(row.pdp_pivots for row in products),
-            "pdf_links": sum(row.pdf_links for row in products),
-            "provenance_bound": sum(row.provenance_bound for row in products),
-            "downloads_before_review": sum(row.downloads_before_review for row in products),
-            "candidates": sum(len(row.candidates) for row in products),
         },
     }
-    print("PDF_REVIEW_DISCOVERY_V2_BENCHMARK=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
+    print("PART_NUMBER_PDF_SEARCH_BENCHMARK=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
     if report["status"] != "PASS":
         raise SystemExit(1)
     return report

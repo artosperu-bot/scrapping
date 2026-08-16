@@ -221,8 +221,6 @@ def _refresh_learned_sources(urls: list[str], identity: ProductIdentity, emit) -
                 unresolved.append(url)
                 emit("page", url=url, channel=_channel_from_url(url), status="error", error=f"learned_static: {type(exc).__name__}: {exc}")
 
-    # Playwright/browser fallback is intentionally sequential: concurrent browser
-    # sessions reduced real-world coverage in the benchmark.
     for url in unresolved:
         channel = _channel_from_url(url)
         try:
@@ -241,8 +239,7 @@ def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit) -> 
         try:
             emit("page", url=url, channel=channel, position=pos, total=len(sources), status="fetching")
             html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
-            augmented = _augment_page_rows(url, html, page_rows, identity, channel)
-            rows.extend(augmented)
+            rows.extend(_augment_page_rows(url, html, page_rows, identity, channel))
             emit("page", url=url, channel=channel, status="parsed", offers=len(page_rows))
         except Exception as exc:
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
@@ -283,7 +280,11 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         emit("source", channel="learned", status="refreshing", urls=len(learned_sources), method="validated_source_memory")
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="price-warm") as pool:
             learned_future = pool.submit(_refresh_learned_sources, learned_sources, identity, emit)
-            retail_future = pool.submit(discover_general_peru_retailers, identity, max(10, max_sources // 2))
+            retail_future = pool.submit(
+                discover_general_peru_retailers,
+                identity,
+                limit=max(10, max_sources // 2),
+            )
             try:
                 learned_rows = learned_future.result()
             except Exception as exc:
@@ -303,8 +304,6 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
 
     marketplace_sources: list[str] = []
     base_sources: list[str] = []
-    # Cold runs preserve full discovery. Warm runs fall back to it only if live
-    # revalidation + fresh retail/APIs produced no trusted current offer.
     if not warm_path or not _has_trusted_offer(offers):
         try:
             marketplace_sources = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))

@@ -11,6 +11,7 @@ from tkinter import messagebox, ttk
 
 from .desktop import App as BaseApp
 from .media_workflow import run_media_product
+from .social_video_downloader import download_social_video
 
 
 class App(BaseApp):
@@ -21,6 +22,7 @@ class App(BaseApp):
         self.media_manual_urls: dict[int, list[str]] = {}
         self._media_current_index: int | None = None
         self._media_running = False
+        self._social_video_running = False
         self._media_photo_refs: list[object] = []
         self._media_cards = 0
         super().__init__()
@@ -94,6 +96,33 @@ class App(BaseApp):
         ttk.Button(action_row, text="Abrir carpeta multimedia", command=self._open_media_folder).pack(side="left")
         self.media_status = tk.StringVar(value="Analiza un Excel para cargar los productos.")
         ttk.Label(action_row, textvariable=self.media_status, font=("Segoe UI", 9, "bold")).pack(side="left", padx=12)
+
+        social_box = ttk.LabelFrame(self.media_tab, text="Descargar video por URL", padding=8)
+        social_box.pack(fill="x", pady=(3, 7))
+        ttk.Label(
+            social_box,
+            text="Pega un enlace público de YouTube, TikTok, Instagram, X/Twitter, Vimeo u otro sitio compatible. Se guardará como MP4.",
+        ).pack(anchor="w")
+        social_row = ttk.Frame(social_box)
+        social_row.pack(fill="x", pady=(5, 3))
+        self.social_video_url = tk.StringVar()
+        ttk.Entry(social_row, textvariable=self.social_video_url).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.social_video_quality = tk.StringVar(value="Mejor calidad")
+        ttk.Combobox(
+            social_row,
+            textvariable=self.social_video_quality,
+            values=("Mejor calidad", "1080p", "720p", "480p"),
+            width=15,
+            state="readonly",
+        ).pack(side="left", padx=(0, 8))
+        self.social_video_btn = ttk.Button(
+            social_row,
+            text="Descargar MP4",
+            command=self._start_social_video_download,
+        )
+        self.social_video_btn.pack(side="left")
+        self.social_video_status = tk.StringVar(value="Listo para descargar un video por URL.")
+        ttk.Label(social_box, textvariable=self.social_video_status, font=("Segoe UI", 9, "italic")).pack(anchor="w")
 
         gallery_box = ttk.LabelFrame(self.media_tab, text="Imágenes y videos encontrados", padding=5)
         gallery_box.pack(fill="both", expand=True)
@@ -191,8 +220,6 @@ class App(BaseApp):
             messagebox.showerror("Multimedia", "No hay productos con identidad válida para procesar.")
             return
 
-        # Snapshot every Tk-backed value before starting the worker. Tkinter variables/widgets
-        # are only accessed on the UI thread; the worker receives plain Python values.
         output_root = self.out.get()
         auto_search = bool(self.media_auto_search.get())
         manual_urls_by_index = {index: list(self.media_manual_urls.get(index, [])) for index, _ in valid}
@@ -227,6 +254,50 @@ class App(BaseApp):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _start_social_video_download(self):
+        if self._social_video_running:
+            messagebox.showinfo("Descargar video", "Ya hay una descarga de video en ejecución.")
+            return
+        url = self.social_video_url.get().strip()
+        if not url:
+            messagebox.showwarning("Descargar video", "Pega primero el enlace del video.")
+            return
+        quality = self.social_video_quality.get().strip() or "Mejor calidad"
+        output_dir = Path(self.out.get()) / "multimedia" / "social"
+        product_index = self._media_selected_index()
+
+        self._social_video_running = True
+        self.social_video_btn.configure(state="disabled")
+        self.social_video_status.set("Preparando descarga…")
+
+        def work():
+            try:
+                def on_progress(progress):
+                    self.media_events.put({"type": "social_video_progress", "progress": progress})
+
+                result = download_social_video(
+                    url,
+                    output_dir,
+                    quality=quality,
+                    on_progress=on_progress,
+                )
+                self.media_events.put({
+                    "type": "social_video_done",
+                    "product_index": product_index,
+                    "item": {
+                        "media_type": "video",
+                        "local_path": str(result.local_path),
+                        "url": result.source_url,
+                        "provider": result.provider,
+                        "title": result.title,
+                        "confidence": 1.0,
+                    },
+                })
+            except Exception as exc:
+                self.media_events.put({"type": "social_video_error", "error": str(exc)})
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _drain_media_events(self):
         try:
             while True:
@@ -234,6 +305,34 @@ class App(BaseApp):
                 event_type = event.get("type")
                 if event_type == "media":
                     self._add_media_card(event.get("item") or {}, event.get("product_index"))
+                elif event_type == "social_video_progress":
+                    progress = event.get("progress") or {}
+                    status = str(progress.get("status") or "downloading")
+                    downloaded = int(progress.get("downloaded_bytes") or 0)
+                    total = int(progress.get("total_bytes") or 0)
+                    if status == "finished":
+                        text = "Descarga terminada; convirtiendo/verificando MP4…"
+                    elif total > 0:
+                        percent = min(100, int((downloaded / total) * 100))
+                        text = f"Descargando video… {percent}%"
+                    else:
+                        text = "Descargando video…"
+                    self.social_video_status.set(text)
+                elif event_type == "social_video_done":
+                    self._social_video_running = False
+                    self.social_video_btn.configure(state="normal")
+                    item = event.get("item") or {}
+                    self._add_media_card(item, event.get("product_index"))
+                    name = Path(str(item.get("local_path") or "video.mp4")).name
+                    self.social_video_status.set(f"MP4 guardado: {name}")
+                    self.emit(f"[MEDIA SOCIAL] descargado: {item.get('local_path')}")
+                elif event_type == "social_video_error":
+                    self._social_video_running = False
+                    self.social_video_btn.configure(state="normal")
+                    error = str(event.get("error") or "No se pudo descargar el video.")
+                    self.social_video_status.set(error)
+                    self.emit(f"[MEDIA SOCIAL] ERROR: {error}")
+                    messagebox.showerror("Descargar video", error)
                 elif event_type == "batch_status":
                     self.media_status.set(str(event.get("message") or "Procesando..."))
                 elif event_type == "page":
@@ -305,7 +404,7 @@ class App(BaseApp):
             provider = str(item.get("provider") or "directo")
             ttk.Label(card, text=f"{kind}\n{provider}", anchor="center", width=24).pack(fill="both", expand=True, pady=20)
 
-        title = product_label or "Producto"
+        title = product_label or str(item.get("title") or "Producto")
         ttk.Label(card, text=title[:28], font=("Segoe UI", 8, "bold")).pack(anchor="w")
         ttk.Label(card, text=(Path(local_path).name if local_path else source_url)[:32], font=("Segoe UI", 8)).pack(anchor="w")
         confidence = item.get("confidence")

@@ -21,6 +21,95 @@ def _latest_key(row: dict) -> tuple:
     )
 
 
+def _identity_source_key(identity) -> str:
+    for field in ("mpn", "ean", "upc", "gtin", "model", "product_name"):
+        value = str(getattr(identity, field, None) or "").strip().casefold()
+        if value:
+            return f"{field}:{value}"
+    return ""
+
+
+def _source_registry_path(output_root: str | Path) -> Path:
+    return _base(output_root) / "source_bindings.json"
+
+
+def _load_source_registry(output_root: str | Path) -> dict:
+    path = _source_registry_path(output_root)
+    if not path.exists():
+        return {"version": 1, "products": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"version": 1, "products": {}}
+    if not isinstance(data, dict) or not isinstance(data.get("products"), dict):
+        return {"version": 1, "products": {}}
+    return {"version": 1, "products": data["products"]}
+
+
+def load_validated_source_urls(output_root: str | Path, identity) -> list[str]:
+    key = _identity_source_key(identity)
+    if not key:
+        return []
+    registry = _load_source_registry(output_root)
+    rows = registry["products"].get(key, [])
+    if not isinstance(rows, list):
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        url = str(row.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def save_validated_source_bindings(output_root: str | Path, identity, offers: list[PriceOffer]) -> None:
+    key = _identity_source_key(identity)
+    if not key:
+        return
+    strong_rows = []
+    for offer in offers:
+        match = str(offer.identity_match or "").strip().upper()
+        url = str(offer.url or "").strip()
+        if not url or not (match.startswith("EXACT_") or match == "BRAND_MODEL"):
+            continue
+        row = offer.to_dict()
+        strong_rows.append(
+            {
+                "url": url,
+                "channel": row.get("channel"),
+                "identity_match": match,
+                "last_seen": row.get("observed_at"),
+            }
+        )
+    if not strong_rows:
+        return
+
+    registry = _load_source_registry(output_root)
+    products = registry["products"]
+    existing = products.get(key, [])
+    merged: dict[str, dict] = {}
+    if isinstance(existing, list):
+        for row in existing:
+            if not isinstance(row, dict):
+                continue
+            url = str(row.get("url") or "").strip()
+            if url:
+                merged[url] = row
+    for row in strong_rows:
+        merged[row["url"]] = row
+    products[key] = list(merged.values())
+
+    path = _source_registry_path(output_root)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
 def save_price_run(output_root: str | Path, offers: list[PriceOffer]) -> None:
     base = _base(output_root)
     rows = [o.to_dict() for o in offers]

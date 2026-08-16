@@ -4,18 +4,17 @@ from product_intelligence.provider_desktop import main as provider_main
 from product_intelligence.workspace_desktop import main as workspace_main
 from product_intelligence.organized_desktop import main as organized_main
 from product_intelligence.managed_desktop import main as _managed_base_main
-from product_intelligence.pdf_review_shell import main as pdf_review_main
-from product_intelligence.excel_pdf_review_hardening import install as install_excel_pdf_review_hardening
+from product_intelligence.real_pdf_review_shell import main as pdf_review_main
 
 # Preserve the validated modern/PDF/provider/workspace extension-chain imports because
 # regression contracts use them as evidence that those layers remain present.
-# The PDF review shell is the final additive launcher and keeps the historical
-# managed_main() entry name for update/packaging compatibility.
+# The final launcher routes the real packaged EXE through the integrated PDF review
+# pipeline while keeping the historical managed_main() entry name for packaging/update compatibility.
 import_module("product_intelligence.pdf_desktop")
 import_module("product_intelligence.provider_desktop")
 import_module("product_intelligence.workspace_desktop")
 import_module("product_intelligence.organized_desktop")
 import_module("product_intelligence.pdf_review_shell")
-install_excel_pdf_review_hardening()
+import_module("product_intelligence.real_pdf_review_shell")
 managed_main = pdf_review_main
 managed_main()

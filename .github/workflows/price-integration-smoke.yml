@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        method: [structured, directed, retail, full]
+        method: [retail48, hybrid, exhaustive]
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     steps:
@@ -33,7 +33,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[desktop,dev]"
       - name: Install Chromium
-        if: matrix.method != 'structured'
         run: python -m playwright install chromium
       - name: Run one-product price method benchmark
         env:

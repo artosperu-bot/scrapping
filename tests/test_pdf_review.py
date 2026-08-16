@@ -36,6 +36,7 @@ def test_inspect_pdf_candidate_validates_identity_and_renders_preview(tmp_path, 
     result = pdf_review.inspect_pdf_candidate(identity, Downloaded.final_url, tmp_path / "cache")
 
     assert result.identity_accepted is True
+    assert result.identity_pending_ocr is False
     assert result.identity_confidence >= 0.90
     assert result.page_count == 1
     assert result.native_text_chars > 30
@@ -44,7 +45,7 @@ def test_inspect_pdf_candidate_validates_identity_and_renders_preview(tmp_path, 
     assert result.local_path.is_file()
 
 
-def test_inspect_pdf_candidate_recommends_ocr_for_image_only_pdf(tmp_path, monkeypatch):
+def test_inspect_pdf_candidate_recommends_ocr_for_low_text_but_known_identity(tmp_path, monkeypatch):
     from product_intelligence import pdf_review
 
     source = _write_pdf(tmp_path / "image-like.pdf", "JBL JBLQ350WLBLKAM")
@@ -64,7 +65,55 @@ def test_inspect_pdf_candidate_recommends_ocr_for_image_only_pdf(tmp_path, monke
     result = pdf_review.inspect_pdf_candidate(identity, Downloaded.final_url, tmp_path / "cache")
 
     assert result.identity_accepted is True
+    assert result.identity_pending_ocr is False
     assert result.ocr_recommended is True
+
+
+def test_scanned_pdf_without_native_identity_is_pending_ocr_not_rejected(tmp_path, monkeypatch):
+    from product_intelligence import pdf_review
+
+    source = _write_pdf(tmp_path / "scan.pdf", " ")
+
+    class Downloaded:
+        path = source
+        source_url = "https://example.test/JBLQ350WLBLKAM-manual.pdf"
+        final_url = "https://example.test/JBLQ350WLBLKAM-manual.pdf"
+        content_type = "application/pdf"
+        size_bytes = source.stat().st_size
+        sha256 = "ghi"
+
+    monkeypatch.setattr(pdf_review, "download_pdf", lambda *args, **kwargs: Downloaded())
+    monkeypatch.setattr(pdf_review, "_native_text", lambda _doc: ("", 0))
+    identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
+
+    result = pdf_review.inspect_pdf_candidate(identity, Downloaded.final_url, tmp_path / "cache")
+
+    assert result.identity_accepted is False
+    assert result.identity_pending_ocr is True
+    assert result.ocr_recommended is True
+    assert result.identity_reason == "strong_identifier_without_brand_binding"
+
+
+def test_real_identity_conflict_is_never_pending_ocr(tmp_path, monkeypatch):
+    from product_intelligence import pdf_review
+
+    source = _write_pdf(tmp_path / "wrong.pdf", "JBL Tune 520BT JBLT520BTBLK")
+
+    class Downloaded:
+        path = source
+        source_url = "https://example.test/tune-520.pdf"
+        final_url = "https://example.test/tune-520.pdf"
+        content_type = "application/pdf"
+        size_bytes = source.stat().st_size
+        sha256 = "jkl"
+
+    monkeypatch.setattr(pdf_review, "download_pdf", lambda *args, **kwargs: Downloaded())
+    identity = ProductIdentity(brand="JBL", model="Tune 530C", mpn="JBLT530CBLKAM")
+
+    result = pdf_review.inspect_pdf_candidate(identity, Downloaded.final_url, tmp_path / "cache")
+
+    assert result.identity_accepted is False
+    assert result.identity_pending_ocr is False
 
 
 def test_review_candidate_score_prefers_exact_manual():

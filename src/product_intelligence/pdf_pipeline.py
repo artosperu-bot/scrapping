@@ -12,6 +12,7 @@ from .identity_refinement import refine_code_identity
 from .models import ProductIdentity
 from .normalize import key_norm
 from .pdf_review import PdfInspection, PdfReviewCandidate, inspect_pdf_candidate, score_review_candidate
+from .upcitemdb_provider import lookup_identity_by_trade_code, trade_codes_equivalent
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,49 @@ def _has_descriptive_model(identity: ProductIdentity) -> bool:
     return False
 
 
+def _trade_lookup_identifier(identity: ProductIdentity) -> str | None:
+    for value in (identity.ean, identity.upc, identity.gtin):
+        text = re.sub(r"\D", "", str(value or ""))
+        if 8 <= len(text) <= 14:
+            return text
+    return None
+
+
+def _provider_trade_codes(identity: ProductIdentity | None) -> list[str]:
+    if identity is None:
+        return []
+    return [str(value) for value in (identity.ean, identity.upc, identity.gtin) if value]
+
+
+def _provider_conflicts_with_input(original: ProductIdentity, provider_identity: ProductIdentity | None) -> bool:
+    provider_codes = _provider_trade_codes(provider_identity)
+    if not provider_codes:
+        return False
+    for original_code in (original.ean, original.upc, original.gtin):
+        if not original_code:
+            continue
+        if not any(trade_codes_equivalent(original_code, candidate) for candidate in provider_codes):
+            return True
+    return False
+
+
+def _merge_provider_identity(original: ProductIdentity, current: ProductIdentity, provider: ProductIdentity) -> ProductIdentity:
+    strong = _strong_keys(original)
+    updates = {}
+    if provider.brand and (not current.brand or len(str(current.brand).strip()) > 60):
+        updates["brand"] = provider.brand
+    if provider.manufacturer and not current.manufacturer:
+        updates["manufacturer"] = provider.manufacturer
+    current_model = str(current.model or "").strip()
+    if provider.model and (not current_model or _compact(current_model) in strong or len(current_model) > 100):
+        updates["model"] = provider.model
+    current_name = str(current.product_name or "").strip()
+    if provider.product_name and (not current_name or _compact(current_name) in strong or len(current_name) > 140):
+        updates["product_name"] = provider.product_name
+    updates["confidence"] = max(float(current.confidence or 0.0), float(provider.confidence or 0.0))
+    return _preserve_excel_identifiers(original, current.model_copy(update=updates))
+
+
 def _signal_dict(signal) -> dict:
     if isinstance(signal, dict):
         return dict(signal)
@@ -117,13 +161,26 @@ def _preserve_excel_identifiers(original: ProductIdentity, resolved: ProductIden
     return resolved.model_copy(update=updates) if updates else resolved
 
 
-def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> ResolvedPdfIdentity:
-    """Resolve the real Excel identity before any PDF query.
+def _upc_diagnostics(diag: dict, lookup) -> None:
+    diag["upcitemdb_status"] = lookup.status
+    diag["upcitemdb_source"] = lookup.source
+    diag["upcitemdb_remaining"] = lookup.rate_limit_remaining
+    diag["upcitemdb_reset"] = lookup.rate_limit_reset
+    if lookup.error:
+        diag["upcitemdb_error"] = lookup.error
+    providers = list(diag.get("providers_used") or [])
+    if "UPCITEMDB" not in providers:
+        providers.append("UPCITEMDB")
+    diag["providers_used"] = providers
 
-    Existing bootstrap remains the first resolver. Code-only Excel rows are always
-    cross-checked by a bounded, cross-domain consensus pass because a bootstrap result
-    such as `brand=Acme, model=<MPN>` or a retailer marketing title is not enough for
-    manufacturer-first document discovery. No brand/product is hard-coded.
+
+def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> ResolvedPdfIdentity:
+    """Resolve Excel identity with Web first for MPN and UPCitemdb only when useful.
+
+    - MPN present: existing web bootstrap/refinement remains first.
+    - No MPN + UPC/EAN/GTIN: UPCitemdb may resolve identity first.
+    - Partial web result + UPC/EAN/GTIN: one cached UPCitemdb lookup is allowed.
+    - Provider failures are fail-open; strong identifier conflicts are fail-closed.
     """
     code_only_input = _input_is_code_only(identity)
     if identity.brand and _has_descriptive_model(identity) and not code_only_input:
@@ -133,13 +190,37 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
             None,
             "INPUT_COMPLETE",
             float(identity.confidence or 0.0),
-            {"input_code_only": False, "refinement_used": False},
+            {"input_code_only": False, "refinement_used": False, "providers_used": ["EXCEL"]},
         )
 
+    trade_identifier = _trade_lookup_identifier(identity)
+    provider_called = False
+    provider_first_identity = None
+    provider_first_diag: dict = {"providers_used": []}
+
+    if not identity.mpn and trade_identifier:
+        lookup = lookup_identity_by_trade_code(trade_identifier, timeout=max(2, min(int(timeout or 7), 7)))
+        provider_called = True
+        _upc_diagnostics(provider_first_diag, lookup)
+        if lookup.status == "OK" and lookup.identity is not None:
+            if _provider_conflicts_with_input(identity, lookup.identity):
+                return ResolvedPdfIdentity(identity, identity, None, "CONFLICT", 0.0, provider_first_diag)
+            provider_first_identity = _merge_provider_identity(identity, identity, lookup.identity)
+            if provider_first_identity.brand and _has_descriptive_model(provider_first_identity):
+                return ResolvedPdfIdentity(
+                    identity,
+                    provider_first_identity,
+                    None,
+                    "RESOLVED",
+                    float(provider_first_identity.confidence or 0.0),
+                    provider_first_diag,
+                )
+
+    web_input = provider_first_identity or identity
     try:
         from .identity_bootstrap import bootstrap_identity
         bootstrap = bootstrap_identity(
-            identity,
+            web_input,
             limit_per_query=14,
             timeout=max(5, min(int(timeout or 8), 8)),
         )
@@ -151,7 +232,7 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
 
     bootstrap_status = str(getattr(bootstrap, "status", "")).upper() if bootstrap is not None else ""
     base = getattr(bootstrap, "identity", None) if bootstrap_status == "RESOLVED" else None
-    base = _preserve_excel_identifiers(identity, base or identity)
+    base = _preserve_excel_identifiers(identity, base or provider_first_identity or identity)
 
     observed_model = _best_observed_model(bootstrap, identity) if bootstrap is not None else None
     if observed_model and not _has_descriptive_model(base):
@@ -168,6 +249,7 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
 
     refined_domain = None
     refinement_diag = {
+        **provider_first_diag,
         "input_code_only": code_only_input,
         "bootstrap_status": bootstrap_status or "UNAVAILABLE",
         "bootstrap_brand": base.brand,
@@ -176,6 +258,10 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
         "bootstrap_error": bootstrap_error,
         "refinement_used": needs_refinement,
     }
+    providers = list(refinement_diag.get("providers_used") or [])
+    if "WEB_BOOTSTRAP" not in providers:
+        providers.append("WEB_BOOTSTRAP")
+    refinement_diag["providers_used"] = providers
 
     if needs_refinement:
         try:
@@ -193,8 +279,10 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
                 "refined_model": refined.identity.model or refined.identity.product_name,
                 "refined_domain": refined.official_domain_hint,
             })
-            # A cross-domain model consensus is valuable even if bootstrap already had
-            # a brand. Brand replacement itself remains stricter.
+            providers = list(refinement_diag.get("providers_used") or [])
+            if "WEB_REFINEMENT" not in providers:
+                providers.append("WEB_REFINEMENT")
+            refinement_diag["providers_used"] = providers
             updates = {}
             if refined.brand_support_domains >= 2 and refined.identity.brand:
                 updates["brand"] = refined.identity.brand
@@ -211,6 +299,25 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
 
     base = _preserve_excel_identifiers(identity, base)
     resolved_enough = bool(base.brand and _has_descriptive_model(base))
+
+    # Early stop: do not consume the FREE API budget when Web already resolved identity.
+    if not resolved_enough and trade_identifier and not provider_called:
+        lookup = lookup_identity_by_trade_code(trade_identifier, timeout=max(2, min(int(timeout or 7), 7)))
+        provider_called = True
+        _upc_diagnostics(refinement_diag, lookup)
+        if lookup.status == "OK" and lookup.identity is not None:
+            if _provider_conflicts_with_input(identity, lookup.identity):
+                return ResolvedPdfIdentity(
+                    raw=identity,
+                    identity=base,
+                    official_domain=refined_domain or bootstrap_domain,
+                    status="CONFLICT",
+                    confidence=float(base.confidence or 0.0),
+                    diagnostics=refinement_diag,
+                )
+            base = _merge_provider_identity(identity, base, lookup.identity)
+            resolved_enough = bool(base.brand and _has_descriptive_model(base))
+
     return ResolvedPdfIdentity(
         raw=identity,
         identity=base,
@@ -224,6 +331,8 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
 def discover_pdf_documents(identity: ProductIdentity, *, limit: int = 8, timeout: int = 8, trace=None):
     """Shared identity-first document discovery for both REVIEWED and AUTOMATIC modes."""
     resolved = resolve_pdf_identity(identity, timeout=timeout)
+    if resolved.status == "CONFLICT":
+        return resolved, []
     rows = core_discovery.discover_product_documents(
         resolved.identity,
         limit=max(1, int(limit)),

@@ -7,11 +7,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from product_intelligence.models import ProductIdentity
-from product_intelligence.pdf_pipeline import discover_validated_review_pdfs, resolve_pdf_identity
+from product_intelligence.pdf_pipeline import discover_validated_review_pdfs
 
 
-# Mirror the real Excel intake exactly: model initially contains the same strong
-# part number and brand/product name must be learned by the shared resolver.
 QA_PRODUCTS = (
     ProductIdentity(model="JBLQ350WLBLKAM", mpn="JBLQ350WLBLKAM"),
     ProductIdentity(model="JBLENDURRUN3BTBAM", mpn="JBLENDURRUN3BTBAM"),
@@ -28,12 +26,14 @@ class ProductBenchmark:
     resolved_mpn: str | None
     official_domain: str | None
     identity_status: str
+    identity_diagnostics: dict
     discovered: int
     downloaded: int
     validated: int
     rejected: int
     duplicates: int
     candidates: list[dict]
+    diagnostic_log: list[str]
     gate_failures: list[str]
 
 
@@ -83,19 +83,19 @@ def run() -> dict:
     with tempfile.TemporaryDirectory(prefix="pi-real-pdf-review-") as tmp:
         root = Path(tmp)
         for identity in QA_PRODUCTS:
+            diagnostics: list[str] = []
             started = time.perf_counter()
             result = discover_validated_review_pdfs(
                 identity,
                 root / str(identity.mpn),
                 limit=8,
                 timeout=10,
+                log=diagnostics.append,
             )
             elapsed = time.perf_counter() - started
             candidates = [_candidate_payload(row) for row in result.candidates]
             failures = _generic_failures(identity, result, candidates)
 
-            # Regression anchor from the real workbook: Quantum 350 has a public
-            # technical PDF. A safe pipeline returning zero here is not useful enough.
             if identity.mpn == "JBLQ350WLBLKAM" and not candidates:
                 failures.append("KNOWN_PRODUCT_ZERO_VALIDATED_PDFS")
 
@@ -109,12 +109,14 @@ def run() -> dict:
                     resolved_mpn=resolved.mpn,
                     official_domain=result.resolved.official_domain,
                     identity_status=result.resolved.status,
+                    identity_diagnostics=dict(result.resolved.diagnostics or {}),
                     discovered=result.discovered_count,
                     downloaded=result.downloaded_count,
                     validated=result.validated_count,
                     rejected=result.rejected_count,
                     duplicates=result.duplicate_count,
                     candidates=candidates,
+                    diagnostic_log=diagnostics[-30:],
                     gate_failures=sorted(set(failures)),
                 )
             )

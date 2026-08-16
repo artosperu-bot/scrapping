@@ -5,7 +5,7 @@ import re
 import threading
 from tkinter import messagebox
 
-from .part_number_pdf_search import search_product_pdfs_by_part_number
+from .part_number_pdf_search import search_product_pdfs
 from .pdf_review_shell import App as BasePdfReviewApp
 
 
@@ -17,7 +17,7 @@ def review_gate_missing_indices(*, total_products: int, reviewed_mode: bool, pdf
 
 
 class App(BasePdfReviewApp):
-    """Real Excel/EXE review shell: Part Number -> validated PDFs -> review -> selection."""
+    """Real Excel/EXE review shell: identifiers -> validated PDFs -> review -> selection."""
 
     def _pdf_review_search(self):
         index = self._pdf_review_product_index()
@@ -29,13 +29,13 @@ class App(BasePdfReviewApp):
             messagebox.showerror("Revisión PDF", "El producto no tiene identidad válida.")
             return
 
-        part_number = str(identity.mpn or identity.gtin or identity.ean or identity.upc or identity.model or "").strip()
-        if not part_number:
-            messagebox.showerror("Revisión PDF", "El producto no tiene Part Number/GTIN/EAN utilizable.")
+        primary = str(identity.mpn or identity.ean or identity.upc or identity.gtin or "").strip()
+        if not primary:
+            messagebox.showerror("Revisión PDF", "El producto no tiene MPN/EAN/UPC/GTIN utilizable.")
             return
 
         self.pdf_review_search_button.configure(state="disabled")
-        self.pdf_review_status.set(f"Buscando PDFs del producto por Part Number: {part_number}…")
+        self.pdf_review_status.set(f"Resolviendo identidad y buscando PDFs: {primary}…")
         self._pdf_review_selected[index] = set()
         self._pdf_review_enforced.discard(index)
         self._pdf_review_candidates[index] = []
@@ -45,7 +45,7 @@ class App(BasePdfReviewApp):
         out_var = getattr(self, "out", None)
         output = str(out_var.get() if out_var is not None else "").strip()
         root = Path(output) if output else (Path.home() / "ProductIntelligence_Output")
-        label = re.sub(r"[^A-Za-z0-9._-]+", "_", part_number)
+        label = re.sub(r"[^A-Za-z0-9._-]+", "_", primary)
         cache_dir = root / "pdf_review" / label
 
         def emit(line: str):
@@ -56,9 +56,15 @@ class App(BasePdfReviewApp):
 
         def work():
             try:
-                result = search_product_pdfs_by_part_number(
-                    part_number,
+                result = search_product_pdfs(
                     cache_dir,
+                    mpn=identity.mpn,
+                    ean=identity.ean,
+                    upc=identity.upc,
+                    gtin=identity.gtin,
+                    brand=identity.brand,
+                    model=identity.model,
+                    product_name=identity.product_name,
                     limit=8,
                     timeout=10,
                     log=emit,
@@ -85,7 +91,7 @@ class App(BasePdfReviewApp):
 
         resolved = result.resolved.identity
         self.pdf_review_status.set(
-            f"Part Number: {result.part_number} · Identidad: {resolved.brand or '-'} · "
+            f"Identificador: {result.part_number} · Identidad: {resolved.brand or '-'} · "
             f"{resolved.model or resolved.product_name or '-'} · {result.validated_count} PDF(s) válidos; "
             f"{result.rejected_count} rechazados; {result.page_limit_rejected_count} por >10 páginas; "
             f"{result.duplicate_count} duplicados. Estado: NOT_REVIEWED."
@@ -98,7 +104,7 @@ class App(BasePdfReviewApp):
                 self.pdf_review_tree.focus(children[0])
         elif not candidates:
             self.pdf_review_detail.set(
-                "No se encontraron PDFs validados para este Part Number. Puedes confirmar igualmente la revisión con 0 PDFs."
+                "No se encontraron PDFs validados para los identificadores de este producto. Puedes confirmar igualmente la revisión con 0 PDFs."
             )
 
     def run(self):

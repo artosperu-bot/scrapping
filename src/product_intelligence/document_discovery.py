@@ -249,16 +249,30 @@ def can_bind_document_by_provenance(provenance: DocumentProvenance | None, *, in
     return str(internal_identity_reason or "") in {"strong_identifier_missing", "identity_not_confirmed"}
 
 
-def _document_semantic_text(url: str, title: str = "", snippet: str = "") -> str:
-    text = unquote(f"{url} {title} {snippet}")
+def _normalize_document_words(value: str) -> str:
+    text = unquote(str(value or ""))
     text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
     text = re.sub(r"[_/\\+.-]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _document_semantic_text(url: str, title: str = "", snippet: str = "") -> str:
+    return _normalize_document_words(f"{url} {title} {snippet}")
+
+
+def _promotion_semantic_text(url: str, title: str = "", snippet: str = "") -> str:
+    """Classify promotion from the document name, not manufacturer CDN folders."""
+    decoded = unquote(str(url or ""))
+    try:
+        filename = urlparse(decoded).path.rsplit("/", 1)[-1]
+    except Exception:
+        filename = decoded
+    return _normalize_document_words(f"{filename} {title} {snippet}")
+
+
 def classify_document_candidate(url: str, title: str = "", snippet: str = "") -> str | None:
     text = _document_semantic_text(url, title, snippet)
-    if _PROMOTIONAL.search(text):
+    if _PROMOTIONAL.search(_promotion_semantic_text(url, title, snippet)):
         return None
     for kind, pattern in _DOCUMENT_PATTERNS:
         if pattern.search(text):

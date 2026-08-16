@@ -4,19 +4,19 @@ import json
 import time
 from dataclasses import asdict, dataclass
 
-from product_intelligence.document_discovery import (
-    MAX_LANDING_INSPECTIONS,
-    MAX_QUERY_ATTEMPTS,
-    discover_product_documents,
-)
+from product_intelligence import document_discovery
+from product_intelligence.document_discovery import MAX_LANDING_INSPECTIONS, MAX_QUERY_ATTEMPTS
+from product_intelligence.excel_pdf_review_hardening import install as install_excel_pdf_review_hardening
 from product_intelligence.models import ProductIdentity
 from product_intelligence.pdf_search_trace import PdfSearchTrace
 
 
+# Mirror the real Excel intake: the template exposes a part number in the model
+# field, so discovery must bootstrap brand/model/manufacturer itself.
 QA_PRODUCTS = (
-    ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM"),
-    ProductIdentity(brand="JBL", model="Endurance Run 3", mpn="JBLENDURRUN3BTBAM"),
-    ProductIdentity(brand="JBL", model="Tune 530C", mpn="JBLT530CBLKAM"),
+    ProductIdentity(model="JBLQ350WLBLKAM", mpn="JBLQ350WLBLKAM"),
+    ProductIdentity(model="JBLENDURRUN3BTBAM", mpn="JBLENDURRUN3BTBAM"),
+    ProductIdentity(model="JBLT530CBLKAM", mpn="JBLT530CBLKAM"),
 )
 
 
@@ -79,11 +79,14 @@ def _gate_failures(*, summary: dict, candidates: list[dict]) -> list[str]:
 
 
 def run() -> dict:
+    # Install exactly the runtime adapter used by the packaged desktop EXE.
+    install_excel_pdf_review_hardening()
+
     products: list[ProductBenchmark] = []
     for identity in QA_PRODUCTS:
         trace = PdfSearchTrace(identity.mpn or identity.model or "product")
         started = time.perf_counter()
-        rows = discover_product_documents(identity, limit=10, timeout=10, trace=trace)
+        rows = document_discovery.discover_product_documents(identity, limit=10, timeout=10, trace=trace)
         elapsed = time.perf_counter() - started
         summary = trace.summary()
         candidates = [_candidate_payload(row) for row in rows]
@@ -117,6 +120,7 @@ def run() -> dict:
 
     report = {
         "status": "PASS" if all(not row.gate_failures for row in products) else "FAIL",
+        "input_mode": "excel_mpn_only",
         "limits": {
             "max_queries_per_product": MAX_QUERY_ATTEMPTS,
             "max_landings_per_product": MAX_LANDING_INSPECTIONS,

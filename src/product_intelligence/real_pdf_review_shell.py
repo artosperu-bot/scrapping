@@ -5,7 +5,7 @@ import re
 import threading
 from tkinter import messagebox
 
-from .pdf_pipeline import discover_validated_review_pdfs
+from .part_number_pdf_search import search_product_pdfs_by_part_number
 from .pdf_review_shell import App as BasePdfReviewApp
 
 
@@ -17,7 +17,7 @@ def review_gate_missing_indices(*, total_products: int, reviewed_mode: bool, pdf
 
 
 class App(BasePdfReviewApp):
-    """Real Excel/EXE review shell: identity -> download -> validate -> review -> selection."""
+    """Real Excel/EXE review shell: Part Number -> validated PDFs -> review -> selection."""
 
     def _pdf_review_search(self):
         index = self._pdf_review_product_index()
@@ -29,8 +29,13 @@ class App(BasePdfReviewApp):
             messagebox.showerror("Revisión PDF", "El producto no tiene identidad válida.")
             return
 
+        part_number = str(identity.mpn or identity.gtin or identity.ean or identity.upc or identity.model or "").strip()
+        if not part_number:
+            messagebox.showerror("Revisión PDF", "El producto no tiene Part Number/GTIN/EAN utilizable.")
+            return
+
         self.pdf_review_search_button.configure(state="disabled")
-        self.pdf_review_status.set("Resolviendo identidad, buscando, descargando y validando PDFs…")
+        self.pdf_review_status.set(f"Buscando PDFs del producto por Part Number: {part_number}…")
         self._pdf_review_selected[index] = set()
         self._pdf_review_enforced.discard(index)
         self._pdf_review_candidates[index] = []
@@ -40,7 +45,7 @@ class App(BasePdfReviewApp):
         out_var = getattr(self, "out", None)
         output = str(out_var.get() if out_var is not None else "").strip()
         root = Path(output) if output else (Path.home() / "ProductIntelligence_Output")
-        label = re.sub(r"[^A-Za-z0-9._-]+", "_", str(identity.mpn or identity.model or index))
+        label = re.sub(r"[^A-Za-z0-9._-]+", "_", part_number)
         cache_dir = root / "pdf_review" / label
 
         def emit(line: str):
@@ -51,7 +56,13 @@ class App(BasePdfReviewApp):
 
         def work():
             try:
-                result = discover_validated_review_pdfs(identity, cache_dir, limit=8, timeout=10, log=emit)
+                result = search_product_pdfs_by_part_number(
+                    part_number,
+                    cache_dir,
+                    limit=8,
+                    timeout=10,
+                    log=emit,
+                )
                 self.after(0, lambda: self._pdf_review_validated_done(index, result, None))
             except Exception as exc:
                 self.after(0, lambda: self._pdf_review_validated_done(index, None, f"{type(exc).__name__}: {exc}"))
@@ -61,7 +72,7 @@ class App(BasePdfReviewApp):
     def _pdf_review_validated_done(self, index, result, error: str | None):
         self.pdf_review_search_button.configure(state="normal")
         if error or result is None:
-            self.pdf_review_status.set(f"Error en discovery PDF: {error or 'error desconocido'}")
+            self.pdf_review_status.set(f"Error en búsqueda PDF: {error or 'error desconocido'}")
             return
 
         candidates = [row.candidate for row in result.candidates]
@@ -74,8 +85,9 @@ class App(BasePdfReviewApp):
 
         resolved = result.resolved.identity
         self.pdf_review_status.set(
-            f"Identidad: {resolved.brand or '-'} · {resolved.model or resolved.product_name or '-'} · "
-            f"{result.validated_count} PDF(s) validados; {result.rejected_count} rechazados; "
+            f"Part Number: {result.part_number} · Identidad: {resolved.brand or '-'} · "
+            f"{resolved.model or resolved.product_name or '-'} · {result.validated_count} PDF(s) válidos; "
+            f"{result.rejected_count} rechazados; {result.page_limit_rejected_count} por >10 páginas; "
             f"{result.duplicate_count} duplicados. Estado: NOT_REVIEWED."
         )
 
@@ -86,7 +98,7 @@ class App(BasePdfReviewApp):
                 self.pdf_review_tree.focus(children[0])
         elif not candidates:
             self.pdf_review_detail.set(
-                "No se encontraron PDFs validados para este producto. Puedes confirmar igualmente la revisión con 0 PDFs."
+                "No se encontraron PDFs validados para este Part Number. Puedes confirmar igualmente la revisión con 0 PDFs."
             )
 
     def run(self):

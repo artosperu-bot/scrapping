@@ -97,23 +97,24 @@ def test_scanned_pdf_without_native_identity_is_pending_ocr_not_rejected(tmp_pat
 def test_real_identity_conflict_is_never_pending_ocr(tmp_path, monkeypatch):
     from product_intelligence import pdf_review
 
-    source = _write_pdf(tmp_path / "wrong.pdf", "JBL Tune 520BT JBLT520BTBLK")
+    source = _write_pdf(tmp_path / "wrong.pdf", "JBL Tune 520C product document")
 
     class Downloaded:
         path = source
-        source_url = "https://example.test/tune-520.pdf"
-        final_url = "https://example.test/tune-520.pdf"
+        source_url = "https://example.test/tune-520c.pdf"
+        final_url = "https://example.test/tune-520c.pdf"
         content_type = "application/pdf"
         size_bytes = source.stat().st_size
         sha256 = "jkl"
 
     monkeypatch.setattr(pdf_review, "download_pdf", lambda *args, **kwargs: Downloaded())
-    identity = ProductIdentity(brand="JBL", model="Tune 530C", mpn="JBLT530CBLKAM")
+    identity = ProductIdentity(brand="JBL", model="Tune 530C")
 
     result = pdf_review.inspect_pdf_candidate(identity, Downloaded.final_url, tmp_path / "cache")
 
     assert result.identity_accepted is False
     assert result.identity_pending_ocr is False
+    assert result.identity_reason == "sibling_model_url_conflict"
 
 
 def test_review_candidate_score_prefers_exact_manual():

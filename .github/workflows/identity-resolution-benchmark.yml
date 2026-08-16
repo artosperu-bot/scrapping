@@ -1,0 +1,30 @@
+name: Identity Resolution Benchmark
+
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install desktop profile
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[desktop,dev]'
+      - name: Install Chromium
+        run: playwright install chromium
+      - name: Run unknown-brand identity benchmark
+        run: python tests/integration_identity_resolution_benchmark.py
+      - name: Upload benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: identity-resolution-benchmark
+          path: identity-resolution-benchmark.json
+          if-no-files-found: warn

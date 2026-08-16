@@ -17,9 +17,43 @@ from .media_discovery import discover_media, build_site_profile
 from .evidence_graph import build_evidence_graph
 from .target_extract import extract_target_evidence
 from .extraction_strategy import browser_decision, extraction_plan
+from .page_type import classify_page_type
+from .identity_gate import assess_identity
+from .source_authority import classify_source_authority
+from .source_signals import derive_observed_identity, derive_page_signals, derive_authority_signals
+from .evidence_policy import decide_evidence
 
 
 ACCEPTABLE_MEDIA_SCOPES = {"EXACT_VARIANT", "EXACT_PRODUCT"}
+
+
+def _policy_method(ev: Evidence) -> str:
+    source_type = str(ev.source_type or "").lower()
+    selector = str(ev.selector or "").lower()
+    if "pdf" in source_type:
+        return "pdf_native"
+    if "json" in source_type or selector.startswith("embedded:") or selector.startswith("json:"):
+        return "jsonld"
+    if selector in {"line_prefix", "next_line", "target_next_line"}:
+        return "clean_dom"
+    return "clean_dom"
+
+
+def _source_decision_dict(page_assessment, identity_assessment, authority_assessment) -> dict:
+    return {
+        "page_type": page_assessment.page_type,
+        "page_type_confidence": page_assessment.confidence,
+        "page_type_reasons": list(page_assessment.reasons),
+        "material_allowed": bool(page_assessment.material_allowed),
+        "identity": identity_assessment.status,
+        "identity_confidence": identity_assessment.confidence,
+        "identity_reasons": list(identity_assessment.reasons),
+        "identity_matched": list(identity_assessment.matched_identifiers),
+        "identity_conflicts": list(identity_assessment.conflicting_identifiers),
+        "authority": authority_assessment.source_class,
+        "authority_confidence": authority_assessment.confidence,
+        "authority_reasons": list(authority_assessment.reasons),
+    }
 
 
 class ProductPipeline:
@@ -40,22 +74,50 @@ class ProductPipeline:
 
         terms = [expected.brand, expected.product_name, expected.model, expected.mpn, expected.ean, expected.upc, expected.gtin, expected.capacity, expected.variant, expected.color]
         page = extract_page(fetch.html, fetch.final_url, [x for x in terms if x])
+
+        # NEW: admission is based on what the page actually says, before requested values are
+        # copied into the candidate for downstream compatibility.
+        observed = derive_observed_identity(expected, page)
+        page_assessment = classify_page_type(derive_page_signals(fetch.html, fetch.final_url, page))
+        identity_assessment = assess_identity(expected, observed)
+        authority_assessment = classify_source_authority(
+            derive_authority_signals(expected, fetch.html, fetch.final_url, page)
+        )
+        source_decision = _source_decision_dict(page_assessment, identity_assessment, authority_assessment)
+
+        if not page_assessment.material_allowed:
+            raise ValueError(
+                f"SOURCE_VALIDATION_REJECTED: PAGE_TYPE_NOT_MATERIAL page_type={page_assessment.page_type} "
+                f"identity={identity_assessment.status} authority={authority_assessment.source_class}"
+            )
+        if identity_assessment.status in {"CONFLICT", "AMBIGUOUS", "INSUFFICIENT"}:
+            reason = "IDENTITY_CONFLICT" if identity_assessment.status == "CONFLICT" else "IDENTITY_NOT_STRONG_ENOUGH"
+            raise ValueError(
+                f"SOURCE_VALIDATION_REJECTED: {reason} identity={identity_assessment.status} "
+                f"reasons={','.join(identity_assessment.reasons)}"
+            )
+
         candidate = identity_from_page(page, expected=expected, source_url=fetch.final_url)
-        source_class = classify_source(fetch.final_url, official_domain)
+
+        # Legacy source classification remains as a weak routing hint only. A caller-supplied
+        # official_domain can no longer manufacture authority by itself.
+        legacy_source_class = classify_source(fetch.final_url, official_domain)
+        if authority_assessment.source_class in {"manufacturer", "manufacturer_support"}:
+            source_class = "manufacturer"
+        elif legacy_source_class == "marketplace" or authority_assessment.source_class == "marketplace":
+            source_class = "marketplace"
+        else:
+            source_class = "secondary"
+
         if source_class == "manufacturer" and expected.mpn and not candidate.mpn and candidate.sku:
             candidate.mpn = candidate.sku
         candidate = compare_identity(expected, candidate)
 
-        has_strong_target = any([expected.mpn, expected.ean, expected.upc, expected.gtin])
-        required = {
-            "manufacturer": ({"EXACT"} if has_strong_target else {"EXACT", "HIGH"}),
-            "secondary": {"EXACT"},
-            "marketplace": {"EXACT"},
-        }[source_class]
-        if candidate.match_level not in required:
+        # Existing comparison remains a secondary safety net, but the new observed-identity gate
+        # above is the load-bearing admission check.
+        if candidate.identifiers_conflicting:
             raise ValueError(
-                f"Fuente rechazada: clase={source_class}, identidad={candidate.match_level}, "
-                f"confirmados={candidate.identifiers_confirmed}, conflictos={candidate.identifiers_conflicting}"
+                f"SOURCE_VALIDATION_REJECTED: LEGACY_IDENTIFIER_CONFLICT conflicts={candidate.identifiers_conflicting}"
             )
 
         decision = browser_decision(fetch.html, target_semantics, media_slots)
@@ -72,25 +134,45 @@ class ProductPipeline:
                 )
                 if rich.status_code and rich.status_code < 400:
                     rich_page = extract_page(rich.html, rich.final_url, [x for x in terms if x])
-                    rich_candidate = identity_from_page(rich_page, expected=expected, source_url=rich.final_url)
-                    if source_class == "manufacturer" and expected.mpn and not rich_candidate.mpn and rich_candidate.sku:
-                        rich_candidate.mpn = rich_candidate.sku
-                    rich_candidate = compare_identity(expected, rich_candidate)
-                    if rich_candidate.match_level in required:
-                        fetch = rich
-                        page = rich_page
-                        candidate = rich_candidate
-                        browser_reason = decision.reason
+                    rich_observed = derive_observed_identity(expected, rich_page)
+                    rich_page_assessment = classify_page_type(derive_page_signals(rich.html, rich.final_url, rich_page))
+                    rich_identity_assessment = assess_identity(expected, rich_observed)
+                    rich_authority = classify_source_authority(
+                        derive_authority_signals(expected, rich.html, rich.final_url, rich_page)
+                    )
+                    if rich_page_assessment.material_allowed and rich_identity_assessment.status in {"EXACT", "COMPATIBLE"}:
+                        rich_candidate = identity_from_page(rich_page, expected=expected, source_url=rich.final_url)
+                        if rich_authority.source_class in {"manufacturer", "manufacturer_support"} and expected.mpn and not rich_candidate.mpn and rich_candidate.sku:
+                            rich_candidate.mpn = rich_candidate.sku
+                        rich_candidate = compare_identity(expected, rich_candidate)
+                        if not rich_candidate.identifiers_conflicting:
+                            fetch = rich
+                            page = rich_page
+                            candidate = rich_candidate
+                            page_assessment = rich_page_assessment
+                            identity_assessment = rich_identity_assessment
+                            authority_assessment = rich_authority
+                            source_decision = _source_decision_dict(page_assessment, identity_assessment, authority_assessment)
+                            if authority_assessment.source_class in {"manufacturer", "manufacturer_support"}:
+                                source_class = "manufacturer"
+                            elif authority_assessment.source_class == "marketplace":
+                                source_class = "marketplace"
+                            else:
+                                source_class = "secondary"
+                            browser_reason = decision.reason
+                        else:
+                            fetch.warnings.append("rendered_identity_revalidation_failed")
                     else:
-                        fetch.warnings.append("rendered_identity_revalidation_failed")
+                        fetch.warnings.append("rendered_source_validation_failed")
             except Exception as exc:
                 fetch.warnings.append(f"validated_browser_enrichment_failed:{type(exc).__name__}")
 
+        # Requested values may now be copied only after the observed source passed the identity gate.
         for field in ["brand", "manufacturer", "product_name", "model", "mpn", "sku", "ean", "upc", "gtin", "variant", "capacity", "color", "region"]:
             if getattr(candidate, field, None) is None and getattr(expected, field, None) is not None:
                 setattr(candidate, field, getattr(expected, field))
 
-        base = .985 if candidate.match_level == "EXACT" else .92
+        base = .985 if identity_assessment.status == "EXACT" else .90
         if source_class != "manufacturer":
             base = min(base, .82)
         html_type = "official_html" if source_class == "manufacturer" else f"{source_class}_html"
@@ -174,9 +256,6 @@ class ProductPipeline:
                     seen_pdfs.add(pdf)
                     consume_pdf(pdf)
 
-            # Follow same-site official documentation hubs (Documents & Downloads, Specs & Downloads,
-            # support pages, manual indexes) and harvest their evidence/PDF links. They are not treated
-            # as independent product identities until the target product is revalidated on that page.
             base_host = (urlparse(fetch.final_url).hostname or "").lower().removeprefix("www.")
             for doc_url in page.get("document_links", [])[:6]:
                 try:
@@ -187,20 +266,16 @@ class ProductPipeline:
                     if doc_fetch.status_code >= 400:
                         continue
                     doc_page = extract_page(doc_fetch.html, doc_fetch.final_url, [x for x in terms if x])
-                    doc_identity = identity_from_page(doc_page, expected=expected, source_url=doc_fetch.final_url)
-                    if expected.mpn and not doc_identity.mpn and doc_identity.sku:
-                        doc_identity.mpn = doc_identity.sku
-                    doc_identity = compare_identity(expected, doc_identity)
-                    # Documentation hubs may omit structured identity, so accept when the exact target
-                    # appears in page text or the identity resolver can confirm it.
-                    text_compact = "".join(str(doc_page.get("text") or "").lower().split())
-                    target_compact = "".join(str(expected.mpn or expected.ean or expected.upc or expected.gtin or "").lower().split())
-                    target_seen = bool(target_compact and target_compact in text_compact)
-                    if doc_identity.match_level not in {"EXACT", "HIGH"} and not target_seen:
+                    doc_page_assessment = classify_page_type(derive_page_signals(doc_fetch.html, doc_fetch.final_url, doc_page))
+                    doc_observed = derive_observed_identity(expected, doc_page)
+                    doc_identity_assessment = assess_identity(expected, doc_observed)
+                    if doc_page_assessment.page_type not in {"SUPPORT_PRODUCT", "PRODUCT", "PRODUCT_VARIANT"}:
+                        continue
+                    if doc_identity_assessment.status not in {"EXACT", "COMPATIBLE"}:
                         continue
                     followed_document_pages += 1
                     sources.append(doc_fetch.final_url)
-                    doc_level = "EXACT" if target_seen else doc_identity.match_level
+                    doc_level = "EXACT" if doc_identity_assessment.status == "EXACT" else "HIGH"
                     doc_conf = min(.94, base)
                     evidence.extend(structured_evidence(doc_page, doc_fetch.final_url, doc_level, doc_conf, "official_support_html"))
                     evidence.extend(table_evidence(doc_fetch.html, doc_fetch.final_url, doc_level, doc_conf, source_type="official_support_html"))
@@ -212,6 +287,33 @@ class ProductPipeline:
                             consume_pdf(pdf)
                 except Exception:
                     continue
+
+        # Final evidence admission is fail-closed. Page and identity are common to the source;
+        # extraction method/semantic/confidence are fact-specific.
+        policy_accepted: list[Evidence] = []
+        policy_rejected: list[dict] = []
+        for ev in evidence:
+            ev_source_class = authority_assessment.source_class
+            if "pdf" in str(ev.source_type or "").lower() and source_class == "manufacturer":
+                ev_source_class = "official_pdf"
+            policy = decide_evidence(
+                page_type=page_assessment.page_type,
+                identity_status=identity_assessment.status,
+                source_class=ev_source_class,
+                extraction_method=_policy_method(ev),
+                semantic=ev.attribute,
+                confidence=float(ev.confidence or 0.0),
+            )
+            if policy.allowed:
+                policy_accepted.append(ev)
+            else:
+                policy_rejected.append({
+                    "attribute": ev.attribute,
+                    "value": ev.raw_value,
+                    "source": ev.source_url,
+                    "reason": policy.reason,
+                })
+        evidence = policy_accepted
 
         rec = build_record_strict(candidate, evidence, sources)
 
@@ -235,6 +337,7 @@ class ProductPipeline:
             "status_code": fetch.status_code,
             "final_url": fetch.final_url,
             "source_class": source_class,
+            "source_decision": source_decision,
             "json_responses_captured": len(fetch.json_responses),
             "network_resources_captured": len(fetch.network_resources),
             "raw_source_evidence": sum(1 for e in rec.evidence if e.source_type == "official_source_html"),
@@ -258,7 +361,7 @@ class ProductPipeline:
         if family_only:
             rec.warnings.append(f"family_media_not_autofilled:{family_only}")
         if source_class != "manufacturer":
-            rec.warnings.append("secondary_source: technical values accepted only after EXACT identity validation")
+            rec.warnings.append("secondary_source: technical values accepted only after source validation")
 
         rejected_audit = (rec.evidence_graph or {}).get("rejected_evidence", [])
         rec.evidence_graph = build_evidence_graph(
@@ -267,8 +370,14 @@ class ProductPipeline:
             [e.model_dump() for e in rec.evidence],
             rec.media,
         )
-        if rejected_audit:
-            rec.evidence_graph["rejected_evidence"] = rejected_audit
+        combined_rejected = list(rejected_audit) + policy_rejected
+        if combined_rejected:
+            rec.evidence_graph["rejected_evidence"] = combined_rejected[:500]
+        rec.evidence_graph["source_decision"] = source_decision
+        rec.evidence_graph["source_validation_counts"] = {
+            "policy_evidence_accepted": len(policy_accepted),
+            "policy_evidence_rejected": len(policy_rejected),
+        }
         return rec
 
     def process_official_url(self, expected: ProductIdentity, url: str, include_pdfs: bool = True) -> ProductRecord:

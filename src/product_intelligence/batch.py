@@ -213,6 +213,16 @@ def _merge_valid_records(records: list[ProductRecord]) -> ProductRecord:
         "source_class": (primary.fetch or {}).get("source_class"),
         "validated_sources": len(ordered),
         "manufacturer_sources": sum(1 for r in ordered if (r.fetch or {}).get("source_class") == "manufacturer"),
+        "source_decisions": [
+            (r.fetch or {}).get("source_decision")
+            for r in ordered
+            if (r.fetch or {}).get("source_decision")
+        ],
+        "source_validation_counts": {
+            "validated_sources": len(ordered),
+            "material_evidence": len(merged.evidence or []),
+            "final_specifications": len(merged.specifications or {}),
+        },
     }
     return merged
 
@@ -222,19 +232,15 @@ def _compact(value: str | None) -> str:
 
 
 def _candidate_official_domain(candidate, identity: ProductIdentity, accepted: list[ProductRecord]) -> str | None:
+    """Return only a discovery hint; the pipeline independently proves authority.
+
+    Critically, a brand token in the hostname is no longer treated as an official-domain hint.
+    """
     host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
     if not host:
         return None
     if bool(getattr(candidate, "likely_official", False)):
         return host
-
-    host_compact = _compact(host)
-    known_brands = [identity.brand] + [r.identity.brand for r in accepted]
-    for brand in known_brands:
-        b = _compact(brand)
-        if b and b in host_compact:
-            return host
-
     if getattr(candidate, "manual_source", False):
         label = _compact(host.split(".")[0])
         strong = _compact(identity.mpn or identity.model or identity.product_name)
@@ -297,6 +303,45 @@ def _product_key(identity: ProductIdentity) -> str:
     return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "producto")
 
 
+def _log_source_decision(rec: ProductRecord, log, prefix: str = "  ") -> bool:
+    decision = (rec.fetch or {}).get("source_decision") or {}
+    page_type = decision.get("page_type", "UNKNOWN")
+    identity = decision.get("identity", rec.identity.match_level or "UNKNOWN")
+    authority = decision.get("authority", (rec.fetch or {}).get("source_class", "unknown"))
+    material = bool(decision.get("material_allowed", True))
+    evidence_count = len(rec.evidence or [])
+    allowed = material and identity in {"EXACT", "COMPATIBLE", "HIGH"} and evidence_count > 0
+    reason = "OK" if allowed else (
+        "PAGE_TYPE_NOT_MATERIAL" if not material
+        else "IDENTITY_NOT_STRONG_ENOUGH" if identity not in {"EXACT", "COMPATIBLE", "HIGH"}
+        else "NO_POLICY_APPROVED_EVIDENCE"
+    )
+    log(f"{prefix}PAGE_TYPE={page_type} confidence={decision.get('page_type_confidence', '?')}")
+    log(f"{prefix}IDENTITY={identity} confidence={decision.get('identity_confidence', '?')}")
+    log(f"{prefix}AUTHORITY={authority} confidence={decision.get('authority_confidence', '?')}")
+    log(f"{prefix}EVIDENCE_ALLOWED={'YES' if allowed else 'NO'} reason={reason} evidence={evidence_count}")
+    return allowed
+
+
+def _log_source_rejection(exc: Exception, log, prefix: str = "  ") -> None:
+    text = str(exc)
+    marker = "SOURCE_VALIDATION_REJECTED:"
+    if marker in text:
+        detail = text.split(marker, 1)[1].strip()
+        reason = detail.split()[0] if detail else "SOURCE_VALIDATION_REJECTED"
+        if "identity=CONFLICT" in detail or "IDENTITY_CONFLICT" in detail:
+            log(f"{prefix}IDENTITY=CONFLICT")
+        if "page_type=" in detail:
+            page_type = detail.split("page_type=", 1)[1].split()[0]
+            log(f"{prefix}PAGE_TYPE={page_type}")
+        if "authority=" in detail:
+            authority = detail.split("authority=", 1)[1].split()[0]
+            log(f"{prefix}AUTHORITY={authority}")
+        log(f"{prefix}EVIDENCE_ALLOWED=NO reason={reason}")
+    else:
+        log(f"{prefix}SOURCE_REJECTED={type(exc).__name__}: {text}")
+
+
 def _ingest_direct_documents(
     identity: ProductIdentity,
     *,
@@ -317,12 +362,15 @@ def _ingest_direct_documents(
         seen_urls.add(candidate.url)
         try:
             doc_rec = process_pdf_document(identity, candidate.url, target_semantics=target_semantics, trace=trace)
+            if not _log_source_decision(doc_rec, log):
+                raise ValueError("SOURCE_VALIDATION_REJECTED: NO_POLICY_APPROVED_EVIDENCE")
             accepted.append(doc_rec)
             log(f"  PDF VALIDADO: {candidate.url}")
             if len(accepted) >= 3:
                 break
         except Exception as exc:
             errors.append(f"document:{candidate.url}: {type(exc).__name__}: {exc}")
+            _log_source_rejection(exc, log)
     for line in format_trace_lines(trace):
         log(line)
     return accepted
@@ -388,25 +436,13 @@ def scrape_item(
                     target_semantics=target_semantics,
                     media_slots=media_slots,
                 )
-                if getattr(candidate, "manual_source", False) and (rec.fetch or {}).get("source_class") != "manufacturer":
-                    learned_brand = _compact(rec.identity.brand)
-                    host = (urlparse(candidate.url).hostname or "").lower().removeprefix("www.")
-                    if learned_brand and learned_brand in _compact(host):
-                        rec = pipe.process_url(
-                            item.identity,
-                            candidate.url,
-                            official_domain=host,
-                            include_pdfs=include_pdfs,
-                            include_images=include_images,
-                            browser_fallback=True,
-                            target_semantics=target_semantics,
-                            media_slots=media_slots,
-                        )
 
+            if not _log_source_decision(rec, log):
+                raise ValueError("SOURCE_VALIDATION_REJECTED: NO_POLICY_APPROVED_EVIDENCE")
             if rec.identity.identifiers_conflicting:
-                raise ValueError("identificadores en conflicto")
+                raise ValueError("SOURCE_VALIDATION_REJECTED: IDENTITY_CONFLICT legacy_identifiers")
             if accepted and not _cross_source_consistent(accepted[0], rec, candidate.url):
-                raise ValueError("fuente exacta contiene el identificador pero no representa la misma ficha de producto")
+                raise ValueError("SOURCE_VALIDATION_REJECTED: CROSS_SOURCE_PRODUCT_CONFLICT")
             accepted.append(rec)
             log(f"  fuente validada: {(rec.fetch or {}).get('source_class', '?')} / {rec.identity.match_level}")
 
@@ -431,6 +467,7 @@ def scrape_item(
                     break
         except Exception as exc:
             errors.append(f"{candidate.url}: {type(exc).__name__}: {exc}")
+            _log_source_rejection(exc, log)
 
     if not accepted and strategy.pdf:
         accepted.extend(_ingest_direct_documents(
@@ -497,10 +534,12 @@ def scrape_item(
                         target_semantics=chunk,
                         media_slots=media_slots,
                     )
+                    if not _log_source_decision(gap_rec, log, prefix="    "):
+                        raise ValueError("SOURCE_VALIDATION_REJECTED: NO_POLICY_APPROVED_EVIDENCE")
                     if gap_rec.identity.identifiers_conflicting:
-                        continue
+                        raise ValueError("SOURCE_VALIDATION_REJECTED: IDENTITY_CONFLICT legacy_identifiers")
                     if accepted and not _cross_source_consistent(accepted[0], gap_rec, candidate.url):
-                        continue
+                        raise ValueError("SOURCE_VALIDATION_REJECTED: CROSS_SOURCE_PRODUCT_CONFLICT")
                     chunk_extra.append(gap_rec)
                     accepted.append(gap_rec)
                     total_extra += 1
@@ -509,6 +548,7 @@ def scrape_item(
                         break
                 except Exception as exc:
                     errors.append(f"gap:{candidate.url}: {type(exc).__name__}: {exc}")
+                    _log_source_rejection(exc, log, prefix="    ")
 
             if chunk_extra:
                 rec = _merge_valid_records(accepted)
@@ -606,6 +646,12 @@ def run_batch(
     resolution_file = out / "resolucion_campos.json"
     resolution_file.write_text(json.dumps(resolution_summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    source_validation_summary = {
+        "validated_sources": sum(int((rec.fetch or {}).get("validated_sources", 1) or 1) for rec in records),
+        "manufacturer_sources": sum(int((rec.fetch or {}).get("manufacturer_sources", 1 if (rec.fetch or {}).get("source_class") == "manufacturer" else 0) or 0) for rec in records),
+        "material_evidence": sum(len(rec.evidence or []) for rec in records),
+        "final_specifications": sum(len(rec.specifications or {}) for rec in records),
+    }
     summary = {
         "mode": "manual_product_identity" if manual_mode else "excel_detected",
         "source_strategy": strategy.as_options(),
@@ -615,6 +661,7 @@ def run_batch(
         "products_scraped": len(records),
         "products_failed": len(failures),
         "failures": failures,
+        "source_validation": source_validation_summary,
         "output_excel": output_xlsx,
         "trace": trace,
         "resolution": str(resolution_file),

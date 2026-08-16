@@ -10,6 +10,10 @@ on:
       - 'tests/integration_pdf_search_smoke.py'
       - '.github/workflows/pdf-search-integration-smoke.yml'
 
+concurrency:
+  group: pdf-search-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     runs-on: ubuntu-latest

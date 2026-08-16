@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 import fitz
 import requests
@@ -11,6 +11,29 @@ import requests
 from .models import Evidence
 from .provider_runtime import remote_ocr_text
 from .web_fetch import UA
+
+
+SHORT_PDF_PAGE_LIMIT = 10
+LONG_PDF_HEAD_PAGES = 8
+LONG_PDF_MAX_PAGES = 15
+_TECHNICAL_PAGE_HINTS = (
+    "technical specifications",
+    "technical specification",
+    "specifications",
+    "specification",
+    "technical data",
+    "product specifications",
+    "especificaciones tecnicas",
+    "especificaciones técnicas",
+    "ficha tecnica",
+    "ficha técnica",
+    "dimensions",
+    "battery",
+    "processor",
+    "memory",
+    "display",
+    "connectivity",
+)
 
 
 @dataclass(frozen=True)
@@ -51,10 +74,93 @@ def _default_ocr_page(page_number: int, image_bytes: bytes) -> str:
     return _local_ocr_page(image_bytes)
 
 
-def _extract_document(doc: fitz.Document, ocr_page: Callable[[int, bytes], str] | None = None) -> list[ExtractedPdfPage]:
+def _search_text(value: str | None) -> str:
+    text = str(value or "").casefold()
+    text = re.sub(r"[^a-z0-9áéíóúüñ]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def select_pdf_page_indexes(
+    page_texts: list[str],
+    focus_terms: Iterable[str] | None = None,
+    *,
+    short_limit: int = SHORT_PDF_PAGE_LIMIT,
+    head_pages: int = LONG_PDF_HEAD_PAGES,
+    max_pages: int = LONG_PDF_MAX_PAGES,
+) -> list[int]:
+    """Select pages worth fully processing from a PDF.
+
+    Short documents preserve the historical full-document behavior. Long documents
+    keep the beginning for title/index/context, then prioritize exact identity terms
+    and technical-specification pages. The result is always bounded by ``max_pages``.
+    """
+    texts = list(page_texts or [])
+    total = len(texts)
+    if total <= max(0, int(short_limit)):
+        return list(range(total))
+
+    limit = max(1, int(max_pages))
+    head_count = min(total, max(0, int(head_pages)), limit)
+    selected = list(range(head_count))
+    selected_set = set(selected)
+    if len(selected) >= limit:
+        return selected
+
+    normalized_focus = tuple(dict.fromkeys(
+        term for term in (_search_text(value) for value in (focus_terms or [])) if len(term) >= 3
+    ))
+    normalized_hints = tuple(_search_text(value) for value in _TECHNICAL_PAGE_HINTS)
+
+    def signals(index: int) -> tuple[int, int]:
+        hay = _search_text(texts[index])
+        focus_hits = sum(1 for term in normalized_focus if term in hay)
+        technical_hits = sum(1 for term in normalized_hints if term and term in hay)
+        return focus_hits, technical_hits
+
+    focus_candidates = []
+    technical_candidates = []
+    for index in range(head_count, total):
+        focus_hits, technical_hits = signals(index)
+        if focus_hits:
+            focus_candidates.append((index, focus_hits, technical_hits))
+        elif technical_hits:
+            technical_candidates.append((index, technical_hits))
+
+    focus_candidates.sort(key=lambda item: (-item[1], -item[2], item[0]))
+    technical_candidates.sort(key=lambda item: (-item[1], item[0]))
+
+    for index, _, _ in focus_candidates:
+        if len(selected) >= limit:
+            break
+        if index not in selected_set:
+            selected.append(index)
+            selected_set.add(index)
+
+    for index, _ in technical_candidates:
+        if len(selected) >= limit:
+            break
+        if index not in selected_set:
+            selected.append(index)
+            selected_set.add(index)
+
+    return selected
+
+
+def _extract_selected_document(
+    doc: fitz.Document,
+    indexes: Iterable[int],
+    *,
+    native_texts: list[str] | None = None,
+    ocr_page: Callable[[int, bytes], str] | None = None,
+) -> list[ExtractedPdfPage]:
     pages = []
-    for index, page in enumerate(doc):
-        text = (page.get_text("text") or "").strip()
+    for index in indexes:
+        page = doc[index]
+        text = (
+            native_texts[index]
+            if native_texts is not None and index < len(native_texts)
+            else (page.get_text("text") or "")
+        ).strip()
         method = "TEXT"
         if len(text) < 8:
             callback = ocr_page or _default_ocr_page
@@ -68,6 +174,10 @@ def _extract_document(doc: fitz.Document, ocr_page: Callable[[int, bytes], str] 
                 method = "OCR"
         pages.append(ExtractedPdfPage(page=index + 1, text=text, method=method))
     return pages
+
+
+def _extract_document(doc: fitz.Document, ocr_page: Callable[[int, bytes], str] | None = None) -> list[ExtractedPdfPage]:
+    return _extract_selected_document(doc, range(len(doc)), ocr_page=ocr_page)
 
 
 def extract_pdf_pages(path: str | Path, ocr_page: Callable[[int, bytes], str] | None = None) -> list[ExtractedPdfPage]:
@@ -93,19 +203,45 @@ def _evidence_from_pages(pages: list[ExtractedPdfPage], source_url: str, match_l
     return evidence
 
 
-def extract_pdf_bytes(data: bytes, source_url: str, match_level: str = "HIGH", confidence: float = .90) -> tuple[str, list[Evidence]]:
+def extract_pdf_bytes(
+    data: bytes,
+    source_url: str,
+    match_level: str = "HIGH",
+    confidence: float = .90,
+    *,
+    focus_terms: Iterable[str] | None = None,
+) -> tuple[str, list[Evidence]]:
     if not bytes(data or b"").startswith(b"%PDF-"):
         raise ValueError("Los bytes no corresponden a un PDF válido")
     doc = fitz.open(stream=data, filetype="pdf")
     try:
-        pages = _extract_document(doc)
+        if len(doc) <= SHORT_PDF_PAGE_LIMIT:
+            pages = _extract_document(doc)
+        else:
+            # Native text extraction is cheap and does not invoke OCR. It is used only
+            # to choose which pages deserve the expensive/full extraction path.
+            native_texts = [(page.get_text("text") or "").strip() for page in doc]
+            selected_indexes = select_pdf_page_indexes(native_texts, focus_terms=focus_terms)
+            pages = _extract_selected_document(doc, selected_indexes, native_texts=native_texts)
     finally:
         doc.close()
     return "\n".join(page.text for page in pages), _evidence_from_pages(pages, source_url, match_level, confidence)
 
 
-def extract_pdf(url: str, match_level: str = "HIGH", confidence: float = .90) -> tuple[str, list[Evidence]]:
-    return extract_pdf_bytes(download_bytes(url), url, match_level, confidence)
+def extract_pdf(
+    url: str,
+    match_level: str = "HIGH",
+    confidence: float = .90,
+    *,
+    focus_terms: Iterable[str] | None = None,
+) -> tuple[str, list[Evidence]]:
+    return extract_pdf_bytes(
+        download_bytes(url),
+        url,
+        match_level,
+        confidence,
+        focus_terms=focus_terms,
+    )
 
 
 def optional_docling_extract(path: str) -> str | None:

@@ -34,6 +34,24 @@ class PdfIdentityMatch:
 def _compact(value):
     return re.sub(r"[^a-z0-9]","",key_norm(value or ""))
 
+def _alpha_skeleton(value:str)->str:
+    return re.sub(r"[^a-z]","",key_norm(value or ""))
+
+def _url_has_sibling_model_conflict(model:str|None,url:str)->bool:
+    requested=_compact(model)
+    if not requested or not any(ch.isdigit() for ch in requested):
+        return False
+    requested_skeleton=_alpha_skeleton(requested)
+    if len(requested_skeleton)<2:
+        return False
+    for token in re.findall(r"[a-z0-9-]{5,}",str(url or "").lower()):
+        compact=_compact(token)
+        if compact==requested or not any(ch.isdigit() for ch in compact):
+            continue
+        if _alpha_skeleton(compact)==requested_skeleton:
+            return True
+    return False
+
 def discover_pdf_candidates(html:str,base_url:str)->list[PdfCandidate]:
     soup=BeautifulSoup(html or "","lxml")
     out=[]; seen=set()
@@ -53,20 +71,35 @@ def is_pdf_payload(content_type:str|None,data:bytes)->bool:
 
 def validate_pdf_identity(identity:ProductIdentity,text:str,url:str="")->PdfIdentityMatch:
     hay=_compact(f"{url} {text}")
+    text_hay=_compact(text)
     strong=[x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
+    brand=_compact(identity.brand)
+    model_text=identity.model or identity.product_name
+    model=_compact(model_text)
     if strong:
-        if any(_compact(x) in hay for x in strong):
-            return PdfIdentityMatch(True,.99,"strong_identifier")
-        model=_compact(identity.model or identity.product_name)
-        brand=_compact(identity.brand)
-        if brand and model and brand in hay and model in hay:
+        matched=next((_compact(x) for x in strong if _compact(x) and _compact(x) in hay),None)
+        if matched:
+            # Once brand identity has been resolved, a direct-discovery PDF must bind
+            # the identifier to that brand in its actual content. This prevents an
+            # incidental phrase such as "A 2794" in an unrelated document from being
+            # accepted as product evidence merely because compact normalization matches.
+            if brand:
+                if brand in text_hay:
+                    return PdfIdentityMatch(True,.99,"strong_identifier_brand")
+                if model and model in text_hay and matched in text_hay:
+                    return PdfIdentityMatch(True,.94,"strong_identifier_model")
+                return PdfIdentityMatch(False,.0,"strong_identifier_without_brand_binding")
+            return PdfIdentityMatch(True,.97,"strong_identifier")
+        if brand and model and brand in text_hay and model in text_hay:
+            if _url_has_sibling_model_conflict(model_text,url):
+                return PdfIdentityMatch(False,.0,"sibling_model_url_conflict")
             return PdfIdentityMatch(True,.92,"brand_model")
         return PdfIdentityMatch(False,.0,"strong_identifier_missing")
-    model=_compact(identity.model or identity.product_name)
-    brand=_compact(identity.brand)
-    if brand and model and brand in hay and model in hay:
+    if _url_has_sibling_model_conflict(model_text,url):
+        return PdfIdentityMatch(False,.0,"sibling_model_url_conflict")
+    if brand and model and brand in text_hay and model in text_hay:
         return PdfIdentityMatch(True,.92,"brand_model")
-    if model and model in hay:
+    if model and model in text_hay:
         return PdfIdentityMatch(True,.86,"model")
     return PdfIdentityMatch(False,.0,"identity_not_confirmed")
 

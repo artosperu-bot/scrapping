@@ -9,6 +9,7 @@ import fitz
 
 from .document_discovery import (
     DocumentProvenance,
+    assess_document_candidate,
     can_bind_document_by_provenance,
     classify_document_candidate,
     discover_product_documents,
@@ -134,10 +135,24 @@ def discover_review_candidates(identity: ProductIdentity, limit: int = 8) -> lis
         seen.add(url)
         kind = classify_document_candidate(row.url, row.title, row.snippet) or "technical_pdf"
         provenance = getattr(row, "provenance", None)
+
+        # A third-party landing may itself match the product exactly, but that
+        # identity is not transferable to a generic child PDF. Without trusted
+        # manufacturer provenance the child must prove identity from its own
+        # URL/title before it is shown to the reviewer.
+        if provenance is None:
+            own_identity = assess_document_candidate(identity, row.url, row.title, "")
+            if not own_identity.accepted:
+                continue
+            identity_status = "EXACT" if own_identity.exact_strong_id or own_identity.exact_model else "STRONG"
+            identity_reason = own_identity.reason
+            identity_score = own_identity.identity_score
+        else:
+            identity_status = str(getattr(row, "identity_status", "UNVERIFIED") or "UNVERIFIED")
+            identity_reason = str(getattr(row, "identity_reason", "") or "")
+            identity_score = int(getattr(row, "identity_score", 0) or 0)
+
         _remember_provenance(url, provenance)
-        identity_status = str(getattr(row, "identity_status", "UNVERIFIED") or "UNVERIFIED")
-        identity_reason = str(getattr(row, "identity_reason", "") or "")
-        identity_score = int(getattr(row, "identity_score", 0) or 0)
         out.append(
             PdfReviewCandidate(
                 url=url,

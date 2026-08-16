@@ -46,12 +46,16 @@ def _compact(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", key_norm(value or ""))
 
 
-def _has_descriptive_model(identity: ProductIdentity) -> bool:
-    strong = {
+def _strong_keys(identity: ProductIdentity) -> set[str]:
+    return {
         _compact(value)
         for value in (identity.mpn, identity.ean, identity.upc, identity.gtin, identity.sku)
         if value
     }
+
+
+def _has_descriptive_model(identity: ProductIdentity) -> bool:
+    strong = _strong_keys(identity)
     for value in (identity.model, identity.product_name):
         text = str(value or "").strip()
         if text and _compact(text) not in strong:
@@ -59,11 +63,42 @@ def _has_descriptive_model(identity: ProductIdentity) -> bool:
     return False
 
 
+def _best_observed_model(result, original: ProductIdentity) -> str | None:
+    """Recover a descriptive model from exact page probes when Excel model is the MPN.
+
+    The existing bootstrap already probes exact product pages and records observed
+    model/product_name values. We reuse those signals rather than creating another
+    search/resolver or hard-coding vendor-specific parsing.
+    """
+    strong = _strong_keys(original)
+    ranked: list[tuple[int, int, str]] = []
+    for signal in list(getattr(result, "page_signals", []) or []):
+        if not isinstance(signal, dict):
+            continue
+        if not signal.get("material") or not signal.get("exact_raw_match"):
+            continue
+        for field in ("model", "product_name"):
+            value = str(signal.get(field) or "").strip()
+            if not value or _compact(value) in strong:
+                continue
+            score = 0
+            score += 5 if signal.get("authority_owned") else 0
+            score += 4 if signal.get("structured_brand") else 0
+            score += 3 if signal.get("strong_identifier_match") else 0
+            score += 2 if field == "model" else 1
+            ranked.append((score, len(value), value))
+    if not ranked:
+        return None
+    ranked.sort(reverse=True)
+    return ranked[0][2]
+
+
 def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> ResolvedPdfIdentity:
     """Resolve Excel code-only identity with the existing shared bootstrap.
 
     Strong identifiers owned by the Excel row are preserved even when bootstrap
-    enriches brand/model/manufacturer. No product/vendor is hard-coded here.
+    enriches brand/model/manufacturer. If Excel placed the MPN in the model field,
+    exact page probes may replace that placeholder with a descriptive model.
     """
     if identity.brand and _has_descriptive_model(identity):
         return ResolvedPdfIdentity(
@@ -94,6 +129,15 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
         source_value = getattr(identity, field, None)
         if source_value and not getattr(resolved, field, None):
             updates[field] = source_value
+
+    current_model = str(getattr(resolved, "model", "") or "").strip()
+    if not current_model or _compact(current_model) in _strong_keys(identity):
+        observed_model = _best_observed_model(result, identity)
+        if observed_model:
+            updates["model"] = observed_model
+            if not getattr(resolved, "product_name", None):
+                updates["product_name"] = observed_model
+
     if updates:
         resolved = resolved.model_copy(update=updates)
 
@@ -212,7 +256,6 @@ def discover_validated_review_pdfs(
                 log(f"[DOWNLOAD/VALIDATION] REJECTED {candidate.url} · {type(exc).__name__}: {exc}")
             continue
 
-        # Discovery must finish with validated documents, not OCR-dependent guesses.
         if not (inspection.identity_accepted or inspection.identity_provenance_bound):
             rejected += 1
             if log:

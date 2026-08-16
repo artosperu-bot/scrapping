@@ -20,7 +20,7 @@ _DOCUMENT_PATTERNS = (
     ("manual", re.compile(r"\buser\s+manual|owner'?s\s+manual|manual\s+de\s+usuario|\bmanual\b", re.I)),
     ("technical_pdf", re.compile(r"\bspecifications?|technical\s+specifications?|especificaciones\b", re.I)),
 )
-_PROMOTIONAL = re.compile(r"\bbrochure|catalog(?:ue)?|promotional|buy\s+now|shop\s+now|oferta|sale\b", re.I)
+_PROMOTIONAL = re.compile(r"\b(?:brochure|catalog(?:ue)?|promotional|buy\s+now|shop\s+now|oferta|sale)\b", re.I)
 _NON_PRODUCT_PDF = re.compile(
     r"\bprivacy|privacy[_-]?policy|terms(?:[_-]?and[_-]?conditions)?|cookies?|legal|"
     r"return[_-]?policy|shipping[_-]?policy|accessibility|sitemap\b",
@@ -250,12 +250,6 @@ def can_bind_document_by_provenance(provenance: DocumentProvenance | None, *, in
 
 
 def _document_semantic_text(url: str, title: str = "", snippet: str = "") -> str:
-    """Normalize filename/URL separators before document-type classification.
-
-    Search results and CDNs commonly expose names such as SpecSheet,
-    Spec_Sheet, spec-sheet, Quick_Start_Guide, or URL-encoded equivalents.
-    These are presentation variants, not different document semantics.
-    """
     text = unquote(f"{url} {title} {snippet}")
     text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
     text = re.sub(r"[_/\\+.-]+", " ", text)

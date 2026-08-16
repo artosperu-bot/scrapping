@@ -1,0 +1,43 @@
+name: Social Video Download Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/product_intelligence/social_video_downloader.py'
+      - 'src/product_intelligence/media_desktop.py'
+      - 'tests/test_social_video_downloader.py'
+      - 'tests/test_social_video_desktop_contract.py'
+      - 'scripts/social_video_download_smoke.py'
+      - 'pyproject.toml'
+      - '.github/workflows/social-video-download-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: social-video-download-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install downloader runtime
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Download and verify real MP4
+        run: python scripts/social_video_download_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: social-video-download-smoke-report
+          path: social_video_smoke_result.json
+          if-no-files-found: ignore

@@ -14,10 +14,23 @@ datas=[]; binaries=[]; hiddenimports=[
     'product_intelligence.progress_animation',
     'product_intelligence.update_service',
     'product_intelligence.version',
+    'product_intelligence.social_video_downloader',
 ]
 
 try:
     d,b,h=collect_all('playwright')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
+try:
+    d,b,h=collect_all('yt_dlp')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
+try:
+    d,b,h=collect_all('imageio_ffmpeg')
     datas += d; binaries += b; hiddenimports += h
 except Exception:
     pass

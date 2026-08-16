@@ -77,6 +77,21 @@ def test_exact_mpn_is_high_confidence_candidate():
     assert result.identity_score >= 90
 
 
+def test_search_snippet_echo_of_mpn_does_not_prove_exact_identity():
+    from product_intelligence.document_discovery import assess_document_candidate
+
+    result = assess_document_candidate(
+        _identity(),
+        "https://manuals.plus/asin/B098R6CLQ6.pdf",
+        "Wireless Headphones User Manual",
+        "Search result for JBLQ350WLBLKAM manual and related products",
+    )
+
+    assert result.accepted is False
+    assert result.exact_strong_id is False
+    assert result.reason == "snippet_only_strong_identifier"
+
+
 def test_document_provenance_can_bind_missing_internal_identifier_without_overriding_conflict():
     from product_intelligence.document_discovery import DocumentProvenance, can_bind_document_by_provenance
 
@@ -91,6 +106,60 @@ def test_document_provenance_can_bind_missing_internal_identifier_without_overri
 
     assert can_bind_document_by_provenance(provenance, internal_identity_reason="strong_identifier_missing") is True
     assert can_bind_document_by_provenance(provenance, internal_identity_reason="strong_identifier_conflict") is False
+
+
+def test_third_party_provenance_cannot_promote_missing_identity():
+    from product_intelligence.document_discovery import DocumentProvenance, can_bind_document_by_provenance
+
+    provenance = DocumentProvenance(
+        parent_url="https://www.loyaltysource.com/product/JBLT530CBLKAM",
+        parent_identity_status="EXACT",
+        parent_identity_confidence=0.99,
+        parent_authority="VALIDATED_SOURCE",
+        anchor_text="Detailed Instructions",
+        discovery_method="exact_pdp_link",
+    )
+
+    assert can_bind_document_by_provenance(provenance, internal_identity_reason="strong_identifier_missing") is False
+
+
+def test_mpn_used_as_model_does_not_generate_self_join_query():
+    from product_intelligence.document_discovery import build_document_queries
+
+    identity = ProductIdentity(brand="JBL", model="JBLENDURRUN3BTBAM", mpn="JBLENDURRUN3BTBAM")
+    queries = build_document_queries(identity)
+
+    assert '"JBLENDURRUN3BTBAM" "JBLENDURRUN3BTBAM" filetype:pdf' not in queries
+    assert len(queries) == len(set(queries))
+
+
+def test_discovery_has_global_landing_inspection_budget(monkeypatch):
+    from product_intelligence.discovery import SearchCandidate
+    from product_intelligence import document_discovery as discovery
+
+    identity = _identity()
+    rows = [
+        SearchCandidate(
+            f"https://support.example/JBLQ350WLBLKAM/page-{idx}.html",
+            f"JBLQ350WLBLKAM support page {idx}",
+            "JBL Quantum 350 Wireless support",
+            0.9,
+            True,
+        )
+        for idx in range(20)
+    ]
+    monkeypatch.setattr(discovery, "search_web_query_candidates", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr(discovery, "search_web", lambda *_args, **_kwargs: [])
+    inspected: list[str] = []
+
+    def no_pdf(_identity, candidate, **_kwargs):
+        inspected.append(candidate.url)
+        return []
+
+    monkeypatch.setattr(discovery, "resolve_document_candidate_urls", no_pdf)
+
+    assert discovery.discover_product_documents(identity, limit=6, timeout=1) == []
+    assert len(inspected) <= discovery.MAX_LANDING_INSPECTIONS
 
 
 def test_review_discovery_does_not_download_pdf(monkeypatch):

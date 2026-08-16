@@ -8,10 +8,10 @@ import shutil
 from product_intelligence.social_video_downloader import download_social_video
 
 
-# Maintained as an active MP4 extractor test by yt-dlp itself.
+# Active non-skipped MP4 extractor fixture from yt-dlp's Dailymotion tests.
 URL = os.environ.get(
     "SOCIAL_VIDEO_SMOKE_URL",
-    "https://www.vidio.com/watch/165683-dj_ambred-booyah-live-2015",
+    "https://www.dailymotion.com/video/x5kesuj",
 )
 OUT = Path(os.environ.get("SOCIAL_VIDEO_SMOKE_OUT", "social_video_smoke_output")).resolve()
 

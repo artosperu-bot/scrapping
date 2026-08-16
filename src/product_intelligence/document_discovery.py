@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import requests
 
@@ -16,8 +16,8 @@ from .web_fetch import UA
 _DOCUMENT_PATTERNS = (
     ("quick_start", re.compile(r"\bquick\s*(?:start|guide)|gu[ií]a\s+r[aá]pida\b", re.I)),
     ("compliance", re.compile(r"\bcompliance|regulatory|declaration\s+of\s+conformity|conformidad|certification\b", re.I)),
-    ("datasheet", re.compile(r"\bdata\s*sheet|datasheet|spec\s*sheet|ficha\s+t[eé]cnica|technical\s+sheet\b", re.I)),
-    ("manual", re.compile(r"\buser\s+manual|owner'?s\s+manual|manual\s+de\s+usuario|manual\b", re.I)),
+    ("datasheet", re.compile(r"\bdata\s*sheet|\bdatasheet|\bspec\s*sheet|ficha\s+t[eé]cnica|technical\s+sheet\b", re.I)),
+    ("manual", re.compile(r"\buser\s+manual|owner'?s\s+manual|manual\s+de\s+usuario|\bmanual\b", re.I)),
     ("technical_pdf", re.compile(r"\bspecifications?|technical\s+specifications?|especificaciones\b", re.I)),
 )
 _PROMOTIONAL = re.compile(r"\bbrochure|catalog(?:ue)?|promotional|buy\s+now|shop\s+now|oferta|sale\b", re.I)
@@ -28,8 +28,6 @@ _NON_PRODUCT_PDF = re.compile(
 )
 _GENERIC_PAGE = re.compile(r"\b(all|category|categories|catalog|catalogue|shop|store|headphones?|audifonos?|products?)\b", re.I)
 
-# Hard product-level budgets: a search engine may return hundreds of rows, but
-# document discovery must remain a small precision-first verification exercise.
 MAX_QUERY_ATTEMPTS = 8
 MAX_LANDING_INSPECTIONS = 8
 
@@ -251,8 +249,21 @@ def can_bind_document_by_provenance(provenance: DocumentProvenance | None, *, in
     return str(internal_identity_reason or "") in {"strong_identifier_missing", "identity_not_confirmed"}
 
 
+def _document_semantic_text(url: str, title: str = "", snippet: str = "") -> str:
+    """Normalize filename/URL separators before document-type classification.
+
+    Search results and CDNs commonly expose names such as SpecSheet,
+    Spec_Sheet, spec-sheet, Quick_Start_Guide, or URL-encoded equivalents.
+    These are presentation variants, not different document semantics.
+    """
+    text = unquote(f"{url} {title} {snippet}")
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    text = re.sub(r"[_/\\+.-]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def classify_document_candidate(url: str, title: str = "", snippet: str = "") -> str | None:
-    text = f"{url} {title} {snippet}"
+    text = _document_semantic_text(url, title, snippet)
     if _PROMOTIONAL.search(text):
         return None
     for kind, pattern in _DOCUMENT_PATTERNS:

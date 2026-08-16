@@ -20,6 +20,7 @@ from .pdf_evidence import validate_pdf_identity
 
 _PROVENANCE_LOCK = RLock()
 _DISCOVERED_PROVENANCE: dict[str, DocumentProvenance] = {}
+MAX_REVIEW_PDF_PAGES = 10
 
 
 def provenance_for_review_url(url: str) -> DocumentProvenance | None:
@@ -74,6 +75,7 @@ class PdfInspection:
     ocr_recommended: bool
     preview_png: bytes
     review_score: int
+    selection_allowed: bool
     provenance: DocumentProvenance | None = None
 
 
@@ -105,7 +107,13 @@ def score_review_candidate(
     score += round(_document_priority(document_type) / 20 * 10)
     score += round(max(0.0, min(1.0, float(discovery_score or 0.0))) * 5)
     if identity_accepted is True:
-        score = max(score, round(max(0.0, min(1.0, float(identity_confidence or 0.0))) * 40) + (20 if likely_official else 8) + (15 if provenance else 0) + round(_document_priority(document_type) / 20 * 10))
+        score = max(
+            score,
+            round(max(0.0, min(1.0, float(identity_confidence or 0.0))) * 40)
+            + (20 if likely_official else 8)
+            + (15 if provenance else 0)
+            + round(_document_priority(document_type) / 20 * 10),
+        )
     elif identity_accepted is False:
         score -= 25
     if native_text_chars is not None:
@@ -130,25 +138,27 @@ def discover_review_candidates(identity: ProductIdentity, limit: int = 8) -> lis
         identity_status = str(getattr(row, "identity_status", "UNVERIFIED") or "UNVERIFIED")
         identity_reason = str(getattr(row, "identity_reason", "") or "")
         identity_score = int(getattr(row, "identity_score", 0) or 0)
-        out.append(PdfReviewCandidate(
-            url=url,
-            title=str(row.title or ""),
-            snippet=str(row.snippet or ""),
-            document_type=kind,
-            likely_official=bool(getattr(row, "likely_official", False)),
-            discovery_score=float(getattr(row, "score", 0.0) or 0.0),
-            provenance=provenance,
-            identity_status=identity_status,
-            identity_reason=identity_reason,
-            identity_score=identity_score,
-            review_score=score_review_candidate(
-                likely_official=bool(getattr(row, "likely_official", False)),
+        out.append(
+            PdfReviewCandidate(
+                url=url,
+                title=str(row.title or ""),
+                snippet=str(row.snippet or ""),
                 document_type=kind,
+                likely_official=bool(getattr(row, "likely_official", False)),
                 discovery_score=float(getattr(row, "score", 0.0) or 0.0),
                 provenance=provenance,
+                identity_status=identity_status,
+                identity_reason=identity_reason,
                 identity_score=identity_score,
-            ),
-        ))
+                review_score=score_review_candidate(
+                    likely_official=bool(getattr(row, "likely_official", False)),
+                    document_type=kind,
+                    discovery_score=float(getattr(row, "score", 0.0) or 0.0),
+                    provenance=provenance,
+                    identity_score=identity_score,
+                ),
+            )
+        )
     out.sort(key=lambda item: item.review_score, reverse=True)
     return out[: max(1, int(limit))]
 
@@ -216,7 +226,7 @@ def inspect_pdf_candidate(
     provenance: DocumentProvenance | None = None,
     identity_score: int = 0,
 ) -> PdfInspection:
-    """Download only the selected preview candidate and inspect native text; never OCR/Mistral."""
+    """Download only the selected preview candidate and inspect native text; never invoke remote providers."""
     _remember_provenance(url, provenance)
     cache = Path(cache_dir)
     cache.mkdir(parents=True, exist_ok=True)
@@ -231,6 +241,27 @@ def inspect_pdf_candidate(
     finally:
         doc.close()
 
+    # Product policy requested for reviewed PDFs: documents above ten pages are
+    # discarded before OCR/provider processing regardless of otherwise good ID.
+    if pages > MAX_REVIEW_PDF_PAGES:
+        return PdfInspection(
+            url=url,
+            final_url=str(downloaded.final_url or url),
+            local_path=local_path,
+            identity_accepted=False,
+            identity_pending_ocr=False,
+            identity_provenance_bound=False,
+            identity_confidence=0.0,
+            identity_reason="page_limit_exceeded",
+            page_count=pages,
+            native_text_chars=native_chars,
+            ocr_recommended=False,
+            preview_png=preview,
+            review_score=0,
+            selection_allowed=False,
+            provenance=provenance,
+        )
+
     provenance_bound = (not bool(match.accepted)) and can_bind_document_by_provenance(
         provenance,
         internal_identity_reason=str(match.reason),
@@ -239,7 +270,10 @@ def inspect_pdf_candidate(
     confidence = float(match.confidence)
     reason = str(match.reason)
     if provenance_bound:
-        confidence = max(confidence, min(0.96, float(provenance.parent_identity_confidence if provenance else 0.0) * 0.95))
+        confidence = max(
+            confidence,
+            min(0.96, float(provenance.parent_identity_confidence if provenance else 0.0) * 0.95),
+        )
         reason = "identity_bound_by_provenance"
 
     ocr_recommended = _ocr_recommended(pages, native_chars)
@@ -249,6 +283,7 @@ def inspect_pdf_candidate(
         ocr_recommended=ocr_recommended,
         provenance_bound=provenance_bound,
     )
+    selection_allowed = bool(accepted or pending_ocr)
     score = score_review_candidate(
         likely_official=likely_official,
         document_type=document_type,
@@ -273,5 +308,6 @@ def inspect_pdf_candidate(
         ocr_recommended=ocr_recommended,
         preview_png=preview,
         review_score=score,
+        selection_allowed=selection_allowed,
         provenance=provenance,
     )

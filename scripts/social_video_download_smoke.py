@@ -8,7 +8,11 @@ import shutil
 from product_intelligence.social_video_downloader import download_social_video
 
 
-URL = os.environ.get("SOCIAL_VIDEO_SMOKE_URL", "https://vimeo.com/56015672")
+# Maintained as an active MP4 extractor test by yt-dlp itself.
+URL = os.environ.get(
+    "SOCIAL_VIDEO_SMOKE_URL",
+    "https://www.vidio.com/watch/165683-dj_ambred-booyah-live-2015",
+)
 OUT = Path(os.environ.get("SOCIAL_VIDEO_SMOKE_OUT", "social_video_smoke_output")).resolve()
 
 
@@ -38,7 +42,7 @@ def main() -> None:
     )
     print("SOCIAL_VIDEO_SMOKE=" + json.dumps(report, ensure_ascii=False))
 
-    # The smoke proves a real MP4 was produced but does not redistribute the media as a CI artifact.
+    # Prove a real file existed without redistributing the downloaded media as a CI artifact.
     path.unlink(missing_ok=True)
 
 

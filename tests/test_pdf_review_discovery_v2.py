@@ -163,6 +163,23 @@ def test_discovery_has_global_landing_inspection_budget(monkeypatch):
     assert len(inspected) <= discovery.MAX_LANDING_INSPECTIONS
 
 
+def test_discovery_has_global_query_budget(monkeypatch):
+    from product_intelligence import document_discovery as discovery
+
+    queries: list[str] = []
+
+    def no_results(_identity, query, **_kwargs):
+        queries.append(query)
+        return []
+
+    monkeypatch.setattr(discovery, "search_web_query_candidates", no_results)
+    monkeypatch.setattr(discovery, "browser_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(discovery, "search_web", lambda *_args, **_kwargs: [])
+
+    assert discovery.discover_product_documents(_identity(), limit=6, timeout=1) == []
+    assert len(queries) <= discovery.MAX_QUERY_ATTEMPTS
+
+
 def test_review_discovery_does_not_download_pdf(monkeypatch):
     from product_intelligence import pdf_review
     from product_intelligence.discovery import SearchCandidate

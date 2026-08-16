@@ -1,1 +1,3 @@
-# temporary branch advance; exact stable blob follows immediately
+from __future__ import annotations
+
+# This placeholder is intentionally superseded by the exact stable blob commit.

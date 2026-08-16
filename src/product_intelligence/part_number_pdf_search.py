@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Callable
 
 from .models import ProductIdentity
-from .pdf_pipeline import ResolvedPdfIdentity, ValidatedPdfCandidate, discover_validated_review_pdfs
+from .live_pdf_discovery import discover_validated_review_pdfs_live as discover_validated_review_pdfs
+from .pdf_pipeline import ResolvedPdfIdentity, ValidatedPdfCandidate
 
 
 MAX_REVIEW_PDF_PAGES = 10
@@ -46,13 +47,9 @@ def search_product_pdfs(
     limit: int = 8,
     timeout: int = 10,
     log: Callable[[str], None] | None = None,
+    on_event: Callable[[dict], None] | None = None,
 ) -> PartNumberPdfSearchResult:
-    """Resolve identity and surface only validated short PDFs from real identifiers.
-
-    MPN, EAN, UPC and GTIN retain their semantic roles. A trade code is never copied
-    into `mpn`; when no descriptive model exists it is used only as the temporary
-    `model` placeholder so the shared resolver can recognize code-only input.
-    """
+    """Resolve identity and surface validated short PDFs, with optional live events."""
     mpn = _clean(mpn)
     ean = _clean(ean)
     upc = _clean(upc)
@@ -73,12 +70,43 @@ def search_product_pdfs(
         upc=upc,
         gtin=gtin,
     )
+
+    accepted_live_urls: set[str] = set()
+    page_limit_live_urls: set[str] = set()
+
+    def forward(event: dict):
+        kind = str(event.get("type") or "")
+        if kind == "done":
+            return
+        if kind == "validated" and event.get("row") is not None:
+            row = event["row"]
+            pages = int(getattr(row.inspection, "page_count", 0) or 0)
+            url = str(getattr(row.candidate, "url", "") or "")
+            if pages > MAX_REVIEW_PDF_PAGES:
+                page_limit_live_urls.add(url)
+                if on_event:
+                    on_event(
+                        {
+                            "type": "rejected",
+                            "stage": "VALIDATE",
+                            "url": url,
+                            "reason": "PAGE_LIMIT",
+                            "pages": pages,
+                            "max_pages": MAX_REVIEW_PDF_PAGES,
+                        }
+                    )
+                return
+            accepted_live_urls.add(url)
+        if on_event:
+            on_event(event)
+
     result = discover_validated_review_pdfs(
         identity,
         cache_dir,
         limit=max(1, int(limit)),
         timeout=max(1, int(timeout)),
         log=log,
+        on_event=forward,
     )
 
     accepted: list[ValidatedPdfCandidate] = []
@@ -89,8 +117,25 @@ def search_product_pdfs(
             page_limit_rejected += 1
             if log:
                 log(f"[PAGE_LIMIT] REJECTED {row.candidate.url} · pages={pages} max={MAX_REVIEW_PDF_PAGES}")
+            # A mocked/legacy producer may not have emitted the validated event.
+            url = str(row.candidate.url or "")
+            if url not in page_limit_live_urls and on_event:
+                on_event(
+                    {
+                        "type": "rejected",
+                        "stage": "VALIDATE",
+                        "url": url,
+                        "reason": "PAGE_LIMIT",
+                        "pages": pages,
+                        "max_pages": MAX_REVIEW_PDF_PAGES,
+                    }
+                )
             continue
         accepted.append(row)
+        # Compatibility with producers that return rows without live candidate callbacks.
+        url = str(row.candidate.url or "")
+        if url not in accepted_live_urls and on_event:
+            on_event({"type": "validated", "stage": "VALIDATE", "row": row, "url": url, "pages": pages})
 
     if log:
         resolved = result.resolved.identity
@@ -100,7 +145,7 @@ def search_product_pdfs(
             f"validated={len(accepted)} page_limit_rejected={page_limit_rejected}"
         )
 
-    return PartNumberPdfSearchResult(
+    final = PartNumberPdfSearchResult(
         part_number=primary,
         resolved=result.resolved,
         candidates=tuple(accepted),
@@ -111,6 +156,20 @@ def search_product_pdfs(
         duplicate_count=result.duplicate_count,
         page_limit_rejected_count=page_limit_rejected,
     )
+    if on_event:
+        on_event(
+            {
+                "type": "done",
+                "stage": "DONE",
+                "discovered": final.discovered_count,
+                "downloaded": final.downloaded_count,
+                "validated": final.validated_count,
+                "rejected": final.rejected_count,
+                "duplicates": final.duplicate_count,
+                "page_limit_rejected": final.page_limit_rejected_count,
+            }
+        )
+    return final
 
 
 def search_product_pdfs_by_part_number(
@@ -120,6 +179,7 @@ def search_product_pdfs_by_part_number(
     limit: int = 8,
     timeout: int = 10,
     log: Callable[[str], None] | None = None,
+    on_event: Callable[[dict], None] | None = None,
 ) -> PartNumberPdfSearchResult:
     part = _clean(part_number)
     if not part:
@@ -131,4 +191,5 @@ def search_product_pdfs_by_part_number(
         limit=limit,
         timeout=timeout,
         log=log,
+        on_event=on_event,
     )

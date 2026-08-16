@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from urllib.parse import urlparse
 
 import fitz
@@ -15,6 +16,22 @@ from .document_discovery import (
 from .models import ProductIdentity
 from .pdf_download import download_pdf
 from .pdf_evidence import validate_pdf_identity
+
+
+_PROVENANCE_LOCK = RLock()
+_DISCOVERED_PROVENANCE: dict[str, DocumentProvenance] = {}
+
+
+def provenance_for_review_url(url: str) -> DocumentProvenance | None:
+    with _PROVENANCE_LOCK:
+        return _DISCOVERED_PROVENANCE.get(str(url or "").strip())
+
+
+def _remember_provenance(url: str, provenance: DocumentProvenance | None) -> None:
+    if provenance is None:
+        return
+    with _PROVENANCE_LOCK:
+        _DISCOVERED_PROVENANCE[str(url or "").strip()] = provenance
 
 
 @dataclass(frozen=True)
@@ -82,8 +99,6 @@ def score_review_candidate(
     identity_score: int = 0,
 ) -> int:
     """Transparent review score only; never an evidence admission gate."""
-    # V2 weighting: identity 40, authority 20, provenance 15,
-    # document type 10, text quality 10, discovery relevance 5.
     score = round(max(0, min(100, int(identity_score or 0))) * 0.40)
     score += 20 if likely_official else 8
     score += 15 if provenance is not None else 0
@@ -111,6 +126,7 @@ def discover_review_candidates(identity: ProductIdentity, limit: int = 8) -> lis
         seen.add(url)
         kind = classify_document_candidate(row.url, row.title, row.snippet) or "technical_pdf"
         provenance = getattr(row, "provenance", None)
+        _remember_provenance(url, provenance)
         identity_status = str(getattr(row, "identity_status", "UNVERIFIED") or "UNVERIFIED")
         identity_reason = str(getattr(row, "identity_reason", "") or "")
         identity_score = int(getattr(row, "identity_score", 0) or 0)
@@ -201,6 +217,7 @@ def inspect_pdf_candidate(
     identity_score: int = 0,
 ) -> PdfInspection:
     """Download only the selected preview candidate and inspect native text; never OCR/Mistral."""
+    _remember_provenance(url, provenance)
     cache = Path(cache_dir)
     cache.mkdir(parents=True, exist_ok=True)
     downloaded = download_pdf(url, cache, timeout=30)

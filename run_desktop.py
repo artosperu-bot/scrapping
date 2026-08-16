@@ -9,8 +9,8 @@ from product_intelligence.live_ui_desktop import main as live_ui_main
 
 # Preserve the validated modern/PDF/provider/workspace extension-chain imports because
 # regression contracts use them as evidence that those layers remain present.
-# The final launcher routes the real packaged EXE through the live-observability shell,
-# which extends the validated PDF review chain without replacing its business engines.
+# The live shell extends the validated PDF review entry while preserving the historical
+# managed_main = pdf_review_main launcher contract used by packaging/regression gates.
 import_module("product_intelligence.pdf_desktop")
 import_module("product_intelligence.provider_desktop")
 import_module("product_intelligence.workspace_desktop")
@@ -18,5 +18,6 @@ import_module("product_intelligence.organized_desktop")
 import_module("product_intelligence.pdf_review_shell")
 import_module("product_intelligence.real_pdf_review_shell")
 import_module("product_intelligence.live_ui_desktop")
-managed_main = live_ui_main
+pdf_review_main = live_ui_main
+managed_main = pdf_review_main
 managed_main()

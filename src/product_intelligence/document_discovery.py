@@ -28,8 +28,9 @@ _NON_PRODUCT_PDF = re.compile(
 )
 _GENERIC_PAGE = re.compile(r"\b(all|category|categories|catalog|catalogue|shop|store|headphones?|audifonos?|products?)\b", re.I)
 
-# Product-level hard budget. Discovery may search broadly, but it must not open
-# dozens of pages merely because a search engine echoed the query in snippets.
+# Hard product-level budgets: a search engine may return hundreds of rows, but
+# document discovery must remain a small precision-first verification exercise.
+MAX_QUERY_ATTEMPTS = 8
 MAX_LANDING_INSPECTIONS = 8
 
 
@@ -85,8 +86,6 @@ def _descriptive_model(identity: ProductIdentity) -> str:
         text = str(value or "").strip()
         if text and _compact(text) not in strong:
             return text
-    # If model/product_name is only a copy of the MPN, there is no descriptive
-    # model to combine with the MPN. Returning it would create MPN+MPN queries.
     return ""
 
 
@@ -194,11 +193,7 @@ def _model_tokens(value: str) -> tuple[list[str], list[str]]:
 
 
 def assess_document_candidate(identity: ProductIdentity, url: str, title: str = "", snippet: str = "") -> DocumentCandidateAssessment:
-    """Assess search metadata without trusting search-engine query echo.
-
-    URL and title are identity-bearing signals. Snippet text is supporting context
-    only because providers frequently echo the submitted query in snippets.
-    """
+    """Assess metadata without trusting search-engine query echo in snippets."""
     primary = f"{url} {title}"
     primary_compact = _compact(primary)
     primary_norm = key_norm(primary)
@@ -216,8 +211,6 @@ def assess_document_candidate(identity: ProductIdentity, url: str, title: str = 
     if exact_model:
         return DocumentCandidateAssessment(True, "exact_brand_model", 88, exact_model=True)
 
-    # A strong identifier that appears only in the snippet is not evidence that
-    # the destination page belongs to the target product.
     if any(value and value in snippet_compact for value in strong_values):
         return DocumentCandidateAssessment(False, "snippet_only_strong_identifier", 0)
 
@@ -324,7 +317,6 @@ def _resolved_candidate(candidate: SearchCandidate, url: str, label: str = "", *
 
 
 def _parent_provenance(identity: ProductIdentity, candidate: SearchCandidate, anchor_text: str, rendered: bool) -> DocumentProvenance | None:
-    # Only an exact manufacturer page may bind a PDF that lacks an internal ID.
     if not bool(candidate.likely_official):
         return None
     assessment = assess_document_candidate(identity, candidate.url, candidate.title, candidate.snippet)
@@ -510,10 +502,16 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeou
     per_query = max(4, min(limit, 6))
     landing_budget = [0]
     inspected_landings: set[str] = set()
+    query_attempts = 0
 
     for tier_index, tier in enumerate(tiers):
+        if query_attempts >= MAX_QUERY_ATTEMPTS:
+            break
         tier_valid: list[SearchCandidate] = []
         for query in tier:
+            if query_attempts >= MAX_QUERY_ATTEMPTS:
+                break
+            query_attempts += 1
             candidates = (
                 search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace)
                 if trace
@@ -533,11 +531,7 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeou
                 if trace and not _looks_like_direct_pdf(accepted.url) and accepted.identity_score >= 88:
                     trace.emit("PDF_EXACT_PDP_FOUND", url=accepted.url, identity_score=accepted.identity_score)
 
-            exact_landings = [
-                row
-                for row in tier_valid
-                if not _looks_like_direct_pdf(row.url) and row.identity_score >= 88
-            ]
+            exact_landings = [row for row in tier_valid if not _looks_like_direct_pdf(row.url) and row.identity_score >= 88]
             if exact_landings and landing_budget[0] < MAX_LANDING_INSPECTIONS:
                 if trace:
                     trace.emit("PDF_PDP_PIVOT", count=len(exact_landings), tier=tier_index + 1)
@@ -580,18 +574,19 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeou
                 return resolved
 
     flattened_queries = [query for tier in tiers for query in tier]
-    browser_resolved = _browser_document_pass(
-        identity,
-        queries=flattened_queries,
-        seen=seen,
-        limit=limit,
-        timeout=timeout,
-        trace=trace,
-        landing_budget=landing_budget,
-        inspected_landings=inspected_landings,
-    )
-    if browser_resolved:
-        return browser_resolved
+    if landing_budget[0] < MAX_LANDING_INSPECTIONS:
+        browser_resolved = _browser_document_pass(
+            identity,
+            queries=flattened_queries,
+            seen=seen,
+            limit=limit,
+            timeout=timeout,
+            trace=trace,
+            landing_budget=landing_budget,
+            inspected_landings=inspected_landings,
+        )
+        if browser_resolved:
+            return browser_resolved
 
     fallback: list[SearchCandidate] = []
     for candidate in search_web(identity, limit=max(8, limit), timeout=max(10, timeout)):

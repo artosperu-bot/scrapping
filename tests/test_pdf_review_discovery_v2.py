@@ -133,7 +133,7 @@ def test_review_shell_exposes_full_reader_controls():
         "Página",
         "Ajustar ancho",
         "Ajustar página",
-        "Ctrl",
+        "<Control-MouseWheel>",
         "Canvas",
     ]:
         assert token in source

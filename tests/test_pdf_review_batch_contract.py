@@ -74,6 +74,50 @@ def test_reviewed_pdf_selection_disables_automatic_pdf_discovery_but_keeps_web(t
     assert calls["direct_discovery"] == 0
 
 
+def test_confirmed_review_filters_preexisting_unapproved_manual_pdf(tmp_path, monkeypatch):
+    import product_intelligence.batch as batch
+    from product_intelligence.pdf_review_batch import scrape_item_with_review
+
+    identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
+    html_url = "https://www.jbl.test/quantum-350"
+    approved_pdf = "https://www.jbl.test/approved.pdf"
+    unapproved_pdf = "https://www.jbl.test/old-manual.pdf"
+    processed_pdfs = []
+
+    monkeypatch.setattr(batch, "search_web", lambda *args, **kwargs: [])
+    monkeypatch.setattr(batch, "search_web_for_fields", lambda *args, **kwargs: [])
+    monkeypatch.setattr(batch, "analyze_resolution", lambda *args, **kwargs: {"blocked": False, "research_terms": [], "fields": [], "cross_field_issues": []})
+    monkeypatch.setattr(batch, "_merge_valid_records", lambda records: records[0])
+    monkeypatch.setattr(batch, "_coverage_sufficient", lambda *args, **kwargs: False)
+    monkeypatch.setattr(batch.ProductPipeline, "process_url", lambda _self, _expected, url, **kwargs: _record(identity, url))
+
+    def process_pdf(_identity, url, **kwargs):
+        processed_pdfs.append(url)
+        return _record(identity, url)
+
+    monkeypatch.setattr(batch, "process_pdf_document", process_pdf)
+    monkeypatch.setattr(batch, "_ingest_direct_documents", lambda *args, **kwargs: [])
+
+    item = BatchItem(
+        row=2,
+        sheet="Sheet1",
+        identity=identity,
+        source_urls=[html_url, unapproved_pdf],
+    )
+    result = scrape_item_with_review(
+        item,
+        str(tmp_path),
+        approved_urls=[approved_pdf],
+        enforced=True,
+        template_plan={"media_slots": 0, "scrape_semantics": [], "summary": {"scrape_targets": 1}},
+        source_strategy=SourceStrategy(web=True, pdf=True, ocr=False, mistral=False),
+    )
+
+    assert result is not None
+    assert approved_pdf in processed_pdfs
+    assert unapproved_pdf not in processed_pdfs
+
+
 def test_unreviewed_product_delegates_to_existing_scraper(monkeypatch):
     import product_intelligence.pdf_review_batch as review_batch
 

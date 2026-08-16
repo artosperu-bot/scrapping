@@ -33,6 +33,7 @@ class PdfInspection:
     final_url: str
     local_path: Path
     identity_accepted: bool
+    identity_pending_ocr: bool
     identity_confidence: float
     identity_reason: str
     page_count: int
@@ -116,6 +117,18 @@ def _ocr_recommended(page_count: int, native_text_chars: int) -> bool:
     return (chars / pages) < 35
 
 
+def _identity_pending_ocr(*, accepted: bool, reason: str, ocr_recommended: bool) -> bool:
+    if accepted or not ocr_recommended:
+        return False
+    # These states mean native text could not prove the product. They are not accepted
+    # evidence, but an OCR pass may legitimately provide the missing binding later.
+    return str(reason or "") in {
+        "strong_identifier_missing",
+        "strong_identifier_without_brand_binding",
+        "identity_not_confirmed",
+    }
+
+
 def _preview_first_page(doc: fitz.Document) -> bytes:
     if doc.page_count < 1:
         return b""
@@ -147,11 +160,19 @@ def inspect_pdf_candidate(
     finally:
         doc.close()
 
+    ocr_recommended = _ocr_recommended(pages, native_chars)
+    pending_ocr = _identity_pending_ocr(
+        accepted=bool(match.accepted),
+        reason=str(match.reason),
+        ocr_recommended=ocr_recommended,
+    )
+    # A pending OCR document receives no identity-acceptance bonus. Its score is merely
+    # an ordering hint; the actual execution still has to prove identity after OCR.
     score = score_review_candidate(
         likely_official=likely_official,
         document_type=document_type,
         discovery_score=discovery_score,
-        identity_accepted=bool(match.accepted),
+        identity_accepted=None if pending_ocr else bool(match.accepted),
         identity_confidence=float(match.confidence),
         native_text_chars=native_chars,
     )
@@ -160,11 +181,12 @@ def inspect_pdf_candidate(
         final_url=str(downloaded.final_url or url),
         local_path=local_path,
         identity_accepted=bool(match.accepted),
+        identity_pending_ocr=pending_ocr,
         identity_confidence=float(match.confidence),
         identity_reason=str(match.reason),
         page_count=pages,
         native_text_chars=native_chars,
-        ocr_recommended=_ocr_recommended(pages, native_chars),
+        ocr_recommended=ocr_recommended,
         preview_png=preview,
         review_score=score,
     )

@@ -28,6 +28,10 @@ _NON_PRODUCT_PDF = re.compile(
 )
 _GENERIC_PAGE = re.compile(r"\b(all|category|categories|catalog|catalogue|shop|store|headphones?|audifonos?|products?)\b", re.I)
 
+# Product-level hard budget. Discovery may search broadly, but it must not open
+# dozens of pages merely because a search engine echoed the query in snippets.
+MAX_LANDING_INSPECTIONS = 8
+
 
 @dataclass(frozen=True)
 class DocumentCandidateAssessment:
@@ -66,7 +70,9 @@ def _canonical_url(url: str) -> str:
         parsed = urlsplit(str(url or "").strip())
         scheme = (parsed.scheme or "https").lower()
         host = (parsed.hostname or "").lower().removeprefix("www.")
-        port = f":{parsed.port}" if parsed.port and not ((scheme == "https" and parsed.port == 443) or (scheme == "http" and parsed.port == 80)) else ""
+        port = f":{parsed.port}" if parsed.port and not (
+            (scheme == "https" and parsed.port == 443) or (scheme == "http" and parsed.port == 80)
+        ) else ""
         path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
         return urlunsplit((scheme, host + port, path, parsed.query, ""))
     except Exception:
@@ -79,7 +85,9 @@ def _descriptive_model(identity: ProductIdentity) -> str:
         text = str(value or "").strip()
         if text and _compact(text) not in strong:
             return text
-    return str(identity.model or identity.product_name or "").strip()
+    # If model/product_name is only a copy of the MPN, there is no descriptive
+    # model to combine with the MPN. Returning it would create MPN+MPN queries.
+    return ""
 
 
 def _strong_identifiers(identity: ProductIdentity) -> list[str]:
@@ -107,7 +115,7 @@ def _clean_official_domain(value: str | None) -> str:
 
 
 def build_document_query_tiers(identity: ProductIdentity, official_domain: str | None = None) -> list[list[str]]:
-    """Return a precision-first escalation ladder while preserving proven legacy queries."""
+    """Return a precision-first escalation ladder while preserving proven queries."""
     brand = str(identity.brand or "").strip()
     model = _descriptive_model(identity)
     strong_values = _strong_identifiers(identity)
@@ -174,36 +182,54 @@ def build_document_queries(identity: ProductIdentity, official_domain: str | Non
 
 def _model_tokens(value: str) -> tuple[list[str], list[str]]:
     tokens = re.findall(r"[a-z]+|\d+", key_norm(value or ""))
-    words = [token for token in tokens if token.isalpha() and len(token) >= 3 and token not in {"wireless", "wired", "gaming", "headset", "headphone", "headphones"}]
+    words = [
+        token
+        for token in tokens
+        if token.isalpha()
+        and len(token) >= 3
+        and token not in {"wireless", "wired", "gaming", "headset", "headphone", "headphones"}
+    ]
     numbers = [token for token in tokens if token.isdigit() and len(token) >= 1]
     return words, numbers
 
 
 def assess_document_candidate(identity: ProductIdentity, url: str, title: str = "", snippet: str = "") -> DocumentCandidateAssessment:
-    combined = f"{url} {title} {snippet}"
-    compact = _compact(combined)
-    text_norm = key_norm(combined)
+    """Assess search metadata without trusting search-engine query echo.
+
+    URL and title are identity-bearing signals. Snippet text is supporting context
+    only because providers frequently echo the submitted query in snippets.
+    """
+    primary = f"{url} {title}"
+    primary_compact = _compact(primary)
+    primary_norm = key_norm(primary)
+    snippet_compact = _compact(snippet)
     strong_values = [_compact(x) for x in _strong_identifiers(identity)]
-    exact_strong = any(value and value in compact for value in strong_values)
+
+    exact_strong = any(value and value in primary_compact for value in strong_values)
     if exact_strong:
         return DocumentCandidateAssessment(True, "exact_strong_identifier", 100, exact_strong_id=True)
 
     brand = _compact(identity.brand)
     model_text = _descriptive_model(identity)
     model = _compact(model_text)
-    exact_model = bool(model and model in compact and (not brand or brand in compact))
+    exact_model = bool(model and model in primary_compact and (not brand or brand in primary_compact))
     if exact_model:
         return DocumentCandidateAssessment(True, "exact_brand_model", 88, exact_model=True)
 
-    if brand and brand in compact:
+    # A strong identifier that appears only in the snippet is not evidence that
+    # the destination page belongs to the target product.
+    if any(value and value in snippet_compact for value in strong_values):
+        return DocumentCandidateAssessment(False, "snippet_only_strong_identifier", 0)
+
+    if brand and brand in primary_compact:
         words, requested_numbers = _model_tokens(model_text)
-        candidate_numbers = set(re.findall(r"\b\d{1,4}\b", text_norm))
-        has_requested_family = any(word in text_norm for word in words) if words else False
+        candidate_numbers = set(re.findall(r"\b\d{1,4}\b", primary_norm))
+        has_requested_family = any(word in primary_norm for word in words) if words else False
         if requested_numbers and has_requested_family and not any(number in candidate_numbers for number in requested_numbers):
             return DocumentCandidateAssessment(False, "sibling_model_conflict", 0, conflict=True)
-        if classify_document_candidate(url, title, snippet) and model and model not in compact:
+        if classify_document_candidate(url, title, "") and model and model not in primary_compact:
             return DocumentCandidateAssessment(False, "sibling_model_conflict", 0, conflict=True)
-        if _GENERIC_PAGE.search(f"{title} {snippet}"):
+        if _GENERIC_PAGE.search(title):
             return DocumentCandidateAssessment(False, "brand_only_or_generic", 10)
         return DocumentCandidateAssessment(False, "brand_only_or_generic", 15)
 
@@ -219,9 +245,15 @@ def can_bind_document_by_provenance(provenance: DocumentProvenance | None, *, in
         return False
     if str(provenance.parent_identity_status).upper() not in {"EXACT", "STRONG"}:
         return False
+    if str(provenance.parent_authority).upper() != "MANUFACTURER":
+        return False
     if float(provenance.parent_identity_confidence or 0.0) < 0.85:
         return False
-    if str(internal_identity_reason or "") in {"strong_identifier_conflict", "sibling_model_url_conflict", "identity_conflict"}:
+    if str(internal_identity_reason or "") in {
+        "strong_identifier_conflict",
+        "sibling_model_url_conflict",
+        "identity_conflict",
+    }:
         return False
     return str(internal_identity_reason or "") in {"strong_identifier_missing", "identity_not_confirmed"}
 
@@ -292,16 +324,18 @@ def _resolved_candidate(candidate: SearchCandidate, url: str, label: str = "", *
 
 
 def _parent_provenance(identity: ProductIdentity, candidate: SearchCandidate, anchor_text: str, rendered: bool) -> DocumentProvenance | None:
+    # Only an exact manufacturer page may bind a PDF that lacks an internal ID.
+    if not bool(candidate.likely_official):
+        return None
     assessment = assess_document_candidate(identity, candidate.url, candidate.title, candidate.snippet)
     if not assessment.accepted:
         return None
     status = "EXACT" if assessment.exact_strong_id or assessment.exact_model else "STRONG"
-    authority = "MANUFACTURER" if bool(candidate.likely_official) else "VALIDATED_SOURCE"
     return DocumentProvenance(
         parent_url=candidate.url,
         parent_identity_status=status,
         parent_identity_confidence=min(1.0, assessment.identity_score / 100.0),
-        parent_authority=authority,
+        parent_authority="MANUFACTURER",
         anchor_text=anchor_text,
         discovery_method="exact_pdp_rendered_link" if rendered else "exact_pdp_link",
     )
@@ -354,12 +388,37 @@ def resolve_document_candidate_urls(identity: ProductIdentity, candidate: Search
     return resolved
 
 
-def _resolve_valid_candidates(identity: ProductIdentity, candidates: list[SearchCandidate], *, limit: int, timeout: int, trace=None) -> list[SearchCandidate]:
+def _resolve_valid_candidates(
+    identity: ProductIdentity,
+    candidates: list[SearchCandidate],
+    *,
+    limit: int,
+    timeout: int,
+    trace=None,
+    landing_budget: list[int] | None = None,
+    inspected_landings: set[str] | None = None,
+) -> list[SearchCandidate]:
     resolved: list[SearchCandidate] = []
     resolved_seen: set[str] = set()
-    for candidate in sorted(candidates, key=_document_rank, reverse=True)[:12]:
+    budget = landing_budget if landing_budget is not None else [0]
+    inspected = inspected_landings if inspected_landings is not None else set()
+
+    for candidate in sorted(candidates, key=_document_rank, reverse=True):
+        is_pdf = _looks_like_direct_pdf(candidate.url)
+        if not is_pdf:
+            canonical_landing = _canonical_url(candidate.url)
+            if canonical_landing in inspected:
+                continue
+            if budget[0] >= MAX_LANDING_INSPECTIONS:
+                break
+            inspected.add(canonical_landing)
+            budget[0] += 1
         try:
-            rows = resolve_document_candidate_urls(identity, candidate, timeout=timeout, trace=trace) if trace else resolve_document_candidate_urls(identity, candidate, timeout=timeout)
+            rows = (
+                resolve_document_candidate_urls(identity, candidate, timeout=timeout, trace=trace)
+                if trace
+                else resolve_document_candidate_urls(identity, candidate, timeout=timeout)
+            )
         except requests.RequestException:
             continue
         for row in rows:
@@ -387,6 +446,8 @@ def _accept_search_candidate(identity: ProductIdentity, candidate: SearchCandida
         return None
     if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
         if not assessment.exact_strong_id:
+            if trace:
+                trace.emit("PDF_CANDIDATE_REJECTED_PRE_FETCH", url=candidate.url, reason="document_semantics_missing")
             return None
     return DocumentSearchCandidate(
         url=candidate.url,
@@ -400,7 +461,17 @@ def _accept_search_candidate(identity: ProductIdentity, candidate: SearchCandida
     )
 
 
-def _browser_document_pass(identity: ProductIdentity, *, queries: list[str], seen: set[str], limit: int, timeout: int, trace=None) -> list[SearchCandidate]:
+def _browser_document_pass(
+    identity: ProductIdentity,
+    *,
+    queries: list[str],
+    seen: set[str],
+    limit: int,
+    timeout: int,
+    trace=None,
+    landing_budget: list[int] | None = None,
+    inspected_landings: set[str] | None = None,
+) -> list[SearchCandidate]:
     per_query = max(6, min(max(limit * 2, 10), 16))
     collected: list[SearchCandidate] = []
     for query in queries[:3]:
@@ -419,7 +490,15 @@ def _browser_document_pass(identity: ProductIdentity, *, queries: list[str], see
             accepted = _accept_search_candidate(identity, candidate, trace=trace)
             if accepted is not None:
                 collected.append(accepted)
-        resolved = _resolve_valid_candidates(identity, collected, limit=limit, timeout=timeout, trace=trace)
+        resolved = _resolve_valid_candidates(
+            identity,
+            collected,
+            limit=limit,
+            timeout=timeout,
+            trace=trace,
+            landing_budget=landing_budget,
+            inspected_landings=inspected_landings,
+        )
         if resolved:
             return resolved
     return []
@@ -428,13 +507,18 @@ def _browser_document_pass(identity: ProductIdentity, *, queries: list[str], see
 def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeout: int = 8, trace=None, official_domain: str | None = None) -> list[SearchCandidate]:
     tiers = build_document_query_tiers(identity, official_domain=official_domain)
     seen: set[str] = set()
-    valid: list[SearchCandidate] = []
     per_query = max(4, min(limit, 6))
+    landing_budget = [0]
+    inspected_landings: set[str] = set()
 
     for tier_index, tier in enumerate(tiers):
         tier_valid: list[SearchCandidate] = []
         for query in tier:
-            candidates = search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace) if trace else search_web_query_candidates(identity, query, limit=per_query, timeout=timeout)
+            candidates = (
+                search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace)
+                if trace
+                else search_web_query_candidates(identity, query, limit=per_query, timeout=timeout)
+            )
             for candidate in candidates:
                 canonical = _canonical_url(candidate.url)
                 if canonical in seen:
@@ -446,30 +530,66 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeou
                 if accepted is None:
                     continue
                 tier_valid.append(accepted)
-                valid.append(accepted)
                 if trace and not _looks_like_direct_pdf(accepted.url) and accepted.identity_score >= 88:
                     trace.emit("PDF_EXACT_PDP_FOUND", url=accepted.url, identity_score=accepted.identity_score)
 
-            exact_landings = [row for row in tier_valid if not _looks_like_direct_pdf(row.url) and row.identity_score >= 88]
-            if exact_landings:
+            exact_landings = [
+                row
+                for row in tier_valid
+                if not _looks_like_direct_pdf(row.url) and row.identity_score >= 88
+            ]
+            if exact_landings and landing_budget[0] < MAX_LANDING_INSPECTIONS:
                 if trace:
                     trace.emit("PDF_PDP_PIVOT", count=len(exact_landings), tier=tier_index + 1)
-                resolved = _resolve_valid_candidates(identity, exact_landings, limit=limit, timeout=timeout, trace=trace)
+                resolved = _resolve_valid_candidates(
+                    identity,
+                    exact_landings,
+                    limit=limit,
+                    timeout=timeout,
+                    trace=trace,
+                    landing_budget=landing_budget,
+                    inspected_landings=inspected_landings,
+                )
                 if resolved:
                     return resolved
 
-            if len(tier_valid) >= max(3, limit):
-                resolved = _resolve_valid_candidates(identity, tier_valid, limit=limit, timeout=timeout, trace=trace)
+            if len(tier_valid) >= max(3, limit) and landing_budget[0] < MAX_LANDING_INSPECTIONS:
+                resolved = _resolve_valid_candidates(
+                    identity,
+                    tier_valid,
+                    limit=limit,
+                    timeout=timeout,
+                    trace=trace,
+                    landing_budget=landing_budget,
+                    inspected_landings=inspected_landings,
+                )
                 if resolved:
                     return resolved
 
-        if tier_valid:
-            resolved = _resolve_valid_candidates(identity, tier_valid, limit=limit, timeout=timeout, trace=trace)
+        if tier_valid and landing_budget[0] < MAX_LANDING_INSPECTIONS:
+            resolved = _resolve_valid_candidates(
+                identity,
+                tier_valid,
+                limit=limit,
+                timeout=timeout,
+                trace=trace,
+                landing_budget=landing_budget,
+                inspected_landings=inspected_landings,
+            )
             if resolved:
                 return resolved
 
     flattened_queries = [query for tier in tiers for query in tier]
-    browser_resolved = _browser_document_pass(identity, queries=flattened_queries, seen=seen, limit=limit, timeout=timeout, trace=trace)
+    browser_resolved = _browser_document_pass(
+        identity,
+        queries=flattened_queries,
+        seen=seen,
+        limit=limit,
+        timeout=timeout,
+        trace=trace,
+        landing_budget=landing_budget,
+        inspected_landings=inspected_landings,
+    )
     if browser_resolved:
         return browser_resolved
 
@@ -484,4 +604,12 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeou
             fallback.append(accepted)
         if len(fallback) >= 6:
             break
-    return _resolve_valid_candidates(identity, fallback, limit=limit, timeout=timeout, trace=trace)
+    return _resolve_valid_candidates(
+        identity,
+        fallback,
+        limit=limit,
+        timeout=timeout,
+        trace=trace,
+        landing_budget=landing_budget,
+        inspected_landings=inspected_landings,
+    )

@@ -105,9 +105,9 @@ def test_review_plan_zero_selection_is_enforced_and_does_not_fall_back(monkeypat
     assert calls["base"] == 1
 
 
-def test_real_review_shell_search_uses_downloaded_validated_service():
+def test_real_review_shell_search_uses_part_number_pdf_service():
     source = Path("src/product_intelligence/real_pdf_review_shell.py").read_text(encoding="utf-8")
-    assert "discover_validated_review_pdfs" in source
+    assert "search_product_pdfs_by_part_number" in source
     assert "discover_review_candidates" not in source
 
 

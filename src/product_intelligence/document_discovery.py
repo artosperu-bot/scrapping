@@ -107,7 +107,7 @@ def _clean_official_domain(value: str | None) -> str:
 
 
 def build_document_query_tiers(identity: ProductIdentity, official_domain: str | None = None) -> list[list[str]]:
-    """Return a precision-first escalation ladder instead of a broad query burst."""
+    """Return a precision-first escalation ladder while preserving proven legacy queries."""
     brand = str(identity.brand or "").strip()
     model = _descriptive_model(identity)
     strong_values = _strong_identifiers(identity)
@@ -115,34 +115,60 @@ def build_document_query_tiers(identity: ProductIdentity, official_domain: str |
 
     tier1: list[str] = []
     for strong in strong_values:
-        tier1.extend([f'"{strong}" filetype:pdf', f'"{strong}" manual', f'"{strong}" datasheet'])
+        tier1.extend([
+            f"{strong} pdf",
+            f'"{strong}" pdf',
+            f'"{strong}" filetype:pdf',
+            f'"{strong}" manual pdf',
+            f'"{strong}" datasheet',
+        ])
+        if model:
+            tier1.append(f'"{strong}" "{model}" filetype:pdf')
+        if brand:
+            tier1.append(f'"{brand}" "{strong}" filetype:pdf')
         if domain:
             tier1.extend([f'site:{domain} "{strong}"', f'site:{domain} "{strong}" filetype:pdf'])
 
     tier2: list[str] = []
     for strong in strong_values:
-        tier2.extend([f'"{strong}" specifications', f'"{strong}" support downloads', f'{strong} pdf'])
-    if brand and strong_values:
-        tier2.extend([f'"{brand}" "{strong}"' for strong in strong_values])
+        tier2.extend([f'"{strong}" specifications', f'"{strong}" support downloads'])
+    if brand and model:
+        combined = f'"{brand} {model}"'
+        tier2.extend([
+            f"{combined} manual pdf",
+            f"{combined} datasheet pdf",
+            f"{combined} specifications",
+            f"{combined} support",
+        ])
+        if domain:
+            tier2.extend([
+                f'site:{domain} "{model}" filetype:pdf',
+                f'site:{domain} "{model}" manual',
+                f'site:{domain} "{model}" datasheet',
+            ])
 
     tier3: list[str] = []
     if brand and model:
-        phrase = f'"{brand}" "{model}"'
-        tier3.extend([f"{phrase} manual pdf", f"{phrase} datasheet pdf", f"{phrase} specifications", f"{phrase} support"])
-        if domain:
-            tier3.extend([f'site:{domain} "{model}" manual', f'site:{domain} "{model}" datasheet'])
+        separated = f'"{brand}" "{model}"'
+        tier3.extend([
+            f"{separated} manual pdf",
+            f"{separated} datasheet pdf",
+            f"{separated} specifications",
+            f"{separated} support",
+        ])
+    if model:
+        tier3.extend([f'"{model}" manual pdf', f'"{model}" datasheet pdf'])
 
     tier4: list[str] = []
-    if model:
-        tier4.extend([f'"{model}" manual pdf', f'"{model}" datasheet pdf'])
     if strong_values:
         tier4.extend([f'"{strong}"' for strong in strong_values])
+    if brand and model:
+        tier4.append(f"{brand} {model}")
 
     return [list(dict.fromkeys(x for x in tier if x.strip())) for tier in (tier1, tier2, tier3, tier4) if tier]
 
 
 def build_document_queries(identity: ProductIdentity, official_domain: str | None = None) -> list[str]:
-    """Compatibility flattening of the V2 tiered query ladder."""
     return [query for tier in build_document_query_tiers(identity, official_domain=official_domain) for query in tier]
 
 
@@ -175,8 +201,6 @@ def assess_document_candidate(identity: ProductIdentity, url: str, title: str = 
         has_requested_family = any(word in text_norm for word in words) if words else False
         if requested_numbers and has_requested_family and not any(number in candidate_numbers for number in requested_numbers):
             return DocumentCandidateAssessment(False, "sibling_model_conflict", 0, conflict=True)
-        # A branded manual/PDF for another named model is not relevant merely because
-        # search engines returned it for the target query.
         if classify_document_candidate(url, title, snippet) and model and model not in compact:
             return DocumentCandidateAssessment(False, "sibling_model_conflict", 0, conflict=True)
         if _GENERIC_PAGE.search(f"{title} {snippet}"):
@@ -287,17 +311,7 @@ def resolve_document_candidate_urls(identity: ProductIdentity, candidate: Search
     if _looks_like_direct_pdf(candidate.url):
         if trace:
             trace.emit("PDF_LINK_DISCOVERED", url=candidate.url, direct=True)
-        assessment = assess_document_candidate(identity, candidate.url, candidate.title, candidate.snippet)
-        return [DocumentSearchCandidate(
-            url=candidate.url,
-            title=candidate.title,
-            snippet=candidate.snippet,
-            score=candidate.score,
-            likely_official=candidate.likely_official,
-            identity_status="EXACT" if assessment.accepted else "UNVERIFIED",
-            identity_reason=assessment.reason,
-            identity_score=assessment.identity_score,
-        )]
+        return [candidate]
 
     if trace:
         trace.emit("PDF_LANDING_INSPECTED", url=candidate.url)
@@ -372,8 +386,6 @@ def _accept_search_candidate(identity: ProductIdentity, candidate: SearchCandida
             trace.emit("PDF_CANDIDATE_REJECTED_PRE_FETCH", url=candidate.url, reason="non_product_document")
         return None
     if _looks_like_direct_pdf(candidate.url) and not classify_document_candidate(candidate.url, candidate.title, candidate.snippet):
-        # A direct PDF with an exact strong identifier is still allowed; generic PDFs
-        # without identity are filtered above.
         if not assessment.exact_strong_id:
             return None
     return DocumentSearchCandidate(
@@ -438,8 +450,6 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeou
                 if trace and not _looks_like_direct_pdf(accepted.url) and accepted.identity_score >= 88:
                     trace.emit("PDF_EXACT_PDP_FOUND", url=accepted.url, identity_score=accepted.identity_score)
 
-            # Exact-PDP pivot: inspect strong landing candidates immediately rather
-            # than continuing a long generic query matrix.
             exact_landings = [row for row in tier_valid if not _looks_like_direct_pdf(row.url) and row.identity_score >= 88]
             if exact_landings:
                 if trace:
@@ -453,7 +463,6 @@ def discover_product_documents(identity: ProductIdentity, limit: int = 6, timeou
                 if resolved:
                     return resolved
 
-        # Resolve the best candidates at each tier before escalating recall.
         if tier_valid:
             resolved = _resolve_valid_candidates(identity, tier_valid, limit=limit, timeout=timeout, trace=trace)
             if resolved:

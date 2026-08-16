@@ -136,11 +136,12 @@ def discover_review_candidates(identity: ProductIdentity, limit: int = 8) -> lis
         kind = classify_document_candidate(row.url, row.title, row.snippet) or "technical_pdf"
         provenance = getattr(row, "provenance", None)
 
-        # A third-party landing may itself match the product exactly, but that
-        # identity is not transferable to a generic child PDF. Without trusted
-        # manufacturer provenance the child must prove identity from its own
-        # URL/title before it is shown to the reviewer.
-        if provenance is None:
+        # Resolved landing children carry structured identity fields. A third-party
+        # landing may match the product exactly, but that identity is not
+        # transferable to a generic child PDF. Without trusted manufacturer
+        # provenance the child must prove identity from its own URL/title.
+        structured_identity = hasattr(row, "identity_status")
+        if provenance is None and structured_identity:
             own_identity = assess_document_candidate(identity, row.url, row.title, "")
             if not own_identity.accepted:
                 continue

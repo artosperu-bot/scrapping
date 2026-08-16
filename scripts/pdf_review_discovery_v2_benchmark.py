@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass
+from urllib.parse import urlparse
 
 from product_intelligence import document_discovery
 from product_intelligence.document_discovery import MAX_LANDING_INSPECTIONS, MAX_QUERY_ATTEMPTS
-from product_intelligence.excel_pdf_review_hardening import install as install_excel_pdf_review_hardening
+from product_intelligence.excel_pdf_review_hardening import (
+    install as install_excel_pdf_review_hardening,
+    prepare_document_identity,
+)
 from product_intelligence.models import ProductIdentity
 from product_intelligence.pdf_search_trace import PdfSearchTrace
 
@@ -23,6 +27,10 @@ QA_PRODUCTS = (
 @dataclass
 class ProductBenchmark:
     product: str
+    resolved_brand: str
+    resolved_model: str
+    resolved_product_name: str
+    official_domain_hint: str
     elapsed_seconds: float
     queries: int
     http_results: int
@@ -62,7 +70,7 @@ def _event_values(trace: PdfSearchTrace, event: str, key: str) -> list[str]:
     return [str(row.get(key) or "") for row in trace.events if row.get("event") == event and row.get(key)]
 
 
-def _gate_failures(*, summary: dict, candidates: list[dict]) -> list[str]:
+def _gate_failures(*, product: str, summary: dict, candidates: list[dict], effective: ProductIdentity) -> list[str]:
     failures: list[str] = []
     if int(summary["queries"]) > MAX_QUERY_ATTEMPTS:
         failures.append(f"QUERY_BUDGET_EXCEEDED:{summary['queries']}>{MAX_QUERY_ATTEMPTS}")
@@ -70,29 +78,59 @@ def _gate_failures(*, summary: dict, candidates: list[dict]) -> list[str]:
         failures.append(f"LANDING_BUDGET_EXCEEDED:{summary['landing_pages']}>{MAX_LANDING_INSPECTIONS}")
     if int(summary["downloads_ok"]) != 0:
         failures.append(f"DOWNLOAD_BEFORE_REVIEW:{summary['downloads_ok']}")
+    if not str(effective.brand or "").strip():
+        failures.append("IDENTITY_BOOTSTRAP_BRAND_MISSING")
+    descriptive = str(effective.model or effective.product_name or "").strip()
+    if not descriptive or descriptive.lower() == product.lower():
+        failures.append("IDENTITY_BOOTSTRAP_MODEL_MISSING")
     for candidate in candidates:
         if candidate["identity_reason"] == "snippet_only_strong_identifier":
             failures.append("SNIPPET_ONLY_IDENTITY_SURFACED")
         if candidate["provenance_parent"] and candidate["provenance_authority"].upper() != "MANUFACTURER":
             failures.append("THIRD_PARTY_PROVENANCE_SURFACED")
+
+    # Non-vacuous known regression: Quantum 350 has a public official JBL spec sheet.
+    if product == "JBLQ350WLBLKAM":
+        official = [
+            row for row in candidates
+            if row["likely_official"]
+            and "jbl" in (urlparse(row["url"]).hostname or "").lower()
+            and "quantum" in (row["url"] + " " + row["title"]).lower()
+            and ("spec" in (row["url"] + " " + row["title"]).lower() or "data" in (row["url"] + " " + row["title"]).lower())
+        ]
+        if not official:
+            failures.append("KNOWN_OFFICIAL_PDF_NOT_FOUND")
     return sorted(set(failures))
 
 
 def run() -> dict:
-    # Install exactly the runtime adapter used by the packaged desktop EXE.
     install_excel_pdf_review_hardening()
 
     products: list[ProductBenchmark] = []
     for identity in QA_PRODUCTS:
-        trace = PdfSearchTrace(identity.mpn or identity.model or "product")
+        product = str(identity.mpn or identity.model)
+        effective, domain = prepare_document_identity(identity, timeout=8)
+        trace = PdfSearchTrace(product)
         started = time.perf_counter()
-        rows = document_discovery.discover_product_documents(identity, limit=10, timeout=10, trace=trace)
+        # Call with the enriched identity explicitly so diagnostics show exactly what
+        # the packaged adapter resolved and discovery does not need a second bootstrap.
+        rows = document_discovery.discover_product_documents(
+            effective,
+            limit=10,
+            timeout=10,
+            trace=trace,
+            official_domain=domain,
+        )
         elapsed = time.perf_counter() - started
         summary = trace.summary()
         candidates = [_candidate_payload(row) for row in rows]
-        failures = _gate_failures(summary=summary, candidates=candidates)
+        failures = _gate_failures(product=product, summary=summary, candidates=candidates, effective=effective)
         payload = ProductBenchmark(
-            product=str(identity.mpn or identity.model),
+            product=product,
+            resolved_brand=str(effective.brand or ""),
+            resolved_model=str(effective.model or ""),
+            resolved_product_name=str(effective.product_name or ""),
+            official_domain_hint=str(domain or ""),
             elapsed_seconds=round(elapsed, 3),
             queries=summary["queries"],
             http_results=summary["http_results"],

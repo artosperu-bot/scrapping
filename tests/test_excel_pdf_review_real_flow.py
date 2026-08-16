@@ -1,13 +1,14 @@
 from types import SimpleNamespace
 
 from product_intelligence import document_discovery
-from product_intelligence import pdf_review_shell
+from product_intelligence.excel_pdf_review_hardening import (
+    prepare_document_identity,
+    review_gate_missing_indices,
+)
 from product_intelligence.models import ProductIdentity
 
 
 def test_mpn_only_identity_is_bootstrapped_before_pdf_queries(monkeypatch):
-    assert hasattr(document_discovery, "prepare_document_identity")
-
     source = ProductIdentity(mpn="ABC123", model="ABC123")
     enriched = ProductIdentity(mpn="ABC123", brand="Acme", model="Model X")
 
@@ -23,7 +24,7 @@ def test_mpn_only_identity_is_bootstrapped_before_pdf_queries(monkeypatch):
         ),
     )
 
-    effective, domain = document_discovery.prepare_document_identity(source, timeout=8)
+    effective, domain = prepare_document_identity(source, timeout=8)
     assert effective.brand == "Acme"
     assert effective.model == "Model X"
     assert effective.mpn == "ABC123"
@@ -36,17 +37,41 @@ def test_mpn_only_identity_is_bootstrapped_before_pdf_queries(monkeypatch):
 
 
 def test_reviewed_pdf_mode_blocks_excel_until_every_product_is_confirmed():
-    assert hasattr(pdf_review_shell, "review_gate_missing_indices")
-    gate = pdf_review_shell.review_gate_missing_indices
-
-    assert gate(total_products=3, reviewed_mode=True, pdf_enabled=True, enforced_indices={0}) == [1, 2]
-    assert gate(total_products=3, reviewed_mode=True, pdf_enabled=True, enforced_indices={0, 1, 2}) == []
+    assert review_gate_missing_indices(
+        total_products=3,
+        reviewed_mode=True,
+        pdf_enabled=True,
+        enforced_indices={0},
+    ) == [1, 2]
+    assert review_gate_missing_indices(
+        total_products=3,
+        reviewed_mode=True,
+        pdf_enabled=True,
+        enforced_indices={0, 1, 2},
+    ) == []
     # Confirming zero PDFs is still a valid review decision; enforcement is what matters.
-    assert gate(total_products=3, reviewed_mode=False, pdf_enabled=True, enforced_indices=set()) == []
-    assert gate(total_products=3, reviewed_mode=True, pdf_enabled=False, enforced_indices=set()) == []
+    assert review_gate_missing_indices(
+        total_products=3,
+        reviewed_mode=False,
+        pdf_enabled=True,
+        enforced_indices=set(),
+    ) == []
+    assert review_gate_missing_indices(
+        total_products=3,
+        reviewed_mode=True,
+        pdf_enabled=False,
+        enforced_indices=set(),
+    ) == []
 
 
-def test_reviewed_mode_source_contract_does_not_force_web_off():
-    source = open("src/product_intelligence/pdf_review_shell.py", encoding="utf-8").read()
-    # PDF review controls only PDF admission. Web remains an independent source choice.
-    assert "self.source_web_enabled.set(False)" not in source
+def test_review_hardening_preserves_web_as_independent_source():
+    shell_source = open("src/product_intelligence/pdf_review_shell.py", encoding="utf-8").read()
+    hardening_source = open("src/product_intelligence/excel_pdf_review_hardening.py", encoding="utf-8").read()
+    assert "self.source_web_enabled.set(False)" not in shell_source
+    assert "self.source_web_enabled.set(False)" not in hardening_source
+
+
+def test_packaged_launcher_installs_hardening_before_final_main():
+    source = open("run_desktop.py", encoding="utf-8").read()
+    assert "install_excel_pdf_review_hardening()" in source
+    assert source.index("install_excel_pdf_review_hardening()") < source.index("managed_main()")

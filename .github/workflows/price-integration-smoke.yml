@@ -1,10 +1,9 @@
-name: Price Intelligence Smoke
+name: Price Method Benchmark
 
 on:
   pull_request:
     paths:
-      - 'src/product_intelligence/price_*.py'
-      - 'tests/test_price_*.py'
+      - 'scripts/benchmark_price_methods_q350.py'
       - '.github/workflows/price-integration-smoke.yml'
   workflow_dispatch:
 
@@ -12,13 +11,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: price-intelligence-smoke-${{ github.ref }}
+  group: price-method-benchmark-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  live-price-smoke:
+  benchmark:
+    strategy:
+      fail-fast: false
+      matrix:
+        method: [structured, directed, retail, full]
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,41 +33,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[desktop,dev]"
       - name: Install Chromium
+        if: matrix.method != 'structured'
         run: python -m playwright install chromium
-      - name: Run real Peru max-coverage discovery for Q350
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          from product_intelligence.models import ProductIdentity
-          from product_intelligence.price_identity import is_peru_offer
-          from product_intelligence.price_workflow import run_price_product
-
-          identity = ProductIdentity(brand='JBL', model='Quantum 350 Wireless', mpn='JBLQ350WLBLKAM')
-          events = []
-          offers = run_price_product(identity, Path('price_smoke_output'), on_event=events.append, max_sources=40)
-          foreign = [o for o in offers if not is_peru_offer(o)]
-          strict = {'Falabella','Ripley','PlazaVea','Oechsle','MercadoLibre','Sodimac','JBL Perú'}
-          ambiguous = [o for o in offers if o.source_method == 'html' and o.channel in strict]
-          if foreign:
-              raise SystemExit('Foreign offer leaked into Peru-only output: ' + json.dumps([o.to_dict() for o in foreign], ensure_ascii=False))
-          if ambiguous:
-              raise SystemExit('Ambiguous generic HTML marketplace price leaked: ' + json.dumps([o.to_dict() for o in ambiguous], ensure_ascii=False))
-          for event in events:
-              if event.get('type') in {'source','page'}:
-                  print('EVENT', json.dumps(event, ensure_ascii=False))
-          for offer in offers:
-              print('OFFER', json.dumps(offer.to_dict(), ensure_ascii=False))
-          print('Q350_VALIDATED_PERU_OFFERS=', len(offers))
-          print('Q350_CHANNELS=', sorted({o.channel for o in offers}))
-          print('Q350_SELLERS=', sorted({f'{o.channel}:{o.seller_display_name}' for o in offers}))
-          print('EVENTS=', len(events))
-          if len(offers) < 4:
-              raise SystemExit('Q350 coverage did not improve beyond the previous 3 validated Peru offers')
-          PY
+      - name: Run one-product price method benchmark
+        env:
+          METHOD: ${{ matrix.method }}
+          OCR_SPACE_ENABLED: 'false'
+          MISTRAL_ENABLED: 'false'
+        run: python scripts/benchmark_price_methods_q350.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: price-smoke-output
-          path: price_smoke_output/
+          name: price-method-${{ matrix.method }}
+          path: price_method_benchmark/${{ matrix.method }}/
           if-no-files-found: warn

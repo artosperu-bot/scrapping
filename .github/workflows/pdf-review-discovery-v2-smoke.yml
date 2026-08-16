@@ -1,0 +1,41 @@
+name: PDF Review Discovery V2 Smoke
+
+on:
+  pull_request:
+    branches:
+      - release/windows
+    paths:
+      - 'src/product_intelligence/document_discovery.py'
+      - 'src/product_intelligence/pdf_review.py'
+      - 'src/product_intelligence/pdf_review_shell.py'
+      - 'src/product_intelligence/pdf_review_batch.py'
+      - 'src/product_intelligence/document_ingestion.py'
+      - 'src/product_intelligence/pdf_extract.py'
+      - 'scripts/pdf_review_discovery_v2_benchmark.py'
+      - '.github/workflows/pdf-review-discovery-v2-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Run live reviewed-PDF discovery benchmark
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/pdf_review_discovery_v2_benchmark.py | tee pdf-review-discovery-v2-benchmark.jsonl
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-review-discovery-v2-benchmark
+          path: pdf-review-discovery-v2-benchmark.jsonl
+          if-no-files-found: error

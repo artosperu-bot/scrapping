@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import quote_plus, urlparse
 
@@ -9,7 +10,12 @@ from .models import ProductIdentity
 from .price_adapters import parse_mercadolibre_payload, parse_shopify_product_payload, parse_vtex_payload
 from .price_channel_registry import build_channel_coverage, target_spec_for_url
 from .price_discovery import discover_price_sources, extract_page_offers
-from .price_history import save_channel_coverage, save_price_run
+from .price_history import (
+    load_validated_source_urls,
+    save_channel_coverage,
+    save_price_run,
+    save_validated_source_bindings,
+)
 from .price_identity import competitor_key, dedupe_offers, filter_market_outliers, is_peru_offer
 from .price_models import PriceOffer
 from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
@@ -164,12 +170,94 @@ def _parse_page_with_dynamic_retry(url: str, identity: ProductIdentity, channel:
     return html, page_rows
 
 
+def _augment_page_rows(url: str, html: str, page_rows: list[PriceOffer], identity: ProductIdentity, channel: str) -> list[PriceOffer]:
+    rows = list(page_rows)
+    lower = html.lower()
+    if "vtex" in lower or "vteximg" in lower or "/api/catalog_system/" in lower:
+        try:
+            rows.extend(_try_vtex(url, identity, channel, timeout=8))
+        except Exception:
+            pass
+    try:
+        rows.extend(_try_shopify(url, identity, channel, timeout=8))
+    except Exception:
+        pass
+    return rows
+
+
+def _refresh_learned_static(url: str, identity: ProductIdentity) -> tuple[list[PriceOffer], bool]:
+    channel = _channel_from_url(url)
+    try:
+        fetched = fetch_page(url, timeout=8, browser_fallback=False, activate_lazy_media=False)
+        final_url = str(getattr(fetched, "final_url", None) or url)
+        html = str(getattr(fetched, "html", "") or "")
+        page_rows = extract_page_offers(html, final_url, identity, channel=channel)
+        rows = _augment_page_rows(final_url, html, page_rows, identity, channel)
+        trusted = [row for row in rows if _is_trusted_final_offer(row)]
+        return rows, not bool(trusted)
+    except Exception:
+        return [], True
+
+
+def _refresh_learned_sources(urls: list[str], identity: ProductIdentity, emit) -> list[PriceOffer]:
+    """Re-fetch remembered PDPs. Static/API work may run concurrently; browser work never does."""
+    unique_urls = list(dict.fromkeys(str(url or "").strip() for url in urls if str(url or "").strip()))
+    if not unique_urls:
+        return []
+
+    rows: list[PriceOffer] = []
+    unresolved: list[str] = []
+    workers = min(8, len(unique_urls))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="price-learned") as pool:
+        futures = {pool.submit(_refresh_learned_static, url, identity): url for url in unique_urls}
+        for future in as_completed(futures):
+            url = futures[future]
+            try:
+                found, needs_browser = future.result()
+                rows.extend(found)
+                if needs_browser:
+                    unresolved.append(url)
+            except Exception as exc:
+                unresolved.append(url)
+                emit("page", url=url, channel=_channel_from_url(url), status="error", error=f"learned_static: {type(exc).__name__}: {exc}")
+
+    for url in unresolved:
+        channel = _channel_from_url(url)
+        try:
+            html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
+            rows.extend(_augment_page_rows(url, html, page_rows, identity, channel))
+        except Exception as exc:
+            emit("page", url=url, channel=channel, status="error", error=f"learned_browser: {type(exc).__name__}: {exc}")
+    return dedupe_offers(rows)
+
+
+def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit) -> list[PriceOffer]:
+    rows: list[PriceOffer] = []
+    emit("status", stage="validating", message=f"Revisando {len(sources)} publicaciones web de Perú")
+    for pos, url in enumerate(sources, 1):
+        channel = _channel_from_url(url)
+        try:
+            emit("page", url=url, channel=channel, position=pos, total=len(sources), status="fetching")
+            html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
+            rows.extend(_augment_page_rows(url, html, page_rows, identity, channel))
+            emit("page", url=url, channel=channel, status="parsed", offers=len(page_rows))
+        except Exception as exc:
+            emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
+    return rows
+
+
+def _has_trusted_offer(rows: list[PriceOffer]) -> bool:
+    return any(_is_trusted_final_offer(row) for row in dedupe_offers(rows))
+
+
 def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_event=None, max_sources: int = 48) -> list[PriceOffer]:
     def emit(event_type: str, **payload):
         if on_event:
             on_event({"type": event_type, "identity": identity.model_dump(), **payload})
 
     offers: list[PriceOffer] = []
+    learned_sources = load_validated_source_urls(output_root, identity)
+    warm_path = bool(learned_sources)
     emit("status", stage="searching", message="Consultando APIs y fuentes estructuradas de Perú")
 
     for channel, base_url in PERU_STRUCTURED_SOURCES:
@@ -187,51 +275,60 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     except Exception as exc:
         emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
 
-    marketplace_sources: list[str] = []
     retail_sources: list[str] = []
-    base_sources: list[str] = []
-    try:
-        marketplace_sources = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
-        emit("source", channel="peru_directed", status="ok", offers=0, urls=len(marketplace_sources), method="targeted_pdp")
-    except Exception as exc:
-        emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
-    try:
-        retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2))
-        emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
-    except Exception as exc:
-        emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
-    try:
-        base_sources = discover_price_sources(identity, limit=max_sources)
-        emit("source", channel="web", status="ok", offers=0, urls=len(base_sources), method="generic_peru")
-    except Exception as exc:
-        emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
-
-    sources = _merge_sources(marketplace_sources, retail_sources, base_sources, limit=max_sources)
-    emit("status", stage="validating", message=f"Revisando {len(sources)} publicaciones web de Perú")
-    for pos, url in enumerate(sources, 1):
-        channel = _channel_from_url(url)
-        try:
-            emit("page", url=url, channel=channel, position=pos, total=len(sources), status="fetching")
-            html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
-            if "vtex" in html.lower() or "vteximg" in html.lower() or "/api/catalog_system/" in html.lower():
-                try:
-                    vtex_rows = _try_vtex(url, identity, channel)
-                    offers.extend(vtex_rows)
-                    if vtex_rows:
-                        emit("offer", channel=channel, count=len(vtex_rows), method="vtex")
-                except Exception as exc:
-                    emit("source", channel=channel, status="error", error=f"vtex: {type(exc).__name__}: {exc}")
+    if warm_path:
+        emit("source", channel="learned", status="refreshing", urls=len(learned_sources), method="validated_source_memory")
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="price-warm") as pool:
+            learned_future = pool.submit(_refresh_learned_sources, learned_sources, identity, emit)
+            retail_future = pool.submit(
+                discover_general_peru_retailers,
+                identity,
+                limit=max(10, max_sources // 2),
+            )
             try:
-                shopify_rows = _try_shopify(url, identity, channel)
-                offers.extend(shopify_rows)
-                if shopify_rows:
-                    emit("offer", channel=channel, count=len(shopify_rows), method="shopify_product_json")
+                learned_rows = learned_future.result()
             except Exception as exc:
-                emit("source", channel=channel, status="error", error=f"shopify: {type(exc).__name__}: {exc}")
-            offers.extend(page_rows)
-            emit("page", url=url, channel=channel, status="parsed", offers=len(page_rows))
+                learned_rows = []
+                emit("source", channel="learned", status="error", error=f"refresh: {type(exc).__name__}: {exc}")
+            try:
+                retail_sources = retail_future.result()
+            except Exception as exc:
+                retail_sources = []
+                emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
+        offers.extend(learned_rows)
+        emit("source", channel="learned", status="ok", offers=len(learned_rows), urls=len(learned_sources), method="validated_source_memory")
+        emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
+        learned_set = set(learned_sources)
+        fresh_retail = [url for url in retail_sources if url not in learned_set]
+        offers.extend(_collect_web_offers(fresh_retail[:max_sources], identity, emit))
+
+    marketplace_sources: list[str] = []
+    base_sources: list[str] = []
+    if not warm_path or not _has_trusted_offer(offers):
+        try:
+            marketplace_sources = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
+            emit("source", channel="peru_directed", status="ok", offers=0, urls=len(marketplace_sources), method="targeted_pdp")
         except Exception as exc:
-            emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
+            emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
+        if not warm_path:
+            try:
+                retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2))
+                emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
+            except Exception as exc:
+                emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
+        try:
+            base_sources = discover_price_sources(identity, limit=max_sources)
+            emit("source", channel="web", status="ok", offers=0, urls=len(base_sources), method="generic_peru")
+        except Exception as exc:
+            emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
+
+        skip_urls = set(learned_sources) if warm_path else set()
+        sources = [
+            url
+            for url in _merge_sources(marketplace_sources, retail_sources, base_sources, limit=max_sources)
+            if url not in skip_urls
+        ]
+        offers.extend(_collect_web_offers(sources, identity, emit))
 
     deduped = dedupe_offers(offers)
     trusted = [row for row in deduped if _is_trusted_final_offer(row)]
@@ -242,6 +339,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     coverage = build_channel_coverage(valid)
     emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas peruanas validadas")
     save_price_run(output_root, valid)
+    save_validated_source_bindings(output_root, identity, valid)
     save_channel_coverage(output_root, coverage)
     emit("coverage", report=coverage)
     for row in valid:

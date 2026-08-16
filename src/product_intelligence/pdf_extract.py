@@ -43,6 +43,16 @@ class ExtractedPdfPage:
     method: str
 
 
+@dataclass(frozen=True)
+class PdfPageTextQuality:
+    native_ok: bool
+    ocr_required: bool
+    reason: str
+    printable_ratio: float
+    alphanumeric_ratio: float
+    technical_signal: bool
+
+
 def download_bytes(url: str, timeout: int = 35) -> bytes:
     r = requests.get(url, timeout=timeout, headers={"User-Agent": UA, "Accept": "application/pdf,*/*;q=0.8"})
     r.raise_for_status()
@@ -78,6 +88,44 @@ def _search_text(value: str | None) -> str:
     text = str(value or "").casefold()
     text = re.sub(r"[^a-z0-9áéíóúüñ]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def assess_pdf_page_text_quality(text: str | None) -> PdfPageTextQuality:
+    """Decide whether native PDF text is useful enough to avoid OCR.
+
+    Uses multiple cheap quality signals while preserving concise native specification
+    lines that were valid in the legacy extractor. OCR is a fallback and never an
+    identity override.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return PdfPageTextQuality(False, True, "empty_native_text", 0.0, 0.0, False)
+    total = max(1, len(raw))
+    printable = sum(1 for ch in raw if ch.isprintable() and not ch.isspace())
+    alnum = sum(1 for ch in raw if ch.isalnum())
+    printable_ratio = printable / total
+    alphanumeric_ratio = alnum / total
+    normalized = _search_text(raw)
+    technical_signal = any(_search_text(hint) in normalized for hint in _TECHNICAL_PAGE_HINTS)
+    tokens = re.findall(r"[A-Za-z0-9]+", raw)
+    unique_ratio = len(set(token.casefold() for token in tokens)) / max(1, len(tokens))
+    garbage_runs = len(re.findall(r"[^A-Za-z0-9\s]{3,}", raw))
+    structured_short = bool(
+        len(raw) >= 8
+        and alphanumeric_ratio >= 0.40
+        and printable_ratio >= 0.55
+        and (re.search(r"[:=]", raw) or re.search(r"\d", raw) or technical_signal)
+    )
+
+    if len(raw) < 8:
+        return PdfPageTextQuality(False, True, "native_text_too_sparse", printable_ratio, alphanumeric_ratio, technical_signal)
+    if printable_ratio < 0.55 or alphanumeric_ratio < 0.35:
+        return PdfPageTextQuality(False, True, "native_text_low_signal", printable_ratio, alphanumeric_ratio, technical_signal)
+    if garbage_runs >= 3 and unique_ratio < 0.35:
+        return PdfPageTextQuality(False, True, "native_text_garbled", printable_ratio, alphanumeric_ratio, technical_signal)
+    if len(raw) < 24 and not structured_short:
+        return PdfPageTextQuality(False, True, "native_text_too_sparse", printable_ratio, alphanumeric_ratio, technical_signal)
+    return PdfPageTextQuality(True, False, "native_text_usable", printable_ratio, alphanumeric_ratio, technical_signal)
 
 
 def select_pdf_page_indexes(
@@ -162,7 +210,8 @@ def _extract_selected_document(
             else (page.get_text("text") or "")
         ).strip()
         method = "TEXT"
-        if len(text) < 8:
+        quality = assess_pdf_page_text_quality(text)
+        if quality.ocr_required:
             callback = ocr_page or _default_ocr_page
             try:
                 pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
@@ -188,17 +237,26 @@ def extract_pdf_pages(path: str | Path, ocr_page: Callable[[int, bytes], str] | 
         doc.close()
 
 
-def _evidence_from_pages(pages: list[ExtractedPdfPage], source_url: str, match_level: str, confidence: float) -> list[Evidence]:
+def _evidence_from_pages(
+    pages: list[ExtractedPdfPage],
+    source_url: str,
+    match_level: str,
+    confidence: float,
+    *,
+    parent_source_url: str | None = None,
+) -> list[Evidence]:
     evidence = []
     for page in pages:
         for line in page.text.splitlines():
             m = re.match(r"^\s*([^:]{2,120})\s*:\s*(.{1,300})\s*$", line)
             if not m:
                 continue
+            raw_line = line.strip()[:500]
             evidence.append(Evidence(
                 attribute=m.group(1).strip(), raw_value=m.group(2).strip(), normalized_value=m.group(2).strip(),
-                source_url=source_url, source_type="official_pdf", page=page.page,
-                selector=f"method={page.method}", match_level=match_level, confidence=confidence,
+                source_url=source_url, source_type="official_pdf", parent_source_url=parent_source_url, page=page.page,
+                selector=f"method={page.method}", extraction_method=page.method, raw_snippet=raw_line,
+                match_level=match_level, confidence=confidence,
             ))
     return evidence
 
@@ -210,6 +268,7 @@ def extract_pdf_bytes(
     confidence: float = .90,
     *,
     focus_terms: Iterable[str] | None = None,
+    parent_source_url: str | None = None,
 ) -> tuple[str, list[Evidence]]:
     if not bytes(data or b"").startswith(b"%PDF-"):
         raise ValueError("Los bytes no corresponden a un PDF válido")
@@ -218,14 +277,18 @@ def extract_pdf_bytes(
         if len(doc) <= SHORT_PDF_PAGE_LIMIT:
             pages = _extract_document(doc)
         else:
-            # Native text extraction is cheap and does not invoke OCR. It is used only
-            # to choose which pages deserve the expensive/full extraction path.
             native_texts = [(page.get_text("text") or "").strip() for page in doc]
             selected_indexes = select_pdf_page_indexes(native_texts, focus_terms=focus_terms)
             pages = _extract_selected_document(doc, selected_indexes, native_texts=native_texts)
     finally:
         doc.close()
-    return "\n".join(page.text for page in pages), _evidence_from_pages(pages, source_url, match_level, confidence)
+    return "\n".join(page.text for page in pages), _evidence_from_pages(
+        pages,
+        source_url,
+        match_level,
+        confidence,
+        parent_source_url=parent_source_url,
+    )
 
 
 def extract_pdf(
@@ -234,6 +297,7 @@ def extract_pdf(
     confidence: float = .90,
     *,
     focus_terms: Iterable[str] | None = None,
+    parent_source_url: str | None = None,
 ) -> tuple[str, list[Evidence]]:
     return extract_pdf_bytes(
         download_bytes(url),
@@ -241,6 +305,7 @@ def extract_pdf(
         match_level,
         confidence,
         focus_terms=focus_terms,
+        parent_source_url=parent_source_url,
     )
 
 

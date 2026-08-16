@@ -31,8 +31,11 @@ class Evidence(BaseModel):
     source_url: str | None = None
     source_type: str
     source_title: str | None = None
+    parent_source_url: str | None = None
     page: int | None = None
     selector: str | None = None
+    extraction_method: str | None = None
+    raw_snippet: str | None = None
     match_level: MatchLevel = "LOW"
     confidence: float = 0.0
 

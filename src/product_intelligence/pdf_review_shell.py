@@ -218,7 +218,12 @@ class App(ManagedApp):
             ocr_state = "—"
             score = row.review_score
             if inspection is not None:
-                identity = "EXACTA" if inspection.identity_accepted else "RECHAZADA"
+                if inspection.identity_accepted:
+                    identity = "ACEPTADA"
+                elif inspection.identity_pending_ocr:
+                    identity = "PENDIENTE OCR"
+                else:
+                    identity = "RECHAZADA"
                 text_state = f"{inspection.native_text_chars} chars"
                 ocr_state = "Recomendado" if inspection.ocr_recommended else "No necesario"
                 score = inspection.review_score
@@ -256,7 +261,8 @@ class App(ManagedApp):
         if identity is None:
             return
         self.pdf_review_status.set("Descargando e inspeccionando PDF…")
-        output = str(getattr(self, "out", tk.StringVar(value="")).get() or "").strip()
+        out_var = getattr(self, "out", None)
+        output = str(out_var.get() if out_var is not None else "").strip()
         root = Path(output) if output else (Path.home() / "ProductIntelligence_Output")
         label = re.sub(r"[^A-Za-z0-9._-]+", "_", str(identity.mpn or identity.model or index))
         cache_dir = root / "pdf_review" / label
@@ -283,11 +289,16 @@ class App(ManagedApp):
             self.pdf_review_detail.set(f"ERROR DE INSPECCIÓN\nURL: {url}\n{error or ''}")
             return
         self._pdf_review_inspections.setdefault(index, {})[url] = result
-        if not result.identity_accepted:
+        if not result.identity_accepted and not result.identity_pending_ocr:
             self._pdf_review_selected.setdefault(index, set()).discard(url)
         self._pdf_review_refresh_tree()
         self._pdf_review_show_inspection(result)
-        state = "identidad validada" if result.identity_accepted else f"rechazado: {result.identity_reason}"
+        if result.identity_accepted:
+            state = "identidad validada"
+        elif result.identity_pending_ocr:
+            state = "identidad pendiente de OCR; todavía no es evidencia aceptada"
+        else:
+            state = f"rechazado: {result.identity_reason}"
         self.pdf_review_status.set(f"PDF inspeccionado · {state}.")
 
     def _pdf_review_show_inspection(self, inspection: PdfInspection):
@@ -301,15 +312,24 @@ class App(ManagedApp):
             self._pdf_review_photo = None
             self.pdf_review_preview.configure(image="", text="No se pudo renderizar la vista previa, pero la evaluación textual sigue disponible.")
 
-        identity_label = "ACEPTADA" if inspection.identity_accepted else "RECHAZADA"
+        if inspection.identity_accepted:
+            identity_label = "ACEPTADA"
+        elif inspection.identity_pending_ocr:
+            identity_label = "PENDIENTE OCR"
+        else:
+            identity_label = "RECHAZADA"
         ocr_label = "Sí, durante la ejecución si OCR está habilitado" if inspection.ocr_recommended else "No; el texto nativo es suficiente"
+        pending_note = (
+            "\nIMPORTANTE: pendiente OCR no significa evidencia aceptada. Si lo seleccionas, OCR deberá confirmar la identidad durante la ejecución."
+            if inspection.identity_pending_ocr else ""
+        )
         self.pdf_review_detail.set(
             f"Score de revisión: {inspection.review_score}/100\n"
             f"Identidad: {identity_label} · {inspection.identity_reason} · confianza {inspection.identity_confidence:.2f}\n"
             f"Páginas: {inspection.page_count} · texto nativo: {inspection.native_text_chars} caracteres\n"
             f"OCR recomendado: {ocr_label}\n"
             f"Archivo local: {inspection.local_path}\n"
-            f"URL: {inspection.final_url}\n\n"
+            f"URL: {inspection.final_url}{pending_note}\n\n"
             "La vista previa no ejecuta OCR ni Mistral. Esos proveedores solo pueden intervenir después, durante la ejecución normal."
         )
 
@@ -324,7 +344,7 @@ class App(ManagedApp):
             messagebox.showinfo("Revisión PDF", "Primero deja que termine la inspección y la vista previa de este PDF.")
             self._pdf_review_inspect_selected()
             return
-        if not inspection.identity_accepted:
+        if not inspection.identity_accepted and not inspection.identity_pending_ocr:
             messagebox.showwarning("Revisión PDF", "Este PDF fue rechazado por identidad y no puede usarse como evidencia.")
             return
         selected = self._pdf_review_selected.setdefault(index, set())
@@ -334,7 +354,8 @@ class App(ManagedApp):
             selected.add(candidate.url)
         self._pdf_review_enforced.discard(index)
         self._pdf_review_refresh_tree()
-        self.pdf_review_status.set(f"Selección pendiente de confirmar: {len(selected)} PDF(s).")
+        note = " Los pendientes OCR todavía deberán validar identidad durante la ejecución." if inspection.identity_pending_ocr else ""
+        self.pdf_review_status.set(f"Selección pendiente de confirmar: {len(selected)} PDF(s).{note}")
 
     def _pdf_review_confirm(self):
         index = self._pdf_review_product_index()

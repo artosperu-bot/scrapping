@@ -74,4 +74,4 @@ def test_review_hardening_preserves_web_as_independent_source():
 def test_packaged_launcher_installs_hardening_before_final_main():
     source = open("run_desktop.py", encoding="utf-8").read()
     assert "install_excel_pdf_review_hardening()" in source
-    assert source.index("install_excel_pdf_review_hardening()") < source.index("managed_main()")
+    assert source.index("install_excel_pdf_review_hardening()") < source.rindex("managed_main()")

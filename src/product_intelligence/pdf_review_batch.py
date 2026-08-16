@@ -4,10 +4,13 @@ from dataclasses import replace
 from threading import RLock
 
 from . import batch as batch_module
+from .pdf_pipeline import discover_pdf_documents, resolve_pdf_identity
 
 
 _BASE_SCRAPE_ITEM = batch_module.scrape_item
 _BASE_RUN_BATCH = batch_module.run_batch
+_BASE_DISCOVER = batch_module.discover_product_documents
+_BASE_PROCESS_PDF = batch_module.process_pdf_document
 _RUN_LOCK = RLock()
 _PLAN_LOCK = RLock()
 _DESKTOP_REVIEWED_URLS: list[list[str]] = []
@@ -15,7 +18,7 @@ _DESKTOP_REVIEW_FLAGS: list[bool] = []
 
 
 def set_desktop_review_plan(reviewed_pdf_urls_by_index, pdf_review_flags) -> None:
-    """Snapshot the UI review plan for the next desktop Excel run."""
+    """Snapshot the explicit user review decision for the next real Excel run."""
     global _DESKTOP_REVIEWED_URLS, _DESKTOP_REVIEW_FLAGS
     urls = [list(dict.fromkeys(str(u) for u in (rows or []) if str(u).strip())) for rows in (reviewed_pdf_urls_by_index or [])]
     flags = [bool(value) for value in (pdf_review_flags or [])]
@@ -29,6 +32,21 @@ def _desktop_review_plan() -> tuple[list[list[str]], list[bool]]:
         return [list(rows) for rows in _DESKTOP_REVIEWED_URLS], list(_DESKTOP_REVIEW_FLAGS)
 
 
+def _shared_discover(identity, *args, **kwargs):
+    limit = int(kwargs.pop("limit", 6) or 6)
+    timeout = int(kwargs.pop("timeout", 8) or 8)
+    trace = kwargs.pop("trace", None)
+    _resolved, rows = discover_pdf_documents(identity, limit=limit, timeout=timeout, trace=trace)
+    return rows
+
+
+def _shared_process_pdf(identity, url, *args, **kwargs):
+    """Keep the enriched identity all the way from search into PDF validation."""
+    timeout = 8
+    effective = resolve_pdf_identity(identity, timeout=timeout).identity
+    return _BASE_PROCESS_PDF(effective, url, *args, **kwargs)
+
+
 def scrape_item_with_review(
     item,
     out_dir: str,
@@ -39,10 +57,8 @@ def scrape_item_with_review(
 ):
     """Run one existing scrape item with an optional user-enforced PDF allow-list.
 
-    Web/HTML acquisition is untouched. For an enforced product only, approved PDFs are
-    inserted as explicit manual candidates, HTML pages cannot auto-follow PDFs, and
-    direct/gap PDF discovery returns no additional documents. Review provenance is
-    restored only for an approved URL and never for an automatic/unapproved document.
+    `enforced=True` means REVIEW_CONFIRMED. An empty approved list is therefore a
+    valid explicit decision and must never restart automatic PDF discovery.
     """
     if not enforced:
         return _BASE_SCRAPE_ITEM(item, out_dir, **kwargs)
@@ -71,6 +87,8 @@ def scrape_item_with_review(
 
         class ReviewedProductPipeline(original_pipeline):
             def process_url(self, *args, **process_kwargs):
+                # HTML remains available as web evidence only when WEB is enabled,
+                # but it cannot auto-follow hidden PDFs after a review decision.
                 process_kwargs["include_pdfs"] = False
                 return super().process_url(*args, **process_kwargs)
 
@@ -78,12 +96,15 @@ def scrape_item_with_review(
             return []
 
         def reviewed_process_pdf(identity, url, *args, **process_kwargs):
-            if str(url) in approved_set:
-                from .pdf_review import provenance_for_review_url
-                provenance = provenance_for_review_url(str(url))
-                if provenance is not None:
-                    process_kwargs["provenance"] = provenance
-            return original_process_pdf(identity, url, *args, **process_kwargs)
+            if str(url) not in approved_set:
+                raise ValueError("PDF_NOT_SELECTED_BY_USER")
+            from .pdf_review import provenance_for_review_url
+
+            provenance = provenance_for_review_url(str(url))
+            if provenance is not None:
+                process_kwargs["provenance"] = provenance
+            effective = resolve_pdf_identity(identity, timeout=8).identity
+            return _BASE_PROCESS_PDF(effective, url, *args, **process_kwargs)
 
         batch_module.ProductPipeline = ReviewedProductPipeline
         batch_module._ingest_direct_documents = no_automatic_documents
@@ -97,34 +118,48 @@ def scrape_item_with_review(
 
 
 def run_batch_with_review(*args, reviewed_pdf_urls_by_index=None, pdf_review_flags=None, **kwargs):
-    """Desktop-compatible `run_batch` wrapper with per-product PDF review enforcement."""
+    """Real desktop batch wrapper.
+
+    Both AUTOMATIC and REVIEWED modes use the same identity-first document discovery
+    and the same PDF identity validator. Reviewed mode additionally enforces the
+    user's exact allow-list.
+    """
     if reviewed_pdf_urls_by_index is None and pdf_review_flags is None:
         reviewed_pdf_urls_by_index, pdf_review_flags = _desktop_review_plan()
 
     urls_plan = [list(rows or []) for rows in (reviewed_pdf_urls_by_index or [])]
     flags_plan = [bool(value) for value in (pdf_review_flags or [])]
-    if not any(flags_plan):
-        return _BASE_RUN_BATCH(*args, **kwargs)
 
     with _RUN_LOCK:
         original_scrape = batch_module.scrape_item
+        original_discover = batch_module.discover_product_documents
+        original_process_pdf = batch_module.process_pdf_document
         cursor = {"value": 0}
 
-        def reviewed_scrape(item, out_dir, **scrape_kwargs):
-            index = cursor["value"]
-            cursor["value"] += 1
-            approved = urls_plan[index] if index < len(urls_plan) else []
-            enforced = flags_plan[index] if index < len(flags_plan) else False
-            return scrape_item_with_review(
-                item,
-                out_dir,
-                approved_urls=approved,
-                enforced=enforced,
-                **scrape_kwargs,
-            )
+        # Install the shared engine for the duration of the real Excel batch in
+        # both reviewed and automatic modes. This is not a separate benchmark path.
+        batch_module.discover_product_documents = _shared_discover
+        batch_module.process_pdf_document = _shared_process_pdf
 
-        batch_module.scrape_item = reviewed_scrape
+        if any(flags_plan):
+            def reviewed_scrape(item, out_dir, **scrape_kwargs):
+                index = cursor["value"]
+                cursor["value"] += 1
+                approved = urls_plan[index] if index < len(urls_plan) else []
+                enforced = flags_plan[index] if index < len(flags_plan) else False
+                return scrape_item_with_review(
+                    item,
+                    out_dir,
+                    approved_urls=approved,
+                    enforced=enforced,
+                    **scrape_kwargs,
+                )
+
+            batch_module.scrape_item = reviewed_scrape
+
         try:
             return _BASE_RUN_BATCH(*args, **kwargs)
         finally:
             batch_module.scrape_item = original_scrape
+            batch_module.discover_product_documents = original_discover
+            batch_module.process_pdf_document = original_process_pdf

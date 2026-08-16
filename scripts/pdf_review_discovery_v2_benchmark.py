@@ -6,14 +6,13 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from product_intelligence.models import ProductIdentity
-from product_intelligence.pdf_pipeline import discover_validated_review_pdfs
+from product_intelligence.part_number_pdf_search import search_product_pdfs_by_part_number
 
 
-QA_PRODUCTS = (
-    ProductIdentity(model="JBLQ350WLBLKAM", mpn="JBLQ350WLBLKAM"),
-    ProductIdentity(model="JBLENDURRUN3BTBAM", mpn="JBLENDURRUN3BTBAM"),
-    ProductIdentity(model="JBLT530CBLKAM", mpn="JBLT530CBLKAM"),
+QA_PART_NUMBERS = (
+    "JBLQ350WLBLKAM",
+    "JBLENDURRUN3BTBAM",
+    "JBLT530CBLKAM",
 )
 
 
@@ -23,7 +22,6 @@ class ProductBenchmark:
     elapsed_seconds: float
     resolved_brand: str | None
     resolved_model: str | None
-    resolved_mpn: str | None
     official_domain: str | None
     identity_status: str
     identity_diagnostics: dict
@@ -32,6 +30,7 @@ class ProductBenchmark:
     validated: int
     rejected: int
     duplicates: int
+    page_limit_rejected: int
     candidates: list[dict]
     diagnostic_log: list[str]
     gate_failures: list[str]
@@ -56,57 +55,51 @@ def _candidate_payload(row) -> dict:
     }
 
 
-def _generic_failures(identity: ProductIdentity, result, candidates: list[dict]) -> list[str]:
+def _failures(part_number: str, result, candidates: list[dict]) -> list[str]:
     failures: list[str] = []
     resolved = result.resolved.identity
-    strong = str(identity.mpn or identity.gtin or identity.ean or identity.upc or "").strip().lower()
     resolved_model = str(resolved.model or resolved.product_name or "").strip().lower()
-
     if not resolved.brand:
         failures.append("BRAND_NOT_RESOLVED")
-    if not resolved_model or (strong and resolved_model == strong):
+    if not resolved_model or resolved_model == part_number.lower():
         failures.append("DESCRIPTIVE_MODEL_NOT_RESOLVED")
-    if result.downloaded_count < result.validated_count:
-        failures.append("VALIDATED_WITHOUT_DOWNLOAD")
     if result.validated_count != len(candidates):
         failures.append("VALIDATED_COUNT_MISMATCH")
     for candidate in candidates:
+        if not str(candidate["final_url"] or candidate["url"]).lower().split("?", 1)[0].endswith(".pdf"):
+            failures.append("NON_PDF_SURFACED")
         if int(candidate["pages"] or 0) > 10:
             failures.append("PAGE_LIMIT_BYPASSED")
         if candidate["provenance_parent"] and candidate["provenance_authority"].upper() != "MANUFACTURER":
             failures.append("UNTRUSTED_PROVENANCE_SURFACED")
+    if part_number == "JBLQ350WLBLKAM" and not candidates:
+        failures.append("KNOWN_PRODUCT_ZERO_VALIDATED_PDFS")
     return sorted(set(failures))
 
 
 def run() -> dict:
     products: list[ProductBenchmark] = []
-    with tempfile.TemporaryDirectory(prefix="pi-real-pdf-review-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="pi-part-number-pdf-") as tmp:
         root = Path(tmp)
-        for identity in QA_PRODUCTS:
+        for part_number in QA_PART_NUMBERS:
             diagnostics: list[str] = []
             started = time.perf_counter()
-            result = discover_validated_review_pdfs(
-                identity,
-                root / str(identity.mpn),
+            result = search_product_pdfs_by_part_number(
+                part_number,
+                root / part_number,
                 limit=8,
                 timeout=10,
                 log=diagnostics.append,
             )
             elapsed = time.perf_counter() - started
             candidates = [_candidate_payload(row) for row in result.candidates]
-            failures = _generic_failures(identity, result, candidates)
-
-            if identity.mpn == "JBLQ350WLBLKAM" and not candidates:
-                failures.append("KNOWN_PRODUCT_ZERO_VALIDATED_PDFS")
-
             resolved = result.resolved.identity
             products.append(
                 ProductBenchmark(
-                    product=str(identity.mpn),
+                    product=part_number,
                     elapsed_seconds=round(elapsed, 3),
                     resolved_brand=resolved.brand,
                     resolved_model=resolved.model or resolved.product_name,
-                    resolved_mpn=resolved.mpn,
                     official_domain=result.resolved.official_domain,
                     identity_status=result.resolved.status,
                     identity_diagnostics=dict(result.resolved.diagnostics or {}),
@@ -115,17 +108,18 @@ def run() -> dict:
                     validated=result.validated_count,
                     rejected=result.rejected_count,
                     duplicates=result.duplicate_count,
+                    page_limit_rejected=result.page_limit_rejected_count,
                     candidates=candidates,
-                    diagnostic_log=diagnostics[-30:],
-                    gate_failures=sorted(set(failures)),
+                    diagnostic_log=diagnostics[-40:],
+                    gate_failures=_failures(part_number, result, candidates),
                 )
             )
 
     report = {
         "status": "PASS" if all(not row.gate_failures for row in products) else "FAIL",
-        "input_mode": "real_excel_mpn_only",
-        "discovery_contract": {
-            "download_before_review": True,
+        "input_mode": "part_number_only_real_api",
+        "contract": {
+            "surface_only_pdf": True,
             "validate_before_surface": True,
             "ocr_before_review": 0,
             "mistral_before_review": 0,
@@ -140,7 +134,7 @@ def run() -> dict:
             "duplicates": sum(row.duplicates for row in products),
         },
     }
-    print("REAL_EXCEL_PDF_REVIEW_BENCHMARK=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
+    print("PART_NUMBER_PDF_SEARCH_BENCHMARK=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
     if report["status"] != "PASS":
         raise SystemExit(1)
     return report

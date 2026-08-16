@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_pdf_review_workspace_contract_is_present():
-    text = Path("src/product_intelligence/pdf_desktop.py").read_text(encoding="utf-8")
+    text = Path("src/product_intelligence/pdf_review_shell.py").read_text(encoding="utf-8")
 
     required = [
         'text="Revisión PDF"',
@@ -16,12 +16,17 @@ def test_pdf_review_workspace_contract_is_present():
         'def _pdf_review_inspect_selected(',
         'def _pdf_review_toggle_use(',
         'def _pdf_review_confirm(',
-        'reviewed_pdf_urls_by_index=',
-        'pdf_review_flags=',
+        'set_desktop_review_plan(',
     ]
 
     for token in required:
         assert token in text, token
+
+
+def test_final_launcher_uses_pdf_review_shell():
+    text = Path("run_desktop.py").read_text(encoding="utf-8")
+    assert "product_intelligence.pdf_review_shell" in text
+    assert "pdf_review_main()" in text
 
 
 def test_pdf_review_workspace_does_not_invoke_ocr_or_mistral_directly():

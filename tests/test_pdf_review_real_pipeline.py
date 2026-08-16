@@ -77,9 +77,16 @@ def test_review_service_has_no_ocr_or_mistral_runtime_dependency():
 
 def test_review_plan_zero_selection_is_enforced_and_does_not_fall_back(monkeypatch, tmp_path):
     from product_intelligence import pdf_review_batch
+    from product_intelligence.batch import BatchItem
 
     calls = {"base": 0}
-    item = SimpleNamespace(source_urls=[], source_url=None)
+    item = BatchItem(
+        row=2,
+        sheet="Sheet1",
+        identity=ProductIdentity(mpn="ABC123", model="ABC123"),
+        source_urls=[],
+        source_url=None,
+    )
 
     def base_scrape(*_args, **_kwargs):
         calls["base"] += 1

@@ -93,9 +93,9 @@ def _search_text(value: str | None) -> str:
 def assess_pdf_page_text_quality(text: str | None) -> PdfPageTextQuality:
     """Decide whether native PDF text is useful enough to avoid OCR.
 
-    This deliberately uses several cheap signals instead of only a character-count
-    threshold. It remains conservative: OCR is a fallback, never a source identity
-    override.
+    Uses multiple cheap quality signals while preserving concise native specification
+    lines that were valid in the legacy extractor. OCR is a fallback and never an
+    identity override.
     """
     raw = str(text or "").strip()
     if not raw:
@@ -110,13 +110,21 @@ def assess_pdf_page_text_quality(text: str | None) -> PdfPageTextQuality:
     tokens = re.findall(r"[A-Za-z0-9]+", raw)
     unique_ratio = len(set(token.casefold() for token in tokens)) / max(1, len(tokens))
     garbage_runs = len(re.findall(r"[^A-Za-z0-9\s]{3,}", raw))
+    structured_short = bool(
+        len(raw) >= 8
+        and alphanumeric_ratio >= 0.40
+        and printable_ratio >= 0.55
+        and (re.search(r"[:=]", raw) or re.search(r"\d", raw) or technical_signal)
+    )
 
-    if len(raw) < 24:
+    if len(raw) < 8:
         return PdfPageTextQuality(False, True, "native_text_too_sparse", printable_ratio, alphanumeric_ratio, technical_signal)
     if printable_ratio < 0.55 or alphanumeric_ratio < 0.35:
         return PdfPageTextQuality(False, True, "native_text_low_signal", printable_ratio, alphanumeric_ratio, technical_signal)
     if garbage_runs >= 3 and unique_ratio < 0.35:
         return PdfPageTextQuality(False, True, "native_text_garbled", printable_ratio, alphanumeric_ratio, technical_signal)
+    if len(raw) < 24 and not structured_short:
+        return PdfPageTextQuality(False, True, "native_text_too_sparse", printable_ratio, alphanumeric_ratio, technical_signal)
     return PdfPageTextQuality(True, False, "native_text_usable", printable_ratio, alphanumeric_ratio, technical_signal)
 
 
@@ -269,8 +277,6 @@ def extract_pdf_bytes(
         if len(doc) <= SHORT_PDF_PAGE_LIMIT:
             pages = _extract_document(doc)
         else:
-            # Native text extraction is cheap and does not invoke OCR. It is used only
-            # to choose which pages deserve the expensive/full extraction path.
             native_texts = [(page.get_text("text") or "").strip() for page in doc]
             selected_indexes = select_pdf_page_indexes(native_texts, focus_terms=focus_terms)
             pages = _extract_selected_document(doc, selected_indexes, native_texts=native_texts)

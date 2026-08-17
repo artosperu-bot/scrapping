@@ -38,7 +38,8 @@ def test_social_download_state_is_separate_from_media_discovery_state():
 
 def test_worker_sends_ambiguous_page_candidates_to_main_tk_thread():
     source = MEDIA.read_text(encoding="utf-8")
-    worker_body = source.split("def _start_social_video_download", 1)[1].split("\n    def ", 1)[0]
+    method_body = source.split("def _start_social_video_download", 1)[1].split("\n    def ", 1)[0]
+    worker_body = method_body.split("def work():", 1)[1].split("threading.Thread", 1)[0]
     assert "VideoSelectionRequired" in source
     assert "except VideoSelectionRequired as exc" in worker_body
     assert '"type": "social_video_choices"' in worker_body

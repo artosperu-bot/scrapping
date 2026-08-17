@@ -63,8 +63,6 @@ def _title_tokens(candidate: SearchCandidate, raw: str) -> list[str]:
     text = unquote(str(candidate.title or ""))
     if raw:
         text = re.sub(re.escape(raw), " ", text, flags=re.I)
-    # Search titles commonly append store/site labels after separators. Keep the
-    # product-facing segment with the richest model-like information.
     segments = [segment.strip() for segment in re.split(r"\s+[|–—]\s+", text) if segment.strip()]
     if segments:
         text = max(segments, key=lambda segment: sum(ch.isdigit() for ch in segment) * 3 + len(segment))
@@ -118,8 +116,6 @@ def _select_brand(candidates: list[SearchCandidate], raw: str, current: str | No
         score = len(domains) * 10.0 + host_matches[key] * 8.0
         if current_key and (key == current_key or current_key.startswith(key)):
             score += 3.0
-        # Prefer the simplest repeatedly corroborated manufacturer label. Multiword
-        # brands still win when their compact form matches a host (e.g. NorthStar).
         score -= max(0, len(words) - 1) * 1.25
         if host_matches[key] and len(words) > 1:
             score += 2.0
@@ -161,9 +157,9 @@ def _model_ngrams(tokens: list[str]) -> list[tuple[str, int]]:
             if all(word in _GENERIC for word in words):
                 continue
             phrase = " ".join(words)
-            has_model_marker = any(any(ch.isdigit() for ch in word) for word in words)
-            if not has_model_marker and length < 3:
-                continue
+            # Two-token model names without digits (for example "Model X") are
+            # allowed here because _select_model still requires corroboration across
+            # at least two independent domains before they can win.
             out.append((phrase, start))
     return out
 
@@ -196,7 +192,6 @@ def _select_model(candidates: list[SearchCandidate], raw: str, brand: str | None
         score += 4.0 if any(any(ch.isdigit() for ch in word) for word in words) else 0.0
         score += max(0, 4 - earliest.get(key, 4)) * 1.5
         score += min(len(words), 4) * 0.6
-        # Long marketing descriptions should lose to the stable shared model phrase.
         score -= max(0, len(words) - 4) * 1.4
         ranked.append((score, support, -abs(len(words) - 3), key))
 
@@ -208,13 +203,6 @@ def _select_model(candidates: list[SearchCandidate], raw: str, brand: str | None
 
 
 def _normalize_provider_candidate(row) -> SearchCandidate | None:
-    """Normalize the raw discovery provider contract into the refinement contract.
-
-    `discovery._provider_search()` intentionally returns lightweight
-    ``(url, title, snippet)`` tuples, while tests and future callers may already pass
-    ``SearchCandidate`` objects. Identity refinement consumes one canonical shape so
-    neither source representation can leak past this boundary.
-    """
     if isinstance(row, SearchCandidate):
         return row
     if isinstance(row, (tuple, list)) and row:
@@ -247,12 +235,7 @@ def refine_code_identity(
     timeout: int = 7,
     max_queries: int = 2,
 ) -> IdentityRefinement:
-    """Refine an incomplete MPN/code identity using cross-domain SERP consensus.
-
-    This is a bounded refinement of the existing bootstrap result, not an independent
-    product resolver. It only considers results whose title or URL is materially bound
-    to the strong raw identifier, and never trusts query-echo snippets for identity.
-    """
+    """Refine an incomplete code identity using bounded cross-domain consensus."""
     raw = _raw(original)
     if not raw:
         return IdentityRefinement(current, None, 0, 0, 0)

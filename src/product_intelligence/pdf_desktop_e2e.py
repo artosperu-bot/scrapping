@@ -14,7 +14,7 @@ from .real_pdf_review_shell import review_gate_missing_indices
 
 @dataclass
 class PdfExecuteRuntimeState:
-    """Presentation-only state for the PDF activity shown in Ejecutar."""
+    """Presentation-only PDF state mirrored into the Ejecutar workspace."""
 
     query_position: int = 0
     query_limit: int = 8
@@ -45,7 +45,7 @@ class PdfExecuteRuntimeState:
         elif kind == "identity":
             brand = str(event.get("brand") or "").strip()
             model = str(event.get("model") or "").strip()
-            self.status = f"Identidad: {' '.join(x for x in (brand, model) if x) or 'resuelta'}"
+            self.status = f"Identidad: {' '.join(value for value in (brand, model) if value) or 'resuelta'}"
             self._advance(10)
         elif kind == "candidate":
             key = str(event.get("url") or event.get("title") or event.get("position") or "").strip().lower()
@@ -91,9 +91,8 @@ class PdfExecuteRuntimeState:
             self._advance(84)
         elif kind == "final_result":
             payload = event.get("result")
-            error = event.get("error")
-            if error:
-                self.status = f"Error PDF: {error}"
+            if event.get("error"):
+                self.status = f"Error PDF: {event.get('error')}"
                 return
             if payload is not None:
                 self.found = int(getattr(payload, "discovered_count", self.found) or 0)
@@ -105,12 +104,7 @@ class PdfExecuteRuntimeState:
 
 
 class PdfDesktopE2EMixin:
-    """Make the certified PDF engine observable and tangible in the packaged desktop.
-
-    Search/ranking/identity stays in the existing P60 engine. This mixin only bridges
-    its main-thread review events into the global desktop log/progress and exposes the
-    folders where validated documents are retained.
-    """
+    """Bridge P60 PDF events into desktop observability without changing P60 decisions."""
 
     def _pdf_review_root(self) -> Path:
         out_var = self.__dict__.get("out") or self.__dict__.get("out_var")
@@ -196,7 +190,7 @@ class PdfDesktopE2EMixin:
             status.set(f"Carpeta PDFs: {folder}")
 
     def _pdf_execute_open_folder(self):
-        index = getattr(self, "_pdf_execute_active_index", None)
+        index = self.__dict__.get("_pdf_execute_active_index")
         folder = self._pdf_folder_for_index(index)
         folder.mkdir(parents=True, exist_ok=True)
         try:
@@ -260,14 +254,14 @@ class PdfDesktopE2EMixin:
         return self._pdf_identifier_for_index(index)
 
     def _pdf_execute_summary_text(self) -> str:
-        results = getattr(self, "_pdf_execute_results", {}) or {}
+        results = self.__dict__.get("_pdf_execute_results") or {}
         if not results:
             return "Resumen PDF: pendiente"
         parts = [f"{self._pdf_execute_product_label(index)}: {results[index]}" for index in sorted(results)]
         return "Resumen PDF · " + " | ".join(parts)
 
     def _update_pdf_execute_panel(self, index: int, event: dict) -> PdfExecuteRuntimeState:
-        states = getattr(self, "_pdf_execute_states", None)
+        states = self.__dict__.get("_pdf_execute_states")
         if states is None:
             states = {}
             self._pdf_execute_states = states
@@ -278,13 +272,13 @@ class PdfDesktopE2EMixin:
         if str(event.get("type") or "") == "final_result" and not event.get("error"):
             payload = event.get("result")
             if payload is not None:
-                results = getattr(self, "_pdf_execute_results", None)
+                results = self.__dict__.get("_pdf_execute_results")
                 if results is None:
                     results = {}
                     self._pdf_execute_results = results
                 results[index] = int(getattr(payload, "validated_count", state.validated) or 0)
 
-        total = max(1, len(list(getattr(self, "product_rows", []) or [])))
+        total = max(1, len(list(self.__dict__.get("product_rows") or [])))
         label = self._pdf_execute_product_label(index)
         folder = self._pdf_folder_for_index(index)
         status_text = f"PDF · Producto {index + 1}/{total} · {label} · {state.status}"
@@ -323,9 +317,6 @@ class PdfDesktopE2EMixin:
             emit(f"[PDF REVIEW] {text}")
 
     def _pdf_progress_stage(self, text: str) -> None:
-        # Unit/state-contract clients may inject a callback directly without
-        # initializing Tk. Prefer that explicit callback. Only call the inherited
-        # Tk implementation when the real desktop root is initialized.
         stage = self.__dict__.get("_excel_progress_stage")
         if callable(stage):
             stage(text)
@@ -337,7 +328,7 @@ class PdfDesktopE2EMixin:
             stage_fn(self, text)
 
     def run(self):
-        rows = list(getattr(self, "product_rows", []) or [])
+        rows = list(self.__dict__.get("product_rows") or [])
         mode = self.__dict__.get("pdf_review_mode")
         enabled = self.__dict__.get("use_pdf_evidence")
         reviewed_mode = bool(mode is not None and mode.get() == "reviewed")
@@ -346,7 +337,7 @@ class PdfDesktopE2EMixin:
             total_products=len(rows),
             reviewed_mode=reviewed_mode,
             pdf_enabled=pdf_enabled,
-            enforced_indices=getattr(self, "_pdf_review_enforced", set()),
+            enforced_indices=self.__dict__.get("_pdf_review_enforced") or set(),
         )
         if missing:
             first = missing[0]
@@ -367,7 +358,7 @@ class PdfDesktopE2EMixin:
         except Exception:
             index = None
         if index is not None:
-            states = getattr(self, "_pdf_execute_states", None)
+            states = self.__dict__.get("_pdf_execute_states")
             if states is None:
                 states = {}
                 self._pdf_execute_states = states

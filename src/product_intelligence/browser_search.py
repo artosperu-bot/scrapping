@@ -2,18 +2,32 @@ from __future__ import annotations
 
 import html
 import re
-from urllib.parse import quote, quote_plus, urljoin, urlparse
+from urllib.parse import quote, quote_plus, unquote, urljoin, urlparse
 
 SEARCH_HOSTS = {
     "bing.com", "www.bing.com", "duckduckgo.com", "html.duckduckgo.com",
     "brave.com", "search.brave.com", "mojeek.com", "www.mojeek.com",
     "yahoo.com", "search.yahoo.com",
 }
+_TRACKING_HOSTS = {
+    "facebook.com", "facebook.net", "connect.facebook.net", "google-analytics.com",
+    "googletagmanager.com", "doubleclick.net",
+}
+_DOCUMENT_PATH_HINTS = (
+    "manual", "guide", "quick", "spec", "datasheet", "data-sheet", "document",
+    "download", "instruction", "support", "technical", "ficha", "qsg",
+)
+_GENERIC_PDF_STEMS = {"generated", "file", "this"}
 
 
 def _is_search_host(host: str) -> bool:
     host = (host or "").lower()
     return any(host == known or host.endswith("." + known) for known in SEARCH_HOSTS)
+
+
+def _is_tracking_host(host: str) -> bool:
+    host = (host or "").lower().removeprefix("www.")
+    return any(host == known or host.endswith("." + known) for known in _TRACKING_HOSTS)
 
 
 def _extract_result_rows(raw_rows):
@@ -39,7 +53,6 @@ def _page_rows(page, selector: str, script: str):
 
 
 def _pdf_link_rows(page):
-    """Read rendered document candidates without relying on href alone."""
     try:
         return page.locator(
             "a[href], button, [data-url], [data-href], [data-file], [data-download-url], [onclick]"
@@ -65,6 +78,29 @@ def _normalize_embedded_text(value: str) -> str:
     )
 
 
+def _document_like_pdf_url(absolute: str) -> bool:
+    parsed = urlparse(absolute)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    if _is_tracking_host(host):
+        return False
+    decoded_path = unquote(parsed.path or "")
+    if "\\" in decoded_path or any(ch in decoded_path for ch in ("*", "{", "}")):
+        return False
+    filename = decoded_path.rsplit("/", 1)[-1].strip()
+    if not filename.lower().endswith(".pdf"):
+        return False
+    stem = filename[:-4].strip().lower()
+    if not stem:
+        return False
+    semantic = " ".join(part.lower() for part in decoded_path.split("/") if part)
+    has_document_hint = any(hint in semantic for hint in _DOCUMENT_PATH_HINTS)
+    if stem in _GENERIC_PDF_STEMS and not has_document_hint:
+        return False
+    if len(stem) == 1 and not has_document_hint:
+        return False
+    return True
+
+
 def _absolute_pdf_url(raw: str, base_url: str) -> str | None:
     value = _normalize_embedded_text(raw).strip().strip('"\'()[]{};,')
     if ".pdf" not in value.lower():
@@ -75,16 +111,12 @@ def _absolute_pdf_url(raw: str, base_url: str) -> str | None:
     parsed = urlparse(absolute)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or ".pdf" not in parsed.path.lower():
         return None
+    if not _document_like_pdf_url(absolute):
+        return None
     return quote(absolute, safe=":/?&=%#@+;,~")
 
 
 def extract_pdf_urls_from_text(text: str, base_url: str) -> list[tuple[str, str]]:
-    """Extract absolute/relative PDF URLs from HTML, JS or JSON text.
-
-    Product sites often keep download URLs in JSON or onclick/data attributes instead
-    of an anchor href. This helper intentionally only discovers URLs; downstream PDF
-    download and product-identity validation remain authoritative.
-    """
     normalized = _normalize_embedded_text(text)
     candidates: list[str] = []
     candidates.extend(match.group(1) for match in re.finditer(r'["\']([^"\']*?\.pdf(?:\?[^"\']*)?)["\']', normalized, re.I))
@@ -104,7 +136,6 @@ def extract_pdf_urls_from_text(text: str, base_url: str) -> list[tuple[str, str]
 
 
 def _launch_chromium(playwright):
-    """Return a browser when Chromium is installed; otherwise fail soft."""
     try:
         return playwright.chromium.launch(headless=True)
     except Exception:
@@ -112,7 +143,6 @@ def _launch_chromium(playwright):
 
 
 def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
-    """Use bundled Chromium as a real-browser fallback for search discovery."""
     if not str(query or "").strip():
         return []
     try:
@@ -173,12 +203,6 @@ def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
 
 
 def browser_pdf_links(url: str, *, timeout: int = 20, limit: int = 30) -> list[tuple[str, str]]:
-    """Render a product/support landing and collect concrete PDF download URLs.
-
-    Discovery covers visible DOM attributes, rendered HTML/JSON and network responses.
-    It never treats page text as product evidence; every resulting URL still passes the
-    shared download and identity-validation pipeline before it can reach PDF Review.
-    """
     if not str(url or "").startswith("http"):
         return []
     try:
@@ -231,9 +255,6 @@ def browser_pdf_links(url: str, *, timeout: int = 20, limit: int = 30) -> list[t
                 for embedded, label in extract_pdf_urls_from_text(page_html, url):
                     add(embedded, label)
 
-                # Modern support pages frequently load document metadata through JSON/XHR.
-                # Inspect a bounded set of completed responses after rendering so dynamic
-                # document URLs can be discovered without clicking arbitrary controls.
                 for response in responses[:120]:
                     if len(found) >= limit:
                         break

@@ -20,6 +20,7 @@ _GENERIC = {
 }
 _BRAND_GENERIC = _GENERIC | {
     "sensor", "cable", "adapter", "charger", "camera", "device", "technology", "audio",
+    "model", "series", "serie",
 }
 _MODEL_DESCRIPTOR_STOP = _GENERIC | {
     "hi", "res", "hires", "on", "over", "ear", "in", "with", "compatible", "compatibility",
@@ -91,8 +92,6 @@ def stable_model_core(value: str | None, *, raw: str | None = None, brand: str |
 def _descriptive_title_signal(title: str) -> bool:
     tokens = _tokenize(title)
     useful = [token for token in tokens if token not in _GENERIC and len(token) >= 2]
-    # Snippet matches are allowed only to bind a search row to the code. The title
-    # itself must still look like a real product identity, not a generic search page.
     return len(useful) >= 2 and (any(any(ch.isdigit() for ch in token) for token in useful) or len(useful) >= 3)
 
 
@@ -137,15 +136,37 @@ def _brand_ngrams(tokens: list[str]) -> list[str]:
     return out
 
 
+def _descriptive_brand_hint(value: str | None, raw: str) -> str | None:
+    """Recover a conservative brand hint from an already descriptive bootstrap model.
+
+    This is intentionally limited to the leading useful token. It prevents a retailer
+    hostname from replacing a product brand that the bootstrap already surfaced in
+    text such as ``JBL Endurance Run 3 ...``.
+    """
+    text = str(value or "").strip()
+    if not text or _compact(text) == _compact(raw):
+        return None
+    for token in _tokenize(text)[:4]:
+        if token in _BRAND_GENERIC or any(ch.isdigit() for ch in token):
+            continue
+        if len(token) >= 2:
+            return token
+    return None
+
+
 def _select_brand(candidates: list[SearchCandidate], raw: str, current: str | None) -> tuple[str | None, int, str | None]:
     domains_by_phrase: dict[str, set[str]] = defaultdict(set)
     display: dict[str, str] = {}
     host_matches: Counter[str] = Counter()
+    current_key = _compact(current)
 
     for candidate in candidates:
         domain = _root(urlparse(candidate.url).hostname)
         root_label = _compact(domain.split(".", 1)[0])
-        for phrase in _brand_ngrams(_title_tokens(candidate, raw)):
+        title_tokens = _title_tokens(candidate, raw)
+
+        # Prefix phrases retain support for clean manufacturer-first titles.
+        for phrase in _brand_ngrams(title_tokens):
             key = _compact(phrase)
             display.setdefault(key, phrase)
             if domain:
@@ -153,25 +174,50 @@ def _select_brand(candidates: list[SearchCandidate], raw: str, current: str | No
             if root_label and (key == root_label or (len(key) >= 3 and key in root_label)):
                 host_matches[key] += 1
 
-    current_key = _compact(current)
+        # Also count individual brand-like tokens across independent domains. This is
+        # what defeats retailer prefixes such as ``LoyaltySource Acme Model X``: the
+        # retailer appears on one host, while ``Acme`` is corroborated across stores.
+        for token in title_tokens[:6]:
+            if token in _BRAND_GENERIC or any(ch.isdigit() for ch in token) or len(token) < 2:
+                continue
+            key = _compact(token)
+            if not key:
+                continue
+            # A token equal to its own hostname is presumptively a retailer/site name.
+            # It may still be trusted when it is the existing brand hint, otherwise it
+            # needs independent cross-domain support before becoming a product brand.
+            display.setdefault(key, token)
+            if domain:
+                domains_by_phrase[key].add(domain)
+            if root_label and key == root_label:
+                host_matches[key] += 1
+
     scores: list[tuple[float, int, int, str]] = []
     for key, domains in domains_by_phrase.items():
-        if len(domains) < 2 and not host_matches[key]:
-            continue
+        support = len(domains)
         words = display[key].split()
-        score = len(domains) * 10.0 + host_matches[key] * 8.0
-        if current_key and (key == current_key or current_key.startswith(key)):
-            score += 3.0
+        is_current = bool(current_key and (key == current_key or current_key.startswith(key) or key.startswith(current_key)))
+
+        # Never allow a one-domain site/retailer token to manufacture a brand. A
+        # singleton can survive only when it matches an existing trusted hint.
+        if support < 2 and not is_current:
+            continue
+
+        score = support * 10.0
+        if is_current:
+            score += 12.0
+        # Host matching is supporting evidence only after cross-domain/current proof;
+        # it is no longer sufficient by itself.
+        if support >= 2:
+            score += min(host_matches[key], support) * 1.5
         score -= max(0, len(words) - 1) * 1.25
-        if host_matches[key] and len(words) > 1:
-            score += 2.0
-        scores.append((score, len(domains), -len(words), key))
+        scores.append((score, support, -len(words), key))
 
     if not scores:
         return current, 0, None
     scores.sort(reverse=True)
     _score, support, _neg_words, key = scores[0]
-    brand = display[key]
+    brand = display.get(key, current or key)
 
     official_domain = None
     brand_key = _compact(brand)
@@ -289,7 +335,10 @@ def refine_code_identity(
     if not raw:
         return IdentityRefinement(current, None, 0, 0, 0)
 
-    brand_hint = str(current.brand or current.manufacturer or "").strip()
+    explicit_brand_hint = str(current.brand or current.manufacturer or "").strip()
+    descriptive_brand_hint = _descriptive_brand_hint(current.model or current.product_name, raw)
+    brand_hint = explicit_brand_hint or descriptive_brand_hint or ""
+
     queries = [f'"{raw}"']
     if brand_hint:
         queries.append(f'"{raw}" "{brand_hint}"')

@@ -8,6 +8,7 @@ from typing import Callable, Iterable
 import fitz
 import requests
 
+from .local_ocr import rapidocr_text
 from .models import Evidence
 from .provider_runtime import remote_ocr_text
 from .web_fetch import UA
@@ -62,22 +63,12 @@ def download_bytes(url: str, timeout: int = 35) -> bytes:
 
 
 def _local_ocr_page(image_bytes: bytes) -> str:
-    try:
-        from paddleocr import PaddleOCR
-        ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
-        result = ocr.ocr(image_bytes, cls=True)
-        lines = []
-        for group in result or []:
-            for item in group or []:
-                if isinstance(item, (list, tuple)) and len(item) >= 2 and isinstance(item[1], (list, tuple)):
-                    lines.append(str(item[1][0]))
-        return "\n".join(lines)
-    except Exception:
-        return ""
+    """Low-resource offline fallback, initialized lazily and cached across pages."""
+    return rapidocr_text(image_bytes)
 
 
 def _default_ocr_page(page_number: int, image_bytes: bytes) -> str:
-    """Try configured OCR.space first, then preserve the existing local fallback."""
+    """Try configured OCR.space first, then the bundled offline RapidOCR fallback."""
     remote = remote_ocr_text(image_bytes, language="eng")
     if remote:
         return remote

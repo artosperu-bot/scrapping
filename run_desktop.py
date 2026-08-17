@@ -42,12 +42,4 @@ import_module("product_intelligence.live_ui_desktop")
 import_module("product_intelligence.final_live_ui_desktop")
 pdf_review_main = live_ui_main
 managed_main = pdf_review_main
-
-
-def desktop_main() -> int:
-    managed_main()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(desktop_main())
+managed_main()

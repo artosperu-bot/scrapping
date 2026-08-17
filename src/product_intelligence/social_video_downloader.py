@@ -201,7 +201,7 @@ def download_social_video(
             "restrictfilenames": False,
         }
         if ffmpeg_exe:
-            options["ffmpeg_location"] = str(Path(ffmpeg_exe).parent)
+            options["ffmpeg_location"] = str(ffmpeg_exe)
 
         emit(phase="RESOLVE")
         with yt_dlp.YoutubeDL(options) as ydl:

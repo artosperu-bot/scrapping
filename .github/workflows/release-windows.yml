@@ -59,17 +59,20 @@ jobs:
         shell: cmd
         run: pyinstaller --noconfirm --clean ProductIntelligence.spec
 
-      - name: Verify executables and progress resources
+      - name: Verify executables, progress resources and FFmpeg
         shell: pwsh
         run: |
           if (-not (Test-Path 'dist/ProductIntelligence/ProductIntelligence.exe')) { throw 'Missing ProductIntelligence.exe' }
           if (-not (Test-Path 'dist/ProductIntelligence/ProductIntelligenceUpdater.exe')) { throw 'Missing ProductIntelligenceUpdater.exe' }
           $processing = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'processing.gif'
           $completed = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'completed.gif'
+          $ffmpegFiles = Get-ChildItem 'dist/ProductIntelligence' -Recurse -File | Where-Object { $_.Name -match '^ffmpeg.*\.exe$' }
           if (-not $processing) { throw 'processing.gif not bundled' }
           if (-not $completed) { throw 'completed.gif not bundled' }
+          if (-not $ffmpegFiles) { throw 'Bundled FFmpeg binary missing' }
           Write-Host "processing.gif=$($processing.FullName)"
           Write-Host "completed.gif=$($completed.FullName)"
+          Write-Host "ffmpeg=$($ffmpegFiles.FullName -join ', ')"
 
       - name: Verify standalone updater bootstrap
         shell: pwsh

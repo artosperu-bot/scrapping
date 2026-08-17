@@ -76,7 +76,7 @@ jobs:
       - name: Smoke final desktop shell
         shell: cmd
         run: >-
-          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert 'pdf_review' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.33'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); assert hasattr(app, 'pdf_review_open_folder_button'); assert callable(getattr(app, '_pdf_review_open_folder', None)); app.destroy(); print('FINAL_UI_PDF_E2E_SMOKE=PASS')"
+          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert 'pdf_review' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.33'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); assert hasattr(app, 'pdf_review_open_folder_button'); assert callable(getattr(app, '_pdf_review_open_folder', None)); assert hasattr(app, 'pdf_execute_panel'); assert hasattr(app, 'pdf_execute_status'); assert hasattr(app, 'pdf_execute_counts'); assert hasattr(app, 'pdf_execute_progress_bar'); assert hasattr(app, 'pdf_execute_progress_value'); assert hasattr(app, 'pdf_execute_open_folder_button'); assert hasattr(app, 'pdf_execute_folder'); assert hasattr(app, 'pdf_execute_summary'); assert callable(getattr(app, '_pdf_execute_open_folder', None)); app.destroy(); print('FINAL_UI_PDF_E2E_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd
@@ -103,6 +103,48 @@ jobs:
           Write-Host "processing.gif=$($processing.FullName)"
           Write-Host "completed.gif=$($completed.FullName)"
           Write-Host "ffmpeg=$($ffmpegFiles.FullName -join ', ')"
+
+      - name: Run packaged PDF E2E smoke
+        shell: pwsh
+        run: |
+          $smokeDir = Join-Path $env:RUNNER_TEMP 'product-intelligence-pdf-e2e'
+          if (Test-Path $smokeDir) { Remove-Item $smokeDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $smokeDir | Out-Null
+          $exe = (Resolve-Path 'dist/ProductIntelligence/ProductIntelligence.exe').Path
+          $partNumbers = @('JBLQ350WLBLKAM', 'JBLENDURRUN3BTBAM', 'JBLT530CBLKAM')
+          $arguments = @('--pdf-e2e-smoke', $smokeDir, '--timeout', '15') + $partNumbers
+          $process = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory (Split-Path $exe) -Wait -PassThru
+          $reportPath = Join-Path $smokeDir 'pdf-packaged-smoke.json'
+          if (-not (Test-Path $reportPath)) { throw "Packaged PDF smoke did not create report: $reportPath" }
+          $report = Get-Content $reportPath -Raw | ConvertFrom-Json
+          if ($process.ExitCode -ne 0) { throw "Packaged PDF smoke failed with exit code $($process.ExitCode): $($report | ConvertTo-Json -Depth 8 -Compress)" }
+          if ($report.status -ne 'PASS') { throw "Packaged PDF smoke report status=$($report.status)" }
+          if (@($report.products).Count -ne $partNumbers.Count) { throw "Expected $($partNumbers.Count) product reports, got $(@($report.products).Count)" }
+          foreach ($part in $partNumbers) {
+            $product = @($report.products | Where-Object { $_.part_number -eq $part })
+            if ($product.Count -ne 1) { throw "Missing/duplicate smoke report for $part" }
+            $row = $product[0]
+            if ($row.status -ne 'PASS') { throw "$part status=$($row.status) error=$($row.error)" }
+            if ([int]$row.query_count -gt 8) { throw "$part exceeded PDF query budget: $($row.query_count)" }
+            if ([int]$row.validated_count -lt 1) { throw "$part returned no validated PDFs" }
+            if (@($row.physical_pdf_paths).Count -lt 1) { throw "$part returned no physical PDF paths" }
+            foreach ($pdfPath in @($row.physical_pdf_paths)) {
+              if ([IO.Path]::GetExtension([string]$pdfPath).ToLowerInvariant() -ne '.pdf') { throw "$part reported a non-PDF evidence path: $pdfPath" }
+              if (-not (Test-Path -LiteralPath ([string]$pdfPath) -PathType Leaf)) { throw "$part missing physical PDF: $pdfPath" }
+            }
+            Write-Host "PDF_E2E product=$part queries=$($row.query_count)/8 discovered=$($row.discovered_count) downloaded=$($row.downloaded_count) validated=$($row.validated_count) rejected=$($row.rejected_count) physical=$(@($row.physical_pdf_paths).Count)"
+          }
+          $physicalPdfs = @(Get-ChildItem $smokeDir -Recurse -File -Filter '*.pdf')
+          if ($physicalPdfs.Count -lt $partNumbers.Count) { throw "Expected at least one retained physical PDF per product; total=$($physicalPdfs.Count)" }
+          Write-Host "PACKAGED_PDF_E2E_SMOKE=PASS report=$reportPath physical_pdfs=$($physicalPdfs.Count)"
+
+      - name: Upload packaged PDF E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProductIntelligence-PDF-E2E-v0.10.33
+          path: ${{ runner.temp }}/product-intelligence-pdf-e2e/
+          if-no-files-found: warn
 
       - name: Verify standalone updater bootstrap
         shell: pwsh

@@ -78,10 +78,22 @@ def discover_validated_review_pdfs_live(
         if on_event:
             on_event({"type": event_type, **payload})
 
+    query_budget = ReviewQueryBudget()
+
     class LiveTrace(PdfSearchTrace):
         def emit(self, event: str, **data) -> None:
             super().emit(event, **data)
-            if event == "PDF_PDP_SEARCH":
+            if event == "PDF_SEARCH_QUERY":
+                position = sum(1 for row in self.events if row.get("event") == "PDF_SEARCH_QUERY")
+                emit(
+                    "query",
+                    stage="SEARCH",
+                    status="SEARCHING",
+                    position=position,
+                    limit=query_budget.limit,
+                    query=str(data.get("query") or ""),
+                )
+            elif event == "PDF_PDP_SEARCH":
                 emit("pdp", stage="PDP_SEARCH", status="SEARCHING", **data)
             elif event == "PDF_PDP_VALIDATED":
                 emit("pdp", stage="PDP_VALIDATED", status="VALIDATED", **data)
@@ -93,7 +105,6 @@ def discover_validated_review_pdfs_live(
     emit("stage", stage="IDENTITY", message="Resolviendo identidad…")
     resolved = resolve_pdf_identity(identity, timeout=timeout)
     trace = LiveTrace(str(resolved.identity.mpn or resolved.identity.ean or resolved.identity.upc or resolved.identity.gtin or resolved.identity.model or "product"))
-    query_budget = ReviewQueryBudget()
 
     # When authority is not known yet, reserve half of the eight-query budget for a
     # manufacturer-first pass after an exact/validated PDP teaches us the domain.
@@ -183,6 +194,29 @@ def discover_validated_review_pdfs_live(
             log(f"[PDF CANDIDATE] {candidate.url} · title={candidate.title} · provenance={candidate.provenance}")
         try:
             emit("download", stage="DOWNLOAD", status="STARTED", url=candidate.url)
+
+            def on_inspection_stage(stage_name: str, **stage_data) -> None:
+                local_path = str(stage_data.get("local_path") or "")
+                final_url = str(stage_data.get("final_url") or candidate.url or "")
+                if stage_name == "downloaded":
+                    emit(
+                        "download",
+                        stage="DOWNLOAD",
+                        status="FINISHED",
+                        url=candidate.url,
+                        final_url=final_url,
+                        local_path=local_path,
+                    )
+                elif stage_name == "validating":
+                    emit(
+                        "validation",
+                        stage="VALIDATE",
+                        status="STARTED",
+                        url=candidate.url,
+                        final_url=final_url,
+                        local_path=local_path,
+                    )
+
             inspection = inspect_pdf_candidate(
                 resolved.identity,
                 candidate.url,
@@ -192,9 +226,9 @@ def discover_validated_review_pdfs_live(
                 discovery_score=candidate.discovery_score,
                 provenance=candidate.provenance,
                 identity_score=candidate.identity_score,
+                on_stage=on_inspection_stage,
             )
             downloaded += 1
-            emit("download", stage="VALIDATE", status="FINISHED", url=candidate.url)
         except Exception as exc:
             rejected += 1
             error = f"{type(exc).__name__}: {exc}"

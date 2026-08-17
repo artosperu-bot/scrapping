@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
+from typing import Callable
 from urllib.parse import urlparse
 
 import fitz
@@ -118,7 +119,7 @@ def score_review_candidate(
     elif identity_accepted is False:
         score -= 25
     if native_text_chars is not None:
-        chars = max(0, int(native_text_chars))
+        chars = max(0, int(native_text_chars or 0))
         score += 10 if chars >= 1000 else 6 if chars >= 200 else 2 if chars >= 40 else 0
     return max(0, min(100, int(score)))
 
@@ -241,13 +242,25 @@ def inspect_pdf_candidate(
     discovery_score: float = 0.0,
     provenance: DocumentProvenance | None = None,
     identity_score: int = 0,
+    on_stage: Callable[..., None] | None = None,
 ) -> PdfInspection:
-    """Download only the selected preview candidate and inspect native text; never invoke remote providers."""
+    """Download a preview candidate and inspect it; optional callbacks expose stages only."""
     _remember_provenance(url, provenance)
     cache = Path(cache_dir)
     cache.mkdir(parents=True, exist_ok=True)
     downloaded = download_pdf(url, cache, timeout=30)
     local_path = Path(downloaded.path)
+    if on_stage:
+        on_stage(
+            "downloaded",
+            local_path=local_path,
+            final_url=str(downloaded.final_url or url),
+        )
+        on_stage(
+            "validating",
+            local_path=local_path,
+            final_url=str(downloaded.final_url or url),
+        )
     doc = fitz.open(local_path)
     try:
         native_text, native_chars = _native_text(doc)

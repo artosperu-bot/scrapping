@@ -1,4 +1,25 @@
+from __future__ import annotations
+
+import sys
 from importlib import import_module
+
+
+def _run_pdf_e2e_smoke_if_requested(argv: list[str] | None = None) -> int | None:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] != "--pdf-e2e-smoke":
+        return None
+    from product_intelligence.pdf_packaged_smoke import main as pdf_packaged_smoke_main
+
+    return int(pdf_packaged_smoke_main(args[1:]))
+
+
+# The packaged QA route exits before importing/bootstrapping Tk desktop shells.
+if __name__ == "__main__":
+    _pdf_smoke_exit = _run_pdf_e2e_smoke_if_requested()
+    if _pdf_smoke_exit is not None:
+        raise SystemExit(_pdf_smoke_exit)
+
+
 from product_intelligence.modern_desktop import main
 from product_intelligence.provider_desktop import main as provider_main
 from product_intelligence.workspace_desktop import main as workspace_main

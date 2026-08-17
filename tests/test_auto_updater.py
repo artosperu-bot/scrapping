@@ -54,7 +54,7 @@ def _release_payload(tag="v0.10.6"):
 
 
 def test_app_version_is_current_auto_updatable_version():
-    assert APP_VERSION == "0.10.32"
+    assert APP_VERSION == "0.10.33"
 
 
 def test_semver_comparison_is_numeric_not_lexicographic():

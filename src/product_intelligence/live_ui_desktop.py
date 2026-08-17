@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from .excel_live_ui import ExcelLiveUiMixin
 from .part_number_pdf_search import search_product_pdfs
 from .real_pdf_review_shell import App as RealPdfReviewApp
 
@@ -68,7 +69,7 @@ class _ObservedPriceQueue(queue.Queue):
         return super().put(item, block=block, timeout=timeout)
 
 
-class App(RealPdfReviewApp):
+class App(ExcelLiveUiMixin, RealPdfReviewApp):
     """Final v0.10.25 live-UI shell. Business engines remain inherited and unchanged."""
 
     def __init__(self):
@@ -81,6 +82,7 @@ class App(RealPdfReviewApp):
         self._media_live_page_keys: set[str] = set()
         self._pdf_live_events: queue.Queue = queue.Queue()
         self._pdf_live_counts: dict[int, dict[str, int]] = {}
+        self._reset_excel_live_state()
         super().__init__()
         self.price_events = _ObservedPriceQueue(self._observe_price_event)
         self.after(200, self._refresh_price_live_counters)
@@ -205,9 +207,6 @@ class App(RealPdfReviewApp):
         self._update_media_live_counter_text()
 
     def _apply_progress_event(self, event: dict):
-        # This method is invoked only by the Tk-thread progress queue consumer.
-        # The original media queue independently renders the gallery card as soon as
-        # the same `media` event arrives, before the product `done` event.
         self._observe_media_event(event)
         return super()._apply_progress_event(event)
 

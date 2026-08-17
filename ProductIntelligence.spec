@@ -22,12 +22,35 @@ datas=[]; binaries=[]; hiddenimports=[
     'product_intelligence.social_video_downloader',
 ]
 
-for package_name in ('playwright', 'yt_dlp', 'imageio_ffmpeg', 'rapidocr', 'onnxruntime'):
-    try:
-        d,b,h=collect_all(package_name)
-        datas += d; binaries += b; hiddenimports += h
-    except Exception:
-        pass
+try:
+    d,b,h=collect_all('playwright')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
+try:
+    d,b,h=collect_all('yt_dlp')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
+try:
+    d,b,h=collect_all('imageio_ffmpeg')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
+try:
+    d,b,h=collect_all('rapidocr')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
+try:
+    d,b,h=collect_all('onnxruntime')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
 
 browser_dir=root/'vendor'/'ms-playwright'
 if browser_dir.exists():

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from product_intelligence.audit_events import AuditSink
-from product_intelligence.live_ui_desktop import App
+from product_intelligence.final_live_ui_desktop import App
 
 
 class FakeVar:
@@ -35,6 +35,8 @@ def test_pdf_live_state_is_preserved_per_product_when_switching_selection():
     row_a = SimpleNamespace(candidate=SimpleNamespace(url="https://docs.test/a.pdf"), inspection=object())
     row_b = SimpleNamespace(candidate=SimpleNamespace(url="https://docs.test/b.pdf"), inspection=object())
     app = App.__new__(App)
+    app.audit_sink = AuditSink()
+    app._active_snapshots = {}
     app._pdf_review_candidates = {0: [], 1: []}
     app._pdf_review_inspections = {0: {}, 1: {}}
     app._pdf_review_selected = {0: set(), 1: set()}
@@ -43,6 +45,7 @@ def test_pdf_live_state_is_preserved_per_product_when_switching_selection():
     current = {"index": 0}
     app._pdf_review_product_index = lambda: current["index"]
     app._pdf_review_refresh_tree = lambda: None
+    app._identity_for_index = lambda _index: None
 
     app._apply_pdf_live_event(0, {"type": "validated", "row": row_a})
     current["index"] = 1

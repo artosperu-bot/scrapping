@@ -77,6 +77,8 @@ class App(RealPdfReviewApp):
         self._price_live_sources: set[str] = set()
         self._price_live_reviewed = 0
         self._price_live_errors = 0
+        self._media_live_counts = {"pages": 0, "images": 0, "videos": 0, "downloaded": 0, "rejected": 0}
+        self._media_live_page_keys: set[str] = set()
         self._pdf_live_events: queue.Queue = queue.Queue()
         self._pdf_live_counts: dict[int, dict[str, int]] = {}
         super().__init__()
@@ -154,6 +156,60 @@ class App(RealPdfReviewApp):
         self._price_visual_offer_count += 1
         self._update_price_live_counter_text()
         return True
+
+    # ---------- Multimedia live observability ----------
+    def _build_media_tab(self):
+        super()._build_media_tab()
+        self.media_live_counters = tk.StringVar(value="Páginas: 0 · Imágenes: 0 · Videos: 0 · Descargados: 0 · Rechazados: 0")
+        label = ttk.Label(self.media_tab, textvariable=self.media_live_counters, font=("Segoe UI", 9, "bold"))
+        children = self.media_tab.winfo_children()
+        if children:
+            label.pack(fill="x", padx=2, pady=(0, 5), before=children[0])
+        else:
+            label.pack(fill="x", padx=2, pady=(0, 5))
+
+    def _start_media_indices(self, indices: list[int]):
+        self._media_live_counts = {"pages": 0, "images": 0, "videos": 0, "downloaded": 0, "rejected": 0}
+        self._media_live_page_keys.clear()
+        self._update_media_live_counter_text()
+        return super()._start_media_indices(indices)
+
+    def _update_media_live_counter_text(self):
+        var = self.__dict__.get("media_live_counters")
+        if var is None:
+            return
+        counts = self._media_live_counts
+        var.set(
+            f"Páginas: {counts['pages']} · Imágenes: {counts['images']} · Videos: {counts['videos']} · "
+            f"Descargados: {counts['downloaded']} · Rechazados: {counts['rejected']}"
+        )
+
+    def _observe_media_event(self, event: dict):
+        kind = str(event.get("type") or "")
+        if kind == "page" and str(event.get("status") or "") == "validated":
+            key = str(event.get("url") or "").strip()
+            if key and key not in self._media_live_page_keys:
+                self._media_live_page_keys.add(key)
+                self._media_live_counts["pages"] += 1
+        elif kind == "media":
+            item = event.get("item") or {}
+            media_type = str(item.get("media_type") or "").lower()
+            if media_type == "image":
+                self._media_live_counts["images"] += 1
+            elif media_type == "video":
+                self._media_live_counts["videos"] += 1
+            if item.get("downloaded") or item.get("local_path"):
+                self._media_live_counts["downloaded"] += 1
+        elif kind in {"media_rejected", "media_filtered"}:
+            self._media_live_counts["rejected"] += 1
+        self._update_media_live_counter_text()
+
+    def _apply_progress_event(self, event: dict):
+        # This method is invoked only by the Tk-thread progress queue consumer.
+        # The original media queue independently renders the gallery card as soon as
+        # the same `media` event arrives, before the product `done` event.
+        self._observe_media_event(event)
+        return super()._apply_progress_event(event)
 
     # ---------- PDF Review live observability ----------
     def _pdf_review_search(self):

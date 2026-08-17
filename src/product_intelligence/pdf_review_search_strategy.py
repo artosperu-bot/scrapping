@@ -7,33 +7,15 @@ from .models import ProductIdentity
 
 
 def build_review_query_tiers(identity: ProductIdentity, official_domain: str | None = None) -> list[list[str]]:
-    """Put distinct, high-value PDF intents inside the scarce runtime budget."""
-    brand = str(identity.brand or "").strip()
+    """Build the reviewed-PDF document phase after identity has already been resolved.
+
+    Canonical model queries intentionally precede identifier expansions. The resolver
+    owns identifier learning; this function owns document retrieval.
+    """
+    brand = str(identity.brand or identity.manufacturer or "").strip()
     model = core._descriptive_model(identity)
     strong_values = core._strong_identifiers(identity)
     domain = core._clean_official_domain(official_domain)
-
-    priority: list[str] = []
-    for strong in strong_values:
-        if domain:
-            priority.append(f'site:{domain} "{strong}" filetype:pdf')
-        priority.extend(
-            [
-                f'"{strong}" filetype:pdf',
-                f'"{strong}" specifications filetype:pdf',
-                f'"{strong}" datasheet filetype:pdf',
-                f'"{strong}" manual filetype:pdf',
-                f'"{strong}" support downloads',
-            ]
-        )
-        if brand and model:
-            priority.append(f'"{brand} {model}" filetype:pdf')
-        elif model:
-            priority.append(f'"{model}" filetype:pdf')
-        if domain and model:
-            priority.append(f'site:{domain} "{model}" filetype:pdf')
-
-    existing = core.build_document_query_tiers(identity, official_domain=official_domain)
     seen: set[str] = set()
 
     def unique(rows: list[str]) -> list[str]:
@@ -47,10 +29,50 @@ def build_review_query_tiers(identity: ProductIdentity, official_domain: str | N
             result.append(normalized)
         return result
 
+    canonical: list[str] = []
+    if model:
+        if domain:
+            canonical.append(f'site:{domain} "{model}" filetype:pdf')
+        if brand:
+            combined = f'"{brand} {model}"'
+            canonical.extend([
+                f"{combined} filetype:pdf",
+                f"{combined} specsheet",
+                f"{combined} manual",
+                f'"{brand} {model}" "quick start guide"',
+            ])
+        else:
+            canonical.extend([
+                f'"{model}" filetype:pdf',
+                f'"{model}" specsheet',
+                f'"{model}" manual',
+            ])
+        if domain:
+            canonical.extend([
+                f'site:{domain} "{model}" manual',
+                f'site:{domain} "{model}" datasheet',
+            ])
+
+    identifier_precision: list[str] = []
+    for strong in strong_values:
+        if domain:
+            identifier_precision.append(f'site:{domain} "{strong}" filetype:pdf')
+        identifier_precision.extend([
+            f'"{strong}" filetype:pdf',
+            f'"{strong}" specifications filetype:pdf',
+            f'"{strong}" datasheet filetype:pdf',
+            f'"{strong}" manual filetype:pdf',
+            f'"{strong}" support downloads',
+        ])
+
+    existing = core.build_document_query_tiers(identity, official_domain=official_domain)
     tiers: list[list[str]] = []
-    primary = unique(priority)
-    if primary:
-        tiers.append(primary)
+    first = unique(canonical)
+    if first:
+        tiers.append(first)
+    second = unique(identifier_precision)
+    if second:
+        tiers.append(second)
     for tier in existing:
         fallback = unique(list(tier))
         if fallback:
@@ -80,13 +102,7 @@ def _discover_official_pdp_documents(
     landing_budget: list[int] | None = None,
     inspected_landings: set[str] | None = None,
 ):
-    """Inspect exact manufacturer PDPs before spending the generic PDF-query budget.
-
-    A known global manufacturer domain is tried first. If that domain has no usable
-    exact PDP, the same identifier is searched with the resolved brand so regional
-    manufacturer domains can be discovered. Every regional candidate still has to pass
-    the shared likely-official and exact identity gates. No OCR/Mistral runs here.
-    """
+    """Inspect exact manufacturer PDPs before spending the generic PDF-query budget."""
     domain = core._clean_official_domain(official_domain)
     strong_values = core._strong_identifiers(identity)
     brand = str(identity.brand or identity.manufacturer or "").strip()
@@ -109,19 +125,8 @@ def _discover_official_pdp_documents(
 
         for query, strict_known_domain in query_specs:
             if trace:
-                trace.emit(
-                    "PDF_PDP_SEARCH",
-                    query=query,
-                    identifier=strong,
-                    domain=domain if strict_known_domain else "AUTO_BRAND_DOMAIN",
-                )
-            candidates = core.search_web_query_candidates(
-                identity,
-                query,
-                limit=per_query,
-                timeout=timeout,
-                trace=trace,
-            )
+                trace.emit("PDF_PDP_SEARCH", query=query, identifier=strong, domain=domain if strict_known_domain else "AUTO_BRAND_DOMAIN")
+            candidates = core.search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace)
             exact_landings = []
             for candidate in candidates:
                 canonical = core._canonical_url(candidate.url)
@@ -145,33 +150,14 @@ def _discover_official_pdp_documents(
 
                 exact_landings.append(accepted)
                 if trace:
-                    trace.emit(
-                        "PDF_PDP_VALIDATED",
-                        url=accepted.url,
-                        identifier=strong,
-                        identity_score=accepted.identity_score,
-                        authority="MANUFACTURER",
-                        domain=authority_domain,
-                    )
+                    trace.emit("PDF_PDP_VALIDATED", url=accepted.url, identifier=strong, identity_score=accepted.identity_score, authority="MANUFACTURER", domain=authority_domain)
 
             if not exact_landings or budget[0] >= core.MAX_LANDING_INSPECTIONS:
                 continue
-            resolved = core._resolve_valid_candidates(
-                identity,
-                exact_landings,
-                limit=limit,
-                timeout=timeout,
-                trace=trace,
-                landing_budget=budget,
-                inspected_landings=inspected,
-            )
+            resolved = core._resolve_valid_candidates(identity, exact_landings, limit=limit, timeout=timeout, trace=trace, landing_budget=budget, inspected_landings=inspected)
             if resolved:
                 if trace:
-                    trace.emit(
-                        "PDF_PDP_DOCUMENTS_RESOLVED",
-                        count=len(resolved),
-                        parent_count=len(exact_landings),
-                    )
+                    trace.emit("PDF_PDP_DOCUMENTS_RESOLVED", count=len(resolved), parent_count=len(exact_landings))
                 return resolved
     return []
 
@@ -191,16 +177,7 @@ def discover_review_product_documents(
     landing_budget = [0]
     inspected_landings: set[str] = set()
 
-    pdp_documents = _discover_official_pdp_documents(
-        identity,
-        official_domain=official_domain,
-        limit=limit,
-        timeout=timeout,
-        trace=trace,
-        seen=seen,
-        landing_budget=landing_budget,
-        inspected_landings=inspected_landings,
-    )
+    pdp_documents = _discover_official_pdp_documents(identity, official_domain=official_domain, limit=limit, timeout=timeout, trace=trace, seen=seen, landing_budget=landing_budget, inspected_landings=inspected_landings)
     if pdp_documents:
         return pdp_documents
 
@@ -213,13 +190,7 @@ def discover_review_product_documents(
             if query_attempts >= core.MAX_QUERY_ATTEMPTS:
                 break
             query_attempts += 1
-            candidates = core.search_web_query_candidates(
-                identity,
-                query,
-                limit=per_query,
-                timeout=timeout,
-                trace=trace,
-            )
+            candidates = core.search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace)
             for candidate in candidates:
                 canonical = core._canonical_url(candidate.url)
                 if canonical in seen:
@@ -234,63 +205,27 @@ def discover_review_product_documents(
                 if trace and not core._looks_like_direct_pdf(accepted.url) and accepted.identity_score >= 88:
                     trace.emit("PDF_EXACT_PDP_FOUND", url=accepted.url, identity_score=accepted.identity_score)
 
-            exact_landings = [
-                row for row in tier_valid
-                if not core._looks_like_direct_pdf(row.url) and row.identity_score >= 88
-            ]
+            exact_landings = [row for row in tier_valid if not core._looks_like_direct_pdf(row.url) and row.identity_score >= 88]
             if exact_landings and landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
                 if trace:
                     trace.emit("PDF_PDP_PIVOT", count=len(exact_landings), tier=tier_index + 1)
-                resolved = core._resolve_valid_candidates(
-                    identity,
-                    exact_landings,
-                    limit=limit,
-                    timeout=timeout,
-                    trace=trace,
-                    landing_budget=landing_budget,
-                    inspected_landings=inspected_landings,
-                )
+                resolved = core._resolve_valid_candidates(identity, exact_landings, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)
                 if resolved:
                     return resolved
 
             if len(tier_valid) >= max(3, limit) and landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
-                resolved = core._resolve_valid_candidates(
-                    identity,
-                    tier_valid,
-                    limit=limit,
-                    timeout=timeout,
-                    trace=trace,
-                    landing_budget=landing_budget,
-                    inspected_landings=inspected_landings,
-                )
+                resolved = core._resolve_valid_candidates(identity, tier_valid, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)
                 if resolved:
                     return resolved
 
         if tier_valid and landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
-            resolved = core._resolve_valid_candidates(
-                identity,
-                tier_valid,
-                limit=limit,
-                timeout=timeout,
-                trace=trace,
-                landing_budget=landing_budget,
-                inspected_landings=inspected_landings,
-            )
+            resolved = core._resolve_valid_candidates(identity, tier_valid, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)
             if resolved:
                 return resolved
 
     flattened = [query for tier in tiers for query in tier]
     if landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
-        browser_resolved = core._browser_document_pass(
-            identity,
-            queries=flattened,
-            seen=seen,
-            limit=limit,
-            timeout=timeout,
-            trace=trace,
-            landing_budget=landing_budget,
-            inspected_landings=inspected_landings,
-        )
+        browser_resolved = core._browser_document_pass(identity, queries=flattened, seen=seen, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)
         if browser_resolved:
             return browser_resolved
 
@@ -305,12 +240,4 @@ def discover_review_product_documents(
             fallback.append(accepted)
         if len(fallback) >= 6:
             break
-    return core._resolve_valid_candidates(
-        identity,
-        fallback,
-        limit=limit,
-        timeout=timeout,
-        trace=trace,
-        landing_budget=landing_budget,
-        inspected_landings=inspected_landings,
-    )
+    return core._resolve_valid_candidates(identity, fallback, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)

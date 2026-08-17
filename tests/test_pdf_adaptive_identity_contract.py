@@ -5,15 +5,15 @@ from product_intelligence.models import ProductIdentity
 def test_refinement_normalizes_raw_provider_tuples(monkeypatch):
     original = ProductIdentity(mpn="ABC123", model="ABC123")
     rows = [
-        ("https://acme.com/ABC123.html", "Acme Model X ABC123", "Official product"),
-        ("https://retailer-one.example/acme-model-x", "Acme Model X", "MPN ABC123"),
-        ("https://retailer-two.example/acme-model-x", "Acme Model X", "Part number ABC123"),
+        ("https://acme.com/ABC123.html", "Acme Model X1 ABC123", "Official product"),
+        ("https://retailer-one.example/acme-model-x1", "Acme Model X1", "MPN ABC123"),
+        ("https://retailer-two.example/acme-model-x1", "Acme Model X1", "Part number ABC123"),
     ]
     monkeypatch.setattr(refinement, "_provider_search", lambda *_a, **_k: rows)
     result = refinement.refine_code_identity(original, original, timeout=1, max_queries=1)
     assert result.candidates_used == 3
     assert (result.identity.brand or "").lower() == "acme"
-    assert "model x" in (result.identity.model or "").lower()
+    assert "model x1" in (result.identity.model or "").lower()
     assert result.official_domain_hint == "acme.com"
 
 
@@ -36,7 +36,7 @@ def test_snippet_bound_identifier_requires_descriptive_title_and_can_join_consen
 def test_single_retailer_hostname_cannot_become_product_brand(monkeypatch):
     raw = "ABC123"
     rows = [
-        ("https://phonix-usa.example/p/abc123", "Phonix USA Acme Model X", raw),
+        ("https://phonix-usa.example/p/abc123", "Phonix USA Acme Model X1", raw),
     ]
     monkeypatch.setattr(refinement, "_provider_search", lambda *_a, **_k: rows)
     original = ProductIdentity(mpn=raw, model=raw)
@@ -48,8 +48,8 @@ def test_single_retailer_hostname_cannot_become_product_brand(monkeypatch):
 def test_url_tokens_never_become_brand(monkeypatch):
     raw = "ABC123"
     rows = [
-        ("https://store-one.example/p/abc123", "www Acme Model X ABC123", raw),
-        ("https://store-two.example/p/abc123", "www Acme Model X ABC123", raw),
+        ("https://store-one.example/p/abc123", "www Acme Model X1 ABC123", raw),
+        ("https://store-two.example/p/abc123", "www Acme Model X1 ABC123", raw),
     ]
     monkeypatch.setattr(refinement, "_provider_search", lambda *_a, **_k: rows)
     original = ProductIdentity(mpn=raw, model=raw)

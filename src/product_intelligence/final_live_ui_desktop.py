@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from .audit_live_ui import AuditLiveUiMixin
 from .live_ui_desktop import App as LiveUiApp
+from .mercadolibre_desktop import MercadoLibreDesktopMixin
 
 
-class App(AuditLiveUiMixin, LiveUiApp):
-    """Final packaged shell: live rendering + structured audit + recovery."""
+class App(MercadoLibreDesktopMixin, AuditLiveUiMixin, LiveUiApp):
+    """Final packaged shell: live rendering + audit + automatic Mercado Libre OAuth."""
 
 
 def main():

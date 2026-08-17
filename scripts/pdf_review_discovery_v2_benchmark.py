@@ -48,11 +48,24 @@ def _candidate_payload(row) -> dict:
         "likely_official": candidate.likely_official,
         "identity_status": candidate.identity_status,
         "identity_reason": inspection.identity_reason,
+        "identity_provenance_bound": bool(inspection.identity_provenance_bound),
         "provenance_parent": str(getattr(provenance, "parent_url", "") or ""),
         "provenance_authority": str(getattr(provenance, "parent_authority", "") or ""),
         "pages": inspection.page_count,
         "sha256": row.sha256,
     }
+
+
+def _cross_product_contamination(part_number: str, candidates: list[dict]) -> bool:
+    siblings = {value.lower() for value in QA_PART_NUMBERS if value != part_number}
+    for candidate in candidates:
+        haystack = " ".join(
+            str(candidate.get(key) or "")
+            for key in ("url", "final_url", "title", "provenance_parent")
+        ).lower()
+        if any(sibling in haystack for sibling in siblings):
+            return True
+    return False
 
 
 def _failures(part_number: str, result, candidates: list[dict]) -> list[str]:
@@ -63,8 +76,20 @@ def _failures(part_number: str, result, candidates: list[dict]) -> list[str]:
         failures.append("BRAND_NOT_RESOLVED")
     if not resolved_model or resolved_model == part_number.lower():
         failures.append("DESCRIPTIVE_MODEL_NOT_RESOLVED")
+    if not str(result.resolved.official_domain or "").strip():
+        failures.append("OFFICIAL_DOMAIN_NOT_RESOLVED")
+    if result.discovered_count < 1:
+        failures.append("PRODUCT_ZERO_DISCOVERED_PDFS")
+    if result.downloaded_count < 1:
+        failures.append("PRODUCT_ZERO_DOWNLOAD_ATTEMPTS")
+    if result.validated_count < 1 or not candidates:
+        failures.append("PRODUCT_ZERO_VALIDATED_PDFS")
     if result.validated_count != len(candidates):
         failures.append("VALIDATED_COUNT_MISMATCH")
+    if _cross_product_contamination(part_number, candidates):
+        failures.append("CROSS_PRODUCT_CONTAMINATION")
+
+    trustworthy = False
     for candidate in candidates:
         if not str(candidate["final_url"] or candidate["url"]).lower().split("?", 1)[0].endswith(".pdf"):
             failures.append("NON_PDF_SURFACED")
@@ -72,8 +97,12 @@ def _failures(part_number: str, result, candidates: list[dict]) -> list[str]:
             failures.append("PAGE_LIMIT_BYPASSED")
         if candidate["provenance_parent"] and candidate["provenance_authority"].upper() != "MANUFACTURER":
             failures.append("UNTRUSTED_PROVENANCE_SURFACED")
-    if part_number == "JBLQ350WLBLKAM" and not candidates:
-        failures.append("KNOWN_PRODUCT_ZERO_VALIDATED_PDFS")
+        if candidate["identity_provenance_bound"] and candidate["provenance_authority"].upper() == "MANUFACTURER":
+            trustworthy = True
+        elif candidate["likely_official"] and str(candidate["identity_status"]).upper() in {"VALIDATED", "PROVENANCE_BOUND", "EXACT"}:
+            trustworthy = True
+    if candidates and not trustworthy:
+        failures.append("NO_TRUSTWORTHY_PRODUCT_PDF")
     return sorted(set(failures))
 
 
@@ -110,7 +139,7 @@ def run() -> dict:
                     duplicates=result.duplicate_count,
                     page_limit_rejected=result.page_limit_rejected_count,
                     candidates=candidates,
-                    diagnostic_log=diagnostics[-40:],
+                    diagnostic_log=diagnostics[-60:],
                     gate_failures=_failures(part_number, result, candidates),
                 )
             )
@@ -119,6 +148,12 @@ def run() -> dict:
         "status": "PASS" if all(not row.gate_failures for row in products) else "FAIL",
         "input_mode": "part_number_only_real_api",
         "contract": {
+            "products_required": len(QA_PART_NUMBERS),
+            "all_products_require_official_domain": True,
+            "all_products_require_discovered_pdf": True,
+            "all_products_require_download_attempt": True,
+            "all_products_require_validated_pdf": True,
+            "cross_product_contamination_allowed": False,
             "surface_only_pdf": True,
             "validate_before_surface": True,
             "ocr_before_review": 0,

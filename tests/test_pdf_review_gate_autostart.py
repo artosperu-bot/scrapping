@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from product_intelligence.real_pdf_review_shell import App
+from product_intelligence.final_live_ui_desktop import App as FinalApp
 
 
 class _Value:
@@ -73,3 +74,29 @@ def test_execute_starts_next_unconfirmed_product_instead_of_repeating_confirmed_
 
     assert result is None
     assert searched == [1]
+
+
+def test_review_gate_explains_in_global_log_that_execution_is_paused_for_pdf_search(monkeypatch):
+    app = object.__new__(FinalApp)
+    app.product_rows = [{}, {}, {}]
+    app.pdf_review_mode = _Value("reviewed")
+    app.use_pdf_evidence = _Value(True)
+    app._pdf_review_enforced = set()
+    app.pdf_review_product_box = _Box()
+    app.pdf_review_status = _Value("")
+    app._pdf_review_refresh_tree = lambda: None
+
+    emitted = []
+    stages = []
+    app.emit = emitted.append
+    app._excel_progress_stage = stages.append
+    app._show_workspace = lambda _key: None
+    app._pdf_review_search = lambda: None
+    monkeypatch.setattr("product_intelligence.real_pdf_review_shell.messagebox.showwarning", lambda *_args: None)
+
+    result = FinalApp.run(app)
+
+    assert result is None
+    assert any("[PDF REVIEW]" in line for line in emitted), emitted
+    assert any("paus" in line.lower() or "revisi" in line.lower() for line in emitted), emitted
+    assert any("PDF" in stage.upper() for stage in stages), stages

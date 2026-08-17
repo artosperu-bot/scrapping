@@ -130,3 +130,40 @@ def test_live_pdf_search_never_exceeds_eight_queries_across_authority_retry(monk
 
     assert result.validated_count == 0
     assert len(attempted) <= strategy.core.MAX_QUERY_ATTEMPTS, attempted
+
+
+def test_packaged_desktop_batch_retains_processed_pdf_under_output_pdf_evidence(monkeypatch, tmp_path):
+    """A P60 PDF used by the real desktop must survive after processing."""
+    from product_intelligence import pdf_review_batch as review_batch
+
+    identity = ProductIdentity(brand="Acme", model="Model X", mpn="ABC123")
+    item = SimpleNamespace(identity=identity)
+    captured = {}
+
+    monkeypatch.setattr(
+        review_batch,
+        "resolve_pdf_identity",
+        lambda *_a, **_k: SimpleNamespace(identity=identity),
+    )
+
+    def fake_process(_identity, url, *args, **kwargs):
+        captured["url"] = url
+        captured["download_dir"] = kwargs.get("download_dir")
+        return SimpleNamespace()
+
+    def fake_scrape(_item, _out_dir, **_kwargs):
+        return review_batch.batch_module.process_pdf_document(identity, "https://acme.example/manual.pdf")
+
+    def fake_run(*_args, **_kwargs):
+        return review_batch.batch_module.scrape_item(item, str(tmp_path / "json"))
+
+    monkeypatch.setattr(review_batch, "_BASE_PROCESS_PDF", fake_process)
+    monkeypatch.setattr(review_batch, "_BASE_SCRAPE_ITEM", fake_scrape)
+    monkeypatch.setattr(review_batch, "_BASE_RUN_BATCH", fake_run)
+
+    review_batch.run_batch_with_review()
+
+    expected = tmp_path / "pdf_evidence" / "ABC123"
+    assert captured["url"].endswith("manual.pdf")
+    assert captured["download_dir"] == expected
+    assert expected.is_dir()

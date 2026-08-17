@@ -156,10 +156,7 @@ def _model_ngrams(tokens: list[str]) -> list[tuple[str, int]]:
             words = tokens[start:start + length]
             if all(word in _GENERIC for word in words):
                 continue
-            phrase = " ".join(words)
-            # Short non-numeric model names are safe here because final selection
-            # still requires the same phrase on at least two independent domains.
-            out.append((phrase, start))
+            out.append((" ".join(words), start))
     return out
 
 
@@ -259,6 +256,22 @@ def refine_code_identity(
             collected.append(candidate)
 
     brand, brand_support, official_domain = _select_brand(collected, raw, brand_hint or None)
+    hint_key = _compact(brand_hint)
+    brand_key = _compact(brand)
+    brand_aligned = bool(
+        not hint_key
+        or not brand_key
+        or hint_key == brand_key
+        or hint_key.startswith(brand_key)
+        or brand_key.startswith(hint_key)
+    )
+    if brand_hint and not brand_aligned:
+        # A SERP consensus for another brand must never replace an already-resolved
+        # brand nor supply its domain. Keep refining the model against the trusted hint.
+        brand = brand_hint
+        brand_support = 0
+        official_domain = None
+
     model, model_support = _select_model(collected, raw, brand)
 
     updates = {}

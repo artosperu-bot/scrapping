@@ -194,6 +194,29 @@ def discover_validated_review_pdfs_live(
             log(f"[PDF CANDIDATE] {candidate.url} · title={candidate.title} · provenance={candidate.provenance}")
         try:
             emit("download", stage="DOWNLOAD", status="STARTED", url=candidate.url)
+
+            def on_inspection_stage(stage_name: str, **stage_data) -> None:
+                local_path = str(stage_data.get("local_path") or "")
+                final_url = str(stage_data.get("final_url") or candidate.url or "")
+                if stage_name == "downloaded":
+                    emit(
+                        "download",
+                        stage="DOWNLOAD",
+                        status="FINISHED",
+                        url=candidate.url,
+                        final_url=final_url,
+                        local_path=local_path,
+                    )
+                elif stage_name == "validating":
+                    emit(
+                        "validation",
+                        stage="VALIDATE",
+                        status="STARTED",
+                        url=candidate.url,
+                        final_url=final_url,
+                        local_path=local_path,
+                    )
+
             inspection = inspect_pdf_candidate(
                 resolved.identity,
                 candidate.url,
@@ -203,16 +226,9 @@ def discover_validated_review_pdfs_live(
                 discovery_score=candidate.discovery_score,
                 provenance=candidate.provenance,
                 identity_score=candidate.identity_score,
+                on_stage=on_inspection_stage,
             )
             downloaded += 1
-            emit(
-                "download",
-                stage="VALIDATE",
-                status="FINISHED",
-                url=candidate.url,
-                local_path=str(inspection.local_path or ""),
-                pages=inspection.page_count,
-            )
         except Exception as exc:
             rejected += 1
             error = f"{type(exc).__name__}: {exc}"

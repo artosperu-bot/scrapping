@@ -157,9 +157,8 @@ def _model_ngrams(tokens: list[str]) -> list[tuple[str, int]]:
             if all(word in _GENERIC for word in words):
                 continue
             phrase = " ".join(words)
-            # Two-token model names without digits (for example "Model X") are
-            # allowed here because _select_model still requires corroboration across
-            # at least two independent domains before they can win.
+            # Short non-numeric model names are safe here because final selection
+            # still requires the same phrase on at least two independent domains.
             out.append((phrase, start))
     return out
 
@@ -267,7 +266,14 @@ def refine_code_identity(
         updates["brand"] = brand
         if not current.manufacturer:
             updates["manufacturer"] = brand
-    if model and _compact(model) != _compact(raw):
+
+    current_model = str(current.model or current.product_name or "").strip()
+    current_model_needs_refinement = bool(
+        not current_model
+        or _compact(current_model) == _compact(raw)
+        or len(current_model) > 70
+    )
+    if model and _compact(model) != _compact(raw) and current_model_needs_refinement:
         updates["model"] = model
         product_name = str(current.product_name or "").strip()
         if not product_name or _compact(product_name) == _compact(raw) or len(product_name) > 100:

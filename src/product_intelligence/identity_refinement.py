@@ -59,13 +59,7 @@ def _tokenize(value: str) -> list[str]:
 
 
 def stable_model_core(value: str | None, *, raw: str | None = None, brand: str | None = None) -> str:
-    """Reduce verbose marketplace/search titles to a stable model phrase.
-
-    The function never invents tokens: it only removes the strong identifier, brand,
-    and trailing category/feature descriptors. It intentionally keeps the earliest
-    compact model-like prefix (for example ``Tune 530C``) so PDF/support searches do
-    not drift into generic phrases such as ``PC Gaming``.
-    """
+    """Reduce verbose marketplace/search titles to a stable model phrase."""
     text = unquote(str(value or "")).strip()
     if not text:
         return ""
@@ -94,9 +88,21 @@ def stable_model_core(value: str | None, *, raw: str | None = None, brand: str |
     return candidate
 
 
+def _descriptive_title_signal(title: str) -> bool:
+    tokens = _tokenize(title)
+    useful = [token for token in tokens if token not in _GENERIC and len(token) >= 2]
+    # Snippet matches are allowed only to bind a search row to the code. The title
+    # itself must still look like a real product identity, not a generic search page.
+    return len(useful) >= 2 and (any(any(ch.isdigit() for ch in token) for token in useful) or len(useful) >= 3)
+
+
 def _candidate_bound_to_raw(candidate: SearchCandidate, raw: str) -> bool:
     target = _compact(raw)
-    return bool(target and (target in _compact(candidate.title) or target in _compact(candidate.url)))
+    if not target:
+        return False
+    if target in _compact(candidate.title) or target in _compact(candidate.url):
+        return True
+    return bool(target in _compact(candidate.snippet) and _descriptive_title_signal(candidate.title))
 
 
 def _title_tokens(candidate: SearchCandidate, raw: str) -> list[str]:

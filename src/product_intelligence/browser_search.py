@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from urllib.parse import quote_plus, urlparse
+import html
+import re
+from urllib.parse import quote, quote_plus, urljoin, urlparse
 
 SEARCH_HOSTS = {
     "bing.com", "www.bing.com", "duckduckgo.com", "html.duckduckgo.com",
@@ -37,28 +39,72 @@ def _page_rows(page, selector: str, script: str):
 
 
 def _pdf_link_rows(page):
-    """Read rendered PDF-link candidates without letting navigation races escape."""
+    """Read rendered document candidates without relying on href alone."""
     try:
         return page.locator(
-            "a[href], [data-url], [data-href], [data-file], [data-download-url]"
+            "a[href], button, [data-url], [data-href], [data-file], [data-download-url], [onclick]"
         ).evaluate_all(
             """els => els.map(el => ({
               href: el.href || el.dataset?.url || el.dataset?.href || el.dataset?.file || el.dataset?.downloadUrl || '',
-              text: (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()
+              text: (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim(),
+              outer: el.outerHTML || ''
             }))"""
         )
     except Exception:
         return []
 
 
-def _launch_chromium(playwright):
-    """Return a browser when Chromium is installed; otherwise fail soft.
+def _normalize_embedded_text(value: str) -> str:
+    text = html.unescape(str(value or ""))
+    return (
+        text.replace("\\u002F", "/")
+        .replace("\\u002f", "/")
+        .replace("\\x2F", "/")
+        .replace("\\x2f", "/")
+        .replace("\\/", "/")
+    )
 
-    Playwright can be importable while its browser binary is still absent
-    (for example before the packaging workflow's install step). Browser
-    fallback is optional discovery capacity and must never crash the core
-    search pipeline merely because that optional binary is unavailable.
+
+def _absolute_pdf_url(raw: str, base_url: str) -> str | None:
+    value = _normalize_embedded_text(raw).strip().strip('"\'()[]{};,')
+    if ".pdf" not in value.lower():
+        return None
+    if value.startswith("//"):
+        value = "https:" + value
+    absolute = urljoin(base_url, value)
+    parsed = urlparse(absolute)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or ".pdf" not in parsed.path.lower():
+        return None
+    return quote(absolute, safe=":/?&=%#@+;,~")
+
+
+def extract_pdf_urls_from_text(text: str, base_url: str) -> list[tuple[str, str]]:
+    """Extract absolute/relative PDF URLs from HTML, JS or JSON text.
+
+    Product sites often keep download URLs in JSON or onclick/data attributes instead
+    of an anchor href. This helper intentionally only discovers URLs; downstream PDF
+    download and product-identity validation remain authoritative.
     """
+    normalized = _normalize_embedded_text(text)
+    candidates: list[str] = []
+    candidates.extend(match.group(1) for match in re.finditer(r'["\']([^"\']*?\.pdf(?:\?[^"\']*)?)["\']', normalized, re.I))
+    candidates.extend(
+        match.group(0)
+        for match in re.finditer(r'(?:https?:)?//[^\s"\'<>]+?\.pdf(?:\?[^\s"\'<>]*)?|/[^\s"\'<>]+?\.pdf(?:\?[^\s"\'<>]*)?', normalized, re.I)
+    )
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        url = _absolute_pdf_url(raw, base_url)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        rows.append((url, ""))
+    return rows
+
+
+def _launch_chromium(playwright):
+    """Return a browser when Chromium is installed; otherwise fail soft."""
     try:
         return playwright.chromium.launch(headless=True)
     except Exception:
@@ -107,11 +153,7 @@ def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
                 seen = set()
                 for search_url, selector, script in engines:
                     try:
-                        page.goto(
-                            search_url,
-                            wait_until="domcontentloaded",
-                            timeout=max(5, timeout) * 1000,
-                        )
+                        page.goto(search_url, wait_until="domcontentloaded", timeout=max(5, timeout) * 1000)
                     except Exception:
                         continue
                     raw = _page_rows(page, selector, script)
@@ -133,9 +175,9 @@ def browser_search(query: str, *, timeout: int = 20, limit: int = 20):
 def browser_pdf_links(url: str, *, timeout: int = 20, limit: int = 30) -> list[tuple[str, str]]:
     """Render a product/support landing and collect concrete PDF download URLs.
 
-    This is discovery only: page text is never returned as product evidence.
-    It exists for sites where document links are injected by JavaScript after
-    the static HTML response has loaded.
+    Discovery covers visible DOM attributes, rendered HTML/JSON and network responses.
+    It never treats page text as product evidence; every resulting URL still passes the
+    shared download and identity-validation pipeline before it can reach PDF Review.
     """
     if not str(url or "").startswith("http"):
         return []
@@ -154,30 +196,64 @@ def browser_pdf_links(url: str, *, timeout: int = 20, limit: int = 30) -> list[t
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 Chrome/151 Safari/537.36"
                 ))
+                responses = []
+                page.on("response", lambda response: responses.append(response))
                 try:
-                    page.goto(
-                        url,
-                        wait_until="domcontentloaded",
-                        timeout=max(5, timeout) * 1000,
-                    )
-                    page.wait_for_timeout(1200)
+                    page.goto(url, wait_until="domcontentloaded", timeout=max(5, timeout) * 1000)
+                    page.wait_for_timeout(1400)
+                    try:
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        page.wait_for_timeout(500)
+                    except Exception:
+                        pass
                 except Exception:
                     return []
 
-                raw = _pdf_link_rows(page)
                 found: list[tuple[str, str]] = []
-                seen = set()
-                for row in raw:
-                    href = str(row.get("href") or "").strip()
-                    if not href.startswith("http") or href in seen:
-                        continue
-                    if ".pdf" not in href.lower():
-                        continue
-                    seen.add(href)
-                    found.append((href, str(row.get("text") or "").strip()))
+                seen: set[str] = set()
+
+                def add(raw_url: str, label: str = ""):
+                    resolved = _absolute_pdf_url(raw_url, url)
+                    if not resolved or resolved in seen or len(found) >= limit:
+                        return
+                    seen.add(resolved)
+                    found.append((resolved, str(label or "").strip()))
+
+                for row in _pdf_link_rows(page):
+                    add(str(row.get("href") or ""), str(row.get("text") or ""))
+                    for embedded, _ in extract_pdf_urls_from_text(str(row.get("outer") or ""), url):
+                        add(embedded, str(row.get("text") or ""))
+
+                try:
+                    page_html = page.content()
+                except Exception:
+                    page_html = ""
+                for embedded, label in extract_pdf_urls_from_text(page_html, url):
+                    add(embedded, label)
+
+                # Modern support pages frequently load document metadata through JSON/XHR.
+                # Inspect a bounded set of completed responses after rendering so dynamic
+                # document URLs can be discovered without clicking arbitrary controls.
+                for response in responses[:120]:
                     if len(found) >= limit:
                         break
-                return found
+                    response_url = str(getattr(response, "url", "") or "")
+                    add(response_url)
+                    try:
+                        headers = response.headers
+                        content_type = str(headers.get("content-type") or "").lower()
+                    except Exception:
+                        content_type = ""
+                    if not any(token in content_type for token in ("json", "javascript", "text", "html")):
+                        continue
+                    try:
+                        body = response.text()
+                    except Exception:
+                        continue
+                    for embedded, label in extract_pdf_urls_from_text(body, response_url or url):
+                        add(embedded, label)
+
+                return found[:limit]
             finally:
                 browser.close()
     except Exception:

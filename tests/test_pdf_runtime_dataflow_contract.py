@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from product_intelligence.models import ProductIdentity
 from product_intelligence.pdf_evidence import discover_pdf_candidates
 from product_intelligence.pdf_review_search_strategy import build_review_query_tiers
@@ -45,3 +47,59 @@ def test_malformed_backslash_pdf_endpoint_is_rejected_before_candidate_extractio
     urls = [row.url for row in discover_pdf_candidates(html, "https://retailer.example/product/abc123")]
     assert "https://retailer.example/%5C.pdf" not in urls
     assert "https://retailer.example/docs/endurance-run-3-manual.pdf" in urls
+
+
+def test_raw_resolved_pdf_links_do_not_stop_review_discovery_before_later_strategy(monkeypatch):
+    """A raw child PDF is discovery evidence, not a validated-document stop condition."""
+    from product_intelligence import pdf_review_search_strategy as strategy
+
+    identity = ProductIdentity(brand="Acme", model="Model X", mpn="ABC123")
+    attempted: list[str] = []
+
+    fake_parent = SimpleNamespace(
+        url="https://acme.example/model-x",
+        title="Acme Model X ABC123",
+        snippet="",
+        score=1.0,
+        likely_official=True,
+        identity_score=100,
+    )
+    later_direct = SimpleNamespace(
+        url="https://acme.example/docs/model-x-specification-sheet.pdf",
+        title="Acme Model X Specification Sheet ABC123",
+        snippet="",
+        score=1.0,
+        likely_official=True,
+        identity_score=100,
+    )
+    fake_child = SimpleNamespace(
+        url="https://acme.example/static/generated.pdf",
+        title="generated",
+        snippet="",
+        score=.5,
+        likely_official=True,
+        identity_score=85,
+    )
+
+    monkeypatch.setattr(strategy, "build_review_query_tiers", lambda *_a, **_k: [["first-strategy", "later-strategy"]])
+    monkeypatch.setattr(strategy, "_discover_official_pdp_documents", lambda *_a, **_k: [])
+
+    def search(_identity, query, **_kwargs):
+        attempted.append(query)
+        return [fake_parent] if query == "first-strategy" else [later_direct]
+
+    monkeypatch.setattr(strategy.core, "search_web_query_candidates", search)
+    monkeypatch.setattr(strategy.core, "_accept_search_candidate", lambda _i, row, trace=None: row)
+
+    def resolve(_identity, rows, **_kwargs):
+        if any(row.url == fake_parent.url for row in rows):
+            return [fake_child]
+        return list(rows)
+
+    monkeypatch.setattr(strategy.core, "_resolve_valid_candidates", resolve)
+
+    rows = strategy.discover_review_product_documents(identity, limit=4, timeout=1)
+    urls = [row.url for row in rows]
+
+    assert attempted == ["first-strategy", "later-strategy"]
+    assert later_direct.url in urls

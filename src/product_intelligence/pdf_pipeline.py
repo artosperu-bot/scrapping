@@ -318,7 +318,7 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
                 refined.brand_support_domains >= 2
                 and refined_brand
                 and brand_sanity_pass(refined_brand, raw=raw_value)
-                and (not current_brand_sane or not base.brand)
+                and (not current_brand_sane or not base.brand or suspicious_brand)
             ):
                 updates["brand"] = refined.identity.brand or refined_brand
                 if refined.identity.manufacturer and brand_sanity_pass(refined.identity.manufacturer, raw=raw_value):

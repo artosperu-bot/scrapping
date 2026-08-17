@@ -7,12 +7,7 @@ from .models import ProductIdentity
 
 
 def build_review_query_tiers(identity: ProductIdentity, official_domain: str | None = None) -> list[list[str]]:
-    """Put distinct, high-value PDF intents inside the scarce runtime budget.
-
-    The core ladder remains the fallback source of proven queries. This review-specific
-    ordering prevents equivalent plain `MPN pdf` variants from consuming slots before
-    official-domain, specifications, datasheet, manual, and support intents run.
-    """
+    """Put distinct, high-value PDF intents inside the scarce runtime budget."""
     brand = str(identity.brand or "").strip()
     model = core._descriptive_model(identity)
     strong_values = core._strong_identifiers(identity)
@@ -69,6 +64,11 @@ def _on_official_domain(url: str, official_domain: str) -> bool:
     return bool(host and domain and (host == domain or host.endswith("." + domain)))
 
 
+def _landing_domain(url: str) -> str | None:
+    host = (urlparse(str(url or "")).hostname or "").lower().removeprefix("www.")
+    return core._clean_official_domain(host) if host else None
+
+
 def _discover_official_pdp_documents(
     identity: ProductIdentity,
     *,
@@ -82,13 +82,16 @@ def _discover_official_pdp_documents(
 ):
     """Inspect exact manufacturer PDPs before spending the PDF-query budget.
 
-    The strong identifier proves the parent product page. Linked documents can then
-    inherit manufacturer provenance even when their filenames do not repeat the MPN,
-    EAN, UPC or GTIN. This pass never performs OCR or Mistral work.
+    If the identity resolver already knows the manufacturer domain, use a strict
+    site-scoped query. If it does not, use the resolved brand + strong identifier to
+    discover a likely-official landing first. The landing still has to pass the same
+    identity score and manufacturer-likelihood gates before any linked PDF inherits
+    provenance. Discovery performs no OCR or Mistral work.
     """
     domain = core._clean_official_domain(official_domain)
     strong_values = core._strong_identifiers(identity)
-    if not domain or not strong_values:
+    brand = str(identity.brand or identity.manufacturer or "").strip()
+    if not strong_values or (not domain and not brand):
         return []
 
     shared_seen = seen if seen is not None else set()
@@ -97,9 +100,14 @@ def _discover_official_pdp_documents(
     per_query = max(4, min(max(1, int(limit)), 6))
 
     for strong in strong_values[:2]:
-        query = f'site:{domain} "{strong}"'
+        query = f'site:{domain} "{strong}"' if domain else f'"{strong}" "{brand}"'
         if trace:
-            trace.emit("PDF_PDP_SEARCH", query=query, identifier=strong, domain=domain)
+            trace.emit(
+                "PDF_PDP_SEARCH",
+                query=query,
+                identifier=strong,
+                domain=domain or "AUTO_BRAND_DOMAIN",
+            )
         candidates = core.search_web_query_candidates(
             identity,
             query,
@@ -116,10 +124,20 @@ def _discover_official_pdp_documents(
             accepted = core._accept_search_candidate(identity, candidate, trace=trace)
             if accepted is None or core._looks_like_direct_pdf(accepted.url):
                 continue
-            if not accepted.likely_official or not _on_official_domain(accepted.url, domain):
-                continue
             if accepted.identity_score < 88:
                 continue
+            if domain:
+                if not accepted.likely_official or not _on_official_domain(accepted.url, domain):
+                    continue
+                authority_domain = domain
+            else:
+                # `likely_official` is assigned by the shared discovery authority
+                # logic from brand/host evidence; do not manufacture authority here.
+                if not accepted.likely_official:
+                    continue
+                authority_domain = _landing_domain(accepted.url)
+                if not authority_domain:
+                    continue
             exact_landings.append(accepted)
             if trace:
                 trace.emit(
@@ -128,6 +146,7 @@ def _discover_official_pdp_documents(
                     identifier=strong,
                     identity_score=accepted.identity_score,
                     authority="MANUFACTURER",
+                    domain=authority_domain,
                 )
 
         if not exact_landings or budget[0] >= core.MAX_LANDING_INSPECTIONS:

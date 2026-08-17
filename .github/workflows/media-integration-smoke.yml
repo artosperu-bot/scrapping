@@ -26,8 +26,6 @@ jobs:
       - name: Install Chromium
         run: python -m playwright install chromium
       - name: Run real multimedia smoke
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: '0'
         run: |
           python - <<'PY'
           from collections import Counter
@@ -46,6 +44,7 @@ jobs:
           empty_products = []
           official_counts = {}
           official_page_not_validated = []
+          browser_enrichment_success = []
 
           for identity, official_url in cases:
               events = []
@@ -71,6 +70,12 @@ jobs:
               )
               if not manual_official_validated:
                   official_page_not_validated.append(identity.mpn)
+              if any(
+                  e.get('type') == 'page' and e.get('source') == 'browser_enrichment'
+                  and e.get('status') == 'validated' and int(e.get('eligible_media') or 0) > 0
+                  for e in events
+              ):
+                  browser_enrichment_success.append(identity.mpn)
               if not accepted:
                   empty_products.append(identity.mpn)
 
@@ -83,7 +88,7 @@ jobs:
               print('\n===', identity.mpn, 'accepted=', len(accepted), 'official=', len(official), '===')
               for event in events:
                   if event.get('type') in {'page','error'}:
-                      print('EVENT', {k:event.get(k) for k in ('type','url','source','status','official_page','error') if event.get(k) is not None})
+                      print('EVENT', {k:event.get(k) for k in ('type','url','source','status','official_page','eligible_media','error') if event.get(k) is not None})
               reasons = Counter(e.get('reason') for e in events if e.get('type') == 'media_rejected')
               print('REJECT_REASONS=', dict(reasons))
               filtered = [e for e in events if e.get('type') == 'media_filtered']
@@ -93,6 +98,7 @@ jobs:
 
           print('TOTAL_ACCEPTED_MEDIA=', total)
           print('OFFICIAL_COUNTS=', official_counts)
+          print('BROWSER_ENRICHMENT_SUCCESS=', browser_enrichment_success)
           print('SMALL_ACCEPTED=', small)
           print('EMPTY_PRODUCTS=', empty_products)
           print('OFFICIAL_PAGE_NOT_VALIDATED=', official_page_not_validated)
@@ -103,6 +109,8 @@ jobs:
               raise SystemExit(f'Official manual pages were not validated first: {official_page_not_validated}')
           if empty_products:
               raise SystemExit(f'Products with no validated media after official-first fallback: {empty_products}')
+          if not browser_enrichment_success:
+              raise SystemExit('Coverage-aware browser enrichment never produced usable validated media')
           PY
       - uses: actions/upload-artifact@v4
         if: always()

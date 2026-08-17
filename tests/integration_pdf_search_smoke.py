@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from product_intelligence.document_discovery import MAX_QUERY_ATTEMPTS
 from product_intelligence.part_number_pdf_search import search_product_pdfs_by_part_number
 
 PART_NUMBERS = ["JBLQ350WLBLKAM", "JBLENDURRUN3BTBAM", "JBLT530CBLKAM"]
@@ -28,9 +29,10 @@ def main() -> int:
                 canonical_used = bool(model) and any(model.lower() in q.lower() for q in queries)
                 gates = []
                 if result.validated_count < 1: gates.append("ZERO_VALIDATED_PDF")
+                if len(queries) > MAX_QUERY_ATTEMPTS: gates.append("QUERY_BUDGET_EXCEEDED")
                 if any("connect.facebook.net" in u.lower() for u in urls): gates.append("FALSE_FACEBOOK_PDF_CANDIDATE")
                 if part == "JBLENDURRUN3BTBAM" and (model.lower() == part.lower() or not canonical_used): gates.append("CANONICAL_MODEL_NOT_USED_IN_QUERY")
-                row = {"part_number": part, "identity_resolved": bool(ident.brand and model and model.lower() != part.lower()), "brand": ident.brand, "canonical_model": model or None, "identity_confidence": result.resolved.confidence, "official_domain": result.resolved.official_domain, "queries": len(queries), "queries_attempted": queries, "candidate_urls": urls, "validated_pdfs": result.validated_count, "official_pdfs": sum(bool(x.candidate.likely_official) for x in result.candidates), "provenance_bound": sum(bool(x.inspection.identity_provenance_bound) for x in result.candidates), "downloads_ok": result.downloaded_count, "downloads_rejected": result.rejected_count, "stop_reason": "SUFFICIENT_VALIDATED_PDFS" if result.validated_count else "SEARCH_BUDGET_EXHAUSTED", "gate_failures": gates, "error": None}
+                row = {"part_number": part, "identity_resolved": bool(ident.brand and model and model.lower() != part.lower()), "brand": ident.brand, "canonical_model": model or None, "identity_confidence": result.resolved.confidence, "official_domain": result.resolved.official_domain, "queries": len(queries), "query_budget": MAX_QUERY_ATTEMPTS, "queries_attempted": queries, "candidate_urls": urls, "validated_pdfs": result.validated_count, "official_pdfs": sum(bool(x.candidate.likely_official) for x in result.candidates), "provenance_bound": sum(bool(x.inspection.identity_provenance_bound) for x in result.candidates), "downloads_ok": result.downloaded_count, "downloads_rejected": result.rejected_count, "stop_reason": "SUFFICIENT_VALIDATED_PDFS" if result.validated_count else "SEARCH_BUDGET_EXHAUSTED", "gate_failures": gates, "error": None}
                 failures += bool(gates)
             except Exception as exc:
                 failures += 1

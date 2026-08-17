@@ -8,10 +8,11 @@ from .pdf_pipeline import (
     ReviewDiscoveryResult,
     ValidatedPdfCandidate,
     _review_candidate,
-    discover_pdf_documents,
+    resolve_pdf_identity,
     sha256_file,
 )
 from .pdf_review import PdfReviewCandidate, inspect_pdf_candidate
+from .pdf_review_search_strategy import discover_review_product_documents
 
 
 def discover_validated_review_pdfs_live(
@@ -23,14 +24,20 @@ def discover_validated_review_pdfs_live(
     log: Callable[[str], None] | None = None,
     on_event: Callable[[dict], None] | None = None,
 ) -> ReviewDiscoveryResult:
-    """Live equivalent of review discovery; emits structured events without OCR/Mistral."""
+    """Live review discovery: identity -> PDF search/download/validation; no OCR/Mistral."""
 
     def emit(event_type: str, **payload):
         if on_event:
             on_event({"type": event_type, **payload})
 
     emit("stage", stage="IDENTITY", message="Resolviendo identidad…")
-    resolved, rows = discover_pdf_documents(identity, limit=limit, timeout=timeout)
+    resolved = resolve_pdf_identity(identity, timeout=timeout)
+    rows = [] if resolved.status == "CONFLICT" else discover_review_product_documents(
+        resolved.identity,
+        limit=limit,
+        timeout=timeout,
+        official_domain=resolved.official_domain,
+    )
     emit(
         "identity",
         stage="SEARCH",

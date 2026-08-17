@@ -16,10 +16,14 @@ _GENERIC = {
     "black", "white", "blue", "red", "green", "gray", "grey", "silver", "gold", "azul", "negro",
     "blanco", "rojo", "wireless", "wired", "headphone", "headphones", "headset", "earphones",
     "audifono", "audifonos", "auriculares", "speaker", "smartphone", "laptop", "monitor", "printer",
+    "gaming", "pc", "waterproof", "sports", "bluetooth", "usb", "inalambrico", "inalambricos",
 }
 _BRAND_GENERIC = _GENERIC | {
-    "gaming", "waterproof", "sports", "sensor", "cable", "adapter", "charger", "camera", "device",
-    "technology", "audio", "pc", "usb", "bluetooth", "inalambrico", "inalambricos",
+    "sensor", "cable", "adapter", "charger", "camera", "device", "technology", "audio",
+}
+_MODEL_DESCRIPTOR_STOP = _GENERIC | {
+    "hi", "res", "hires", "on", "over", "ear", "in", "with", "compatible", "compatibility",
+    "ip65", "ip67", "ip68", "ip69", "tws", "true", "stereo", "color", "colour",
 }
 
 
@@ -52,6 +56,42 @@ def _root(host: str | None) -> str:
 
 def _tokenize(value: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", key_norm(unquote(value or "")))
+
+
+def stable_model_core(value: str | None, *, raw: str | None = None, brand: str | None = None) -> str:
+    """Reduce verbose marketplace/search titles to a stable model phrase.
+
+    The function never invents tokens: it only removes the strong identifier, brand,
+    and trailing category/feature descriptors. It intentionally keeps the earliest
+    compact model-like prefix (for example ``Tune 530C``) so PDF/support searches do
+    not drift into generic phrases such as ``PC Gaming``.
+    """
+    text = unquote(str(value or "")).strip()
+    if not text:
+        return ""
+    for removable in (raw, brand):
+        token = str(removable or "").strip()
+        if token:
+            text = re.sub(re.escape(token), " ", text, flags=re.I)
+    tokens = re.findall(r"[A-Za-z0-9]+", text)
+    core: list[str] = []
+    for token in tokens:
+        normalized = key_norm(token)
+        if not normalized:
+            continue
+        if core and normalized in _MODEL_DESCRIPTOR_STOP:
+            break
+        if not core and normalized in _MODEL_DESCRIPTOR_STOP:
+            continue
+        core.append(token)
+        if len(core) >= 5:
+            break
+    while core and key_norm(core[-1]) in _MODEL_DESCRIPTOR_STOP:
+        core.pop()
+    candidate = " ".join(core).strip()
+    if len(core) < 2 or _compact(candidate) == _compact(raw):
+        return ""
+    return candidate
 
 
 def _candidate_bound_to_raw(candidate: SearchCandidate, raw: str) -> bool:
@@ -184,6 +224,8 @@ def _select_model(candidates: list[SearchCandidate], raw: str, brand: str | None
             continue
         phrase = display[key]
         words = phrase.split()
+        if words and all(key_norm(word) in _MODEL_DESCRIPTOR_STOP for word in words):
+            continue
         score = support * 10.0
         score += 4.0 if any(any(ch.isdigit() for ch in word) for word in words) else 0.0
         score += max(0, 4 - earliest.get(key, 4)) * 1.5
@@ -271,8 +313,6 @@ def refine_code_identity(
         or selected_key.startswith(hint_key)
     )
     if brand_hint and _plausible_brand_hint(brand_hint) and not aligned:
-        # A clean existing manufacturer name is retained against an unrelated SERP
-        # brand/domain. Noisy labels containing colors/category terms remain repairable.
         brand = brand_hint
         brand_support = 0
         official_domain = None
@@ -291,11 +331,16 @@ def refine_code_identity(
         or _compact(current_model) == _compact(raw)
         or len(current_model) > 70
     )
+    stable_current = stable_model_core(current_model, raw=raw, brand=brand or brand_hint)
+    if current_model_needs_refinement and stable_current:
+        updates["model"] = stable_current
+        updates["product_name"] = (f"{brand or brand_hint} {stable_current}" if (brand or brand_hint) else stable_current).strip()
+
     if model and _compact(model) != _compact(raw) and current_model_needs_refinement:
-        updates["model"] = model
-        product_name = str(current.product_name or "").strip()
-        if not product_name or _compact(product_name) == _compact(raw) or len(product_name) > 100:
-            updates["product_name"] = (f"{brand} {model}" if brand else model).strip()
+        selected_core = stable_model_core(model, raw=raw, brand=brand or brand_hint) or model
+        if not all(token in _MODEL_DESCRIPTOR_STOP for token in _tokenize(selected_core)):
+            updates["model"] = selected_core
+            updates["product_name"] = (f"{brand or brand_hint} {selected_core}" if (brand or brand_hint) else selected_core).strip()
 
     identity = current.model_copy(update=updates) if updates else current
     return IdentityRefinement(identity, official_domain, len(collected), brand_support, model_support)

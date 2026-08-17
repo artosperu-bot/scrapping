@@ -13,7 +13,7 @@ from .pdf_pipeline import (
 )
 from .pdf_review import PdfReviewCandidate, inspect_pdf_candidate
 from .pdf_review_search_strategy import discover_review_product_documents
-from .pdf_search_trace import PdfSearchTrace
+from .pdf_search_trace import PdfSearchTrace, format_trace_lines
 
 
 def discover_validated_review_pdfs_live(
@@ -71,6 +71,8 @@ def discover_validated_review_pdfs_live(
             f"mpn={resolved.identity.mpn or '-'} status={resolved.status} domain={resolved.official_domain or '-'}"
         )
         log(f"[IDENTITY DIAGNOSTICS] {resolved.diagnostics}")
+        for line in format_trace_lines(trace):
+            log(line)
 
     validated: list[ValidatedPdfCandidate] = []
     rejected = 0

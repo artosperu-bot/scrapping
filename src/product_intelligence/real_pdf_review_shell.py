@@ -124,13 +124,27 @@ class App(BasePdfReviewApp):
                 self.pdf_review_product_box.current(first)
                 self._pdf_review_refresh_tree()
             pending = ", ".join(str(index + 1) for index in missing)
-            message = (
-                "Revisión PDF pendiente. Confirma una decisión para cada producto antes de ejecutar "
-                f"(productos pendientes: {pending}). Confirmar 0 PDFs es válido. "
-                "El modo revisado nunca activa PDF automático por falta de selección."
+
+            # Read the optional widget directly from the instance dictionary. Tk's
+            # __getattr__ delegates unknown attributes through self.tk, which is unsafe
+            # before Tk initialization and unnecessary for this duplicate-search guard.
+            search_button = self.__dict__.get("pdf_review_search_button")
+            if search_button is not None:
+                try:
+                    if search_button.instate(["disabled"]):
+                        self.pdf_review_status.set(
+                            f"Buscando PDFs para revisión · producto {first + 1} · pendientes: {pending}. "
+                            "El procesamiento seguirá bloqueado hasta confirmar la revisión."
+                        )
+                        return None
+                except Exception:
+                    pass
+
+            self.pdf_review_status.set(
+                f"Buscando PDFs para revisión antes de ejecutar · producto {first + 1} · pendientes: {pending}. "
+                "Selecciona 0, 1 o varios y confirma; OCR/Mistral no se ejecutan durante esta búsqueda."
             )
-            self.pdf_review_status.set(message)
-            messagebox.showwarning("Revisión PDF pendiente", message)
+            self._pdf_review_search()
             return None
         return super().run()
 

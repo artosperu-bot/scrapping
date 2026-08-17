@@ -7,7 +7,12 @@ from .models import ProductIdentity
 
 
 def build_review_query_tiers(identity: ProductIdentity, official_domain: str | None = None) -> list[list[str]]:
-    """Build the reviewed-PDF document phase after identity has already been resolved."""
+    """Build a bounded, strategy-reserved document query plan after identity resolution.
+
+    MAX_QUERY_ATTEMPTS remains authoritative. The first tier intentionally reserves
+    slots across independent high-value strategies so verbose canonical variants
+    cannot evict official-identifier, support, manual, spec or datasheet intent.
+    """
     brand = str(identity.brand or identity.manufacturer or "").strip()
     model = core._descriptive_model(identity)
     strong_values = core._strong_identifiers(identity)
@@ -24,30 +29,46 @@ def build_review_query_tiers(identity: ProductIdentity, official_domain: str | N
                 result.append(normalized)
         return result
 
+    primary_strong = strong_values[0] if strong_values else ""
+    combined = f'"{brand} {model}"' if brand and model else f'"{model}"' if model else ""
+
+    # Reserved runtime slots. With the current budget of eight, each major strategy
+    # gets representation before any verbose fallback expansion is allowed to run.
+    reserved: list[str] = []
+    if domain and model:
+        reserved.append(f'site:{domain} "{model}" filetype:pdf')
+    if domain and primary_strong:
+        reserved.append(f'site:{domain} "{primary_strong}" filetype:pdf')
+    if combined:
+        reserved.extend([
+            f"{combined} specsheet",
+            f"{combined} manual",
+            f"{combined} support downloads",
+        ])
+    if primary_strong:
+        reserved.append(f'"{primary_strong}" filetype:pdf')
+    if combined:
+        reserved.extend([
+            f"{combined} datasheet",
+            f"{combined} filetype:pdf",
+        ])
+
     canonical: list[str] = []
     if model:
         if domain:
-            canonical.append(f'site:{domain} "{model}" filetype:pdf')
-        if brand:
-            combined = f'"{brand} {model}"'
+            canonical.extend([
+                f'site:{domain} "{model}" filetype:pdf',
+                f'site:{domain} "{model}" manual',
+                f'site:{domain} "{model}" datasheet',
+            ])
+        if combined:
             canonical.extend([
                 f"{combined} filetype:pdf",
                 f"{combined} specsheet",
+                f"{combined} datasheet",
                 f"{combined} manual",
                 f"{combined} support downloads",
                 f'{combined} "quick start guide"',
-            ])
-        else:
-            canonical.extend([
-                f'"{model}" filetype:pdf',
-                f'"{model}" specsheet',
-                f'"{model}" manual',
-                f'"{model}" support downloads',
-            ])
-        if domain:
-            canonical.extend([
-                f'site:{domain} "{model}" manual',
-                f'site:{domain} "{model}" datasheet',
             ])
 
     identifier_precision: list[str] = []
@@ -63,7 +84,7 @@ def build_review_query_tiers(identity: ProductIdentity, official_domain: str | N
         ])
 
     tiers: list[list[str]] = []
-    for rows in [canonical, identifier_precision, *core.build_document_query_tiers(identity, official_domain=official_domain)]:
+    for rows in [reserved, canonical, identifier_precision, *core.build_document_query_tiers(identity, official_domain=official_domain)]:
         cleaned = unique(list(rows))
         if cleaned:
             tiers.append(cleaned)

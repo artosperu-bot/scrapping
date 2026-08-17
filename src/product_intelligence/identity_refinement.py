@@ -145,7 +145,8 @@ def _select_brand(candidates:list[SearchCandidate],raw:str,current:str|None)->tu
     official_domain=None; brand_key=_compact(brand)
     for candidate in candidates:
         domain=_root(urlparse(candidate.url).hostname); root_label=_compact(domain.split(".",1)[0])
-        if brand_key and root_label and (brand_key==root_label or brand_key in root_label): official_domain=domain; break
+        if brand_key and root_label and brand_key==root_label:
+            official_domain=domain; break
     return brand,support,official_domain
 
 def _model_sequences(candidate:SearchCandidate,raw:str,brand:str|None)->list[list[str]]:

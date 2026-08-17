@@ -103,3 +103,30 @@ def test_raw_resolved_pdf_links_do_not_stop_review_discovery_before_later_strate
 
     assert attempted == ["first-strategy", "later-strategy"]
     assert later_direct.url in urls
+
+
+def test_live_pdf_search_never_exceeds_eight_queries_across_authority_retry(monkeypatch, tmp_path):
+    """MAX_QUERY_ATTEMPTS is a per-product end-to-end budget, not a per-pass budget."""
+    from product_intelligence import live_pdf_discovery as live
+    from product_intelligence import pdf_review_search_strategy as strategy
+    from product_intelligence.pdf_pipeline import ResolvedPdfIdentity
+
+    identity = ProductIdentity(brand="Acme", model="Model X", mpn="ABC123")
+    resolved = ResolvedPdfIdentity(identity, identity, None, "RESOLVED", .95, {})
+    attempted: list[str] = []
+
+    monkeypatch.setattr(live, "resolve_pdf_identity", lambda *_a, **_k: resolved)
+    monkeypatch.setattr(live, "_brand_aligned_domain", lambda *_a, **_k: "acme.com")
+
+    def search(_identity, query, **_kwargs):
+        attempted.append(query)
+        return []
+
+    monkeypatch.setattr(strategy.core, "search_web_query_candidates", search)
+    monkeypatch.setattr(strategy.core, "_browser_document_pass", lambda *_a, **_k: [])
+    monkeypatch.setattr(strategy.core, "search_web", lambda *_a, **_k: [])
+
+    result = live.discover_validated_review_pdfs_live(identity, tmp_path, limit=8, timeout=1)
+
+    assert result.validated_count == 0
+    assert len(attempted) <= strategy.core.MAX_QUERY_ATTEMPTS, attempted

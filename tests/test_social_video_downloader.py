@@ -101,3 +101,37 @@ def test_empty_or_non_mp4_output_is_not_success(monkeypatch, tmp_path):
     monkeypatch.setattr("product_intelligence.social_video_downloader.resolve_ffmpeg_exe", lambda: None)
     with pytest.raises(VideoDownloadError, match="OUTPUT_MP4_NOT_FOUND"):
         download_social_video("https://example.com/video", tmp_path)
+
+
+def test_packaged_nonstandard_ffmpeg_binary_is_passed_as_exact_executable(monkeypatch, tmp_path):
+    calls = {}
+    bundled = tmp_path / "ffmpeg-win64-v7.0.exe"
+    bundled.write_bytes(b"fake-binary")
+
+    class FakeYDL:
+        def __init__(self, options):
+            calls["options"] = options
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def extract_info(self, url, download=True):
+            target = tmp_path / "Demo [ffmpeg-path].mp4"
+            target.write_bytes(b"mp4-data")
+            return {
+                "id": "ffmpeg-path",
+                "title": "Demo",
+                "extractor_key": "Youtube",
+                "webpage_url": url,
+                "requested_downloads": [{"filepath": str(target)}],
+            }
+        def prepare_filename(self, _info):
+            return str(tmp_path / "Demo [ffmpeg-path].mp4")
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYDL)
+    monkeypatch.setattr(
+        "product_intelligence.social_video_downloader.resolve_ffmpeg_exe",
+        lambda: str(bundled),
+    )
+
+    download_social_video("https://www.youtube.com/watch?v=ffmpeg-path", tmp_path)
+
+    assert calls["options"]["ffmpeg_location"] == str(bundled)

@@ -207,6 +207,39 @@ def _select_model(candidates: list[SearchCandidate], raw: str, brand: str | None
     return display[key], support
 
 
+def _normalize_provider_candidate(row) -> SearchCandidate | None:
+    """Normalize the raw discovery provider contract into the refinement contract.
+
+    `discovery._provider_search()` intentionally returns lightweight
+    ``(url, title, snippet)`` tuples, while tests and future callers may already pass
+    ``SearchCandidate`` objects. Identity refinement consumes one canonical shape so
+    neither source representation can leak past this boundary.
+    """
+    if isinstance(row, SearchCandidate):
+        return row
+    if isinstance(row, (tuple, list)) and row:
+        url = str(row[0] or "").strip()
+        if not url:
+            return None
+        return SearchCandidate(
+            url=url,
+            title=str(row[1] or "") if len(row) > 1 else "",
+            snippet=str(row[2] or "") if len(row) > 2 else "",
+        )
+    if isinstance(row, dict):
+        url = str(row.get("url") or "").strip()
+        if not url:
+            return None
+        return SearchCandidate(
+            url=url,
+            title=str(row.get("title") or ""),
+            snippet=str(row.get("snippet") or ""),
+            score=float(row.get("score") or 0.0),
+            likely_official=bool(row.get("likely_official", False)),
+        )
+    return None
+
+
 def refine_code_identity(
     original: ProductIdentity,
     current: ProductIdentity,
@@ -234,7 +267,10 @@ def refine_code_identity(
     collected: list[SearchCandidate] = []
     seen: set[str] = set()
     for query in queries[: max(1, int(max_queries))]:
-        for candidate in _provider_search(query, max(5, min(int(timeout), 8))):
+        for raw_candidate in _provider_search(query, max(5, min(int(timeout), 8))):
+            candidate = _normalize_provider_candidate(raw_candidate)
+            if candidate is None:
+                continue
             if candidate.url in seen or not _candidate_bound_to_raw(candidate, raw):
                 continue
             seen.add(candidate.url)

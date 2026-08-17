@@ -13,6 +13,7 @@ from .pdf_pipeline import (
 )
 from .pdf_review import PdfReviewCandidate, inspect_pdf_candidate
 from .pdf_review_search_strategy import discover_review_product_documents
+from .pdf_search_trace import PdfSearchTrace
 
 
 def discover_validated_review_pdfs_live(
@@ -24,19 +25,33 @@ def discover_validated_review_pdfs_live(
     log: Callable[[str], None] | None = None,
     on_event: Callable[[dict], None] | None = None,
 ) -> ReviewDiscoveryResult:
-    """Live review discovery: identity -> PDF search/download/validation; no OCR/Mistral."""
+    """Live review discovery: identity -> PDP/PDF search -> download/validation; no OCR/Mistral."""
 
     def emit(event_type: str, **payload):
         if on_event:
             on_event({"type": event_type, **payload})
 
+    class LiveTrace(PdfSearchTrace):
+        def emit(self, event: str, **data) -> None:
+            super().emit(event, **data)
+            if event == "PDF_PDP_SEARCH":
+                emit("pdp", stage="PDP_SEARCH", status="SEARCHING", **data)
+            elif event == "PDF_PDP_VALIDATED":
+                emit("pdp", stage="PDP_VALIDATED", status="VALIDATED", **data)
+            elif event == "PDF_LINK_DISCOVERED":
+                emit("document", stage="DOCUMENT_FOUND", status="FOUND", **data)
+            elif event == "PDF_PROVENANCE_BOUND":
+                emit("document", stage="PROVENANCE_BOUND", status="VALIDATED", **data)
+
     emit("stage", stage="IDENTITY", message="Resolviendo identidad…")
     resolved = resolve_pdf_identity(identity, timeout=timeout)
+    trace = LiveTrace(str(resolved.identity.mpn or resolved.identity.ean or resolved.identity.upc or resolved.identity.gtin or resolved.identity.model or "product"))
     rows = [] if resolved.status == "CONFLICT" else discover_review_product_documents(
         resolved.identity,
         limit=limit,
         timeout=timeout,
         official_domain=resolved.official_domain,
+        trace=trace,
     )
     emit(
         "identity",

@@ -81,6 +81,15 @@ def _landing_domain(url: str) -> str | None:
     return core._clean_official_domain(host) if host else None
 
 
+def _row_key(row) -> str:
+    url = str(getattr(row, "url", "") or "").strip()
+    if url:
+        return core._canonical_url(url)
+    if isinstance(row, str) and row:
+        return f"literal:{row}"
+    return ""
+
+
 def _discover_official_pdp_documents(
     identity: ProductIdentity,
     *,
@@ -106,9 +115,8 @@ def _discover_official_pdp_documents(
 
     def collect(rows):
         for row in rows or []:
-            url = str(getattr(row, "url", "") or "").strip()
-            key = core._canonical_url(url)
-            if not url or key in found_urls:
+            key = _row_key(row)
+            if not key or key in found_urls:
                 continue
             found_urls.add(key)
             found.append(row)
@@ -185,9 +193,8 @@ def discover_review_product_documents(
     def collect(rows):
         added = 0
         for row in rows or []:
-            url = str(getattr(row, "url", "") or "").strip()
-            key = core._canonical_url(url)
-            if not url or key in discovered_urls:
+            key = _row_key(row)
+            if not key or key in discovered_urls:
                 continue
             discovered_urls.add(key)
             discovered.append(row)
@@ -299,5 +306,5 @@ def discover_review_product_documents(
         inspected_landings=inspected_landings,
     ))
 
-    discovered.sort(key=core._document_rank, reverse=True)
+    discovered.sort(key=lambda row: core._document_rank(row) if hasattr(row, "url") else (0, 0, 0), reverse=True)
     return discovered[: max(1, int(limit))]

@@ -20,11 +20,14 @@ class SocialVideoVisibilityMixin:
         except Exception:
             return
 
-        social_box = ttk.LabelFrame(search_tab, text="Descargar video por URL", padding=8)
+        # Snapshot existing packed siblings before creating the new widget so it can
+        # never become its own `pack(before=...)` target.
         children = list(search_tab.winfo_children())
+        before_target = children[-1] if children else None
+        social_box = ttk.LabelFrame(search_tab, text="Descargar video por URL", padding=8)
         pack_kwargs = {"fill": "x", "pady": (7, 0)}
-        if children:
-            pack_kwargs["before"] = children[-1]
+        if before_target is not None:
+            pack_kwargs["before"] = before_target
         social_box.pack(**pack_kwargs)
 
         ttk.Label(

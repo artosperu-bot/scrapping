@@ -103,3 +103,37 @@ def test_domainless_multitoken_bootstrap_brand_can_be_repaired_by_supported_refi
     assert resolved.identity.manufacturer == "Nova"
     assert resolved.identity.model == "Pulse 530C"
     assert resolved.official_domain == "nova.example"
+
+
+def test_single_official_manufacturer_refinement_can_resolve_code_only_identity(monkeypatch):
+    from product_intelligence import identity_bootstrap, pdf_pipeline
+
+    raw = "ZX530CBLKAM"
+    source = ProductIdentity(mpn=raw, model=raw)
+    refined = ProductIdentity(brand="Nova", manufacturer="Nova", model="Pulse 530C", product_name="Nova Pulse 530C", mpn=raw)
+
+    monkeypatch.setattr(
+        identity_bootstrap,
+        "bootstrap_identity",
+        lambda *_a, **_k: SimpleNamespace(
+            status="UNRESOLVED", identity=source, official_domain_hint=None, confidence=.44, page_signals=[]
+        ),
+    )
+    monkeypatch.setattr(
+        pdf_pipeline,
+        "refine_code_identity",
+        lambda *_a, **_k: IdentityRefinement(
+            identity=refined,
+            official_domain_hint="nova.com",
+            candidates_used=1,
+            brand_support_domains=1,
+            model_support_domains=1,
+        ),
+    )
+
+    resolved = pdf_pipeline.resolve_pdf_identity(source, timeout=1)
+
+    assert resolved.status == "RESOLVED"
+    assert resolved.identity.brand == "Nova"
+    assert resolved.identity.model == "Pulse 530C"
+    assert resolved.official_domain == "nova.com"

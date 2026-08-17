@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 from .models import ProductIdentity
 from .pdf_pipeline import (
+    ResolvedPdfIdentity,
     ReviewDiscoveryResult,
     ValidatedPdfCandidate,
     _review_candidate,
@@ -165,6 +167,32 @@ def discover_validated_review_pdfs_live(
         ),
         reverse=True,
     )
+
+    if not resolved.official_domain:
+        learned_host = ""
+        for item in validated:
+            if not item.candidate.likely_official:
+                continue
+            learned_host = (
+                urlparse(str(item.inspection.final_url or item.candidate.url)).hostname or ""
+            ).lower().removeprefix("www.")
+            if learned_host:
+                break
+        if learned_host:
+            diagnostics = dict(resolved.diagnostics or {})
+            diagnostics["official_domain_source"] = "VALIDATED_OFFICIAL_PDF"
+            resolved = ResolvedPdfIdentity(
+                raw=resolved.raw,
+                identity=resolved.identity,
+                official_domain=learned_host,
+                status=resolved.status,
+                confidence=resolved.confidence,
+                diagnostics=diagnostics,
+            )
+            emit("authority", stage="VALIDATE", status="LEARNED", official_domain=learned_host)
+            if log:
+                log(f"[AUTHORITY] learned official_domain={learned_host} from validated PDF")
+
     result = ReviewDiscoveryResult(
         resolved=resolved,
         candidates=tuple(validated),

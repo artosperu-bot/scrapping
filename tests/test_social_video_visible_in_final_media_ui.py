@@ -29,3 +29,12 @@ def test_final_packaged_shell_still_inherits_real_social_downloader():
     assert '"Mejor calidad", "1080p", "720p", "480p"' in media
     assert '"noplaylist": True' in downloader
     assert '"merge_output_format": "mp4"' in downloader
+
+
+def test_pyinstaller_bundle_keeps_dynamic_page_discovery_and_ffmpeg_binary_gate():
+    spec = Path("ProductIntelligence.spec").read_text(encoding="utf-8")
+    workflow = Path(".github/workflows/build-windows.yml").read_text(encoding="utf-8")
+    assert "product_intelligence.video_page_discovery" in spec
+    assert "collect_all('imageio_ffmpeg')" in spec
+    assert "ffmpeg" in workflow.lower()
+    assert "Bundled FFmpeg binary missing" in workflow

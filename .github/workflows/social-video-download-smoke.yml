@@ -6,8 +6,11 @@ on:
     paths:
       - 'src/product_intelligence/social_video_downloader.py'
       - 'src/product_intelligence/media_desktop.py'
+      - 'src/product_intelligence/social_video_visibility.py'
+      - 'src/product_intelligence/final_live_ui_desktop.py'
       - 'tests/test_social_video_downloader.py'
       - 'tests/test_social_video_desktop_contract.py'
+      - 'tests/test_social_video_visible_in_final_media_ui.py'
       - 'scripts/social_video_download_smoke.py'
       - 'pyproject.toml'
       - '.github/workflows/social-video-download-smoke.yml'

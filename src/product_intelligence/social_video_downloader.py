@@ -123,6 +123,24 @@ def _verified_mp4(info: dict[str, Any], ydl: Any, output_dir: Path) -> Path:
     raise VideoDownloadError("OUTPUT_MP4_NOT_FOUND: la descarga no produjo un MP4 válido")
 
 
+def _progress_payload(event: dict[str, Any]) -> dict[str, Any]:
+    """Keep only progress values yt-dlp actually supplied; never synthesize metrics."""
+    payload: dict[str, Any] = {}
+    status = event.get("status")
+    if status is not None:
+        payload["status"] = status
+    for key in ("downloaded_bytes", "speed", "eta", "filename"):
+        value = event.get(key)
+        if value is not None:
+            payload[key] = value
+    total = event.get("total_bytes")
+    if total is None:
+        total = event.get("total_bytes_estimate")
+    if total is not None:
+        payload["total_bytes"] = total
+    return payload
+
+
 def download_social_video(
     url: str,
     output_dir: str | Path,
@@ -136,19 +154,18 @@ def download_social_video(
     selector = build_format_selector(quality)
     ffmpeg_exe = resolve_ffmpeg_exe()
 
+    def emit(**payload):
+        if on_progress:
+            on_progress(payload)
+
+    emit(phase="PREPARE")
     try:
         import yt_dlp
 
         def progress_hook(event: dict[str, Any]):
             if on_progress:
-                payload = {
-                    "status": event.get("status"),
-                    "downloaded_bytes": event.get("downloaded_bytes"),
-                    "total_bytes": event.get("total_bytes") or event.get("total_bytes_estimate"),
-                    "speed": event.get("speed"),
-                    "eta": event.get("eta"),
-                    "filename": event.get("filename"),
-                }
+                payload = _progress_payload(event)
+                payload["phase"] = "DOWNLOAD"
                 on_progress(payload)
 
         options: dict[str, Any] = {
@@ -165,11 +182,24 @@ def download_social_video(
         if ffmpeg_exe:
             options["ffmpeg_location"] = str(Path(ffmpeg_exe).parent)
 
+        emit(phase="RESOLVE")
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(source_url, download=True)
             if not isinstance(info, dict):
                 raise VideoDownloadError("DOWNLOAD_FAILED: respuesta de metadata inválida")
+            emit(phase="POSTPROCESS")
+            emit(phase="VERIFY")
             local_path = _verified_mp4(info, ydl, destination)
+
+        size = None
+        try:
+            size = local_path.stat().st_size
+        except OSError:
+            pass
+        complete = {"phase": "COMPLETE", "local_path": str(local_path)}
+        if size is not None:
+            complete["size_bytes"] = size
+        emit(**complete)
 
         return VideoDownloadResult(
             title=str(info.get("title") or local_path.stem),

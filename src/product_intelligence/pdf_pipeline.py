@@ -313,9 +313,18 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
             refined_model = refined.identity.model or refined.identity.product_name
             current_brand_sane = brand_sanity_pass(base.brand or base.manufacturer, raw=raw_value)
             current_model_sane = model_sanity_pass(base.model or base.product_name, raw=raw_value)
+            authoritative_refinement = bool(
+                refined.official_domain_hint
+                and refined.brand_support_domains >= 1
+                and brand_sanity_pass(refined_brand, raw=raw_value)
+            )
+            brand_supported = refined.brand_support_domains >= 2 or authoritative_refinement
+            model_supported = refined.model_support_domains >= 2 or (
+                authoritative_refinement and refined.model_support_domains >= 1
+            )
 
             if (
-                refined.brand_support_domains >= 2
+                brand_supported
                 and refined_brand
                 and brand_sanity_pass(refined_brand, raw=raw_value)
                 and (not current_brand_sane or not base.brand or suspicious_brand)
@@ -327,7 +336,7 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
                     updates["manufacturer"] = refined_brand
 
             if (
-                refined.model_support_domains >= 2
+                model_supported
                 and refined_model
                 and model_sanity_pass(refined_model, raw=raw_value)
                 and (suspicious_model or not current_model_sane)
@@ -341,12 +350,13 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
                 base = base.model_copy(update=updates)
 
             # Manufacturer authority is monotonic. A bootstrap-owned domain wins over
-            # later refinement. Refinement may fill an empty domain only when its
-            # identity evidence is itself sane and cross-domain supported.
+            # later refinement. A single exact manufacturer-owned source may fill an
+            # empty domain because the brand-to-host binding is stronger than a lone
+            # arbitrary retailer; otherwise cross-domain support is still required.
             if (
                 not bootstrap_domain
                 and refined.official_domain_hint
-                and refined.brand_support_domains >= 2
+                and brand_supported
                 and brand_sanity_pass(refined_brand, raw=raw_value)
             ):
                 refined_domain = refined.official_domain_hint

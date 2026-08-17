@@ -1,6 +1,5 @@
-from product_intelligence.discovery import SearchCandidate
-from product_intelligence.document_discovery import resolve_document_candidate_urls
 from product_intelligence.models import ProductIdentity
+from product_intelligence.pdf_evidence import discover_pdf_candidates
 from product_intelligence.pdf_review_search_strategy import build_review_query_tiers
 
 
@@ -28,23 +27,21 @@ def test_resolved_identity_prioritizes_canonical_document_queries_before_identif
     assert min(canonical_positions) < 4, queries
 
 
-def test_social_tracking_pdf_endpoint_is_rejected_before_candidate_resolution():
-    identity = ProductIdentity(brand="Acme", model="Tune 530C", mpn="ABC123")
-    candidate = SearchCandidate(
-        url="https://connect.facebook.net/en_US/.pdf",
-        title="Acme Tune 530C manual",
-        snippet="ABC123 product documentation",
-        score=1.0,
-    )
-    assert resolve_document_candidate_urls(identity, candidate, timeout=1) == []
+def test_social_tracking_pdf_endpoint_is_rejected_before_candidate_extraction():
+    html = '''
+    <a href="https://connect.facebook.net/en_US/.pdf">Acme Tune 530C manual</a>
+    <a href="/docs/acme-tune-530c-manual.pdf">Download manual</a>
+    '''
+    urls = [row.url for row in discover_pdf_candidates(html, "https://retailer.example/product/abc123")]
+    assert "https://connect.facebook.net/en_US/.pdf" not in urls
+    assert "https://retailer.example/docs/acme-tune-530c-manual.pdf" in urls
 
 
-def test_malformed_backslash_pdf_endpoint_is_rejected_before_candidate_resolution():
-    identity = ProductIdentity(brand="Acme", model="Endurance Run 3", mpn="ABC123")
-    candidate = SearchCandidate(
-        url="https://retailer.example/%5C.pdf",
-        title="Acme Endurance Run 3 manual ABC123",
-        snippet="Product documentation",
-        score=1.0,
-    )
-    assert resolve_document_candidate_urls(identity, candidate, timeout=1) == []
+def test_malformed_backslash_pdf_endpoint_is_rejected_before_candidate_extraction():
+    html = '''
+    <a href="/%5C.pdf">Acme Endurance Run 3 manual</a>
+    <a href="/docs/endurance-run-3-manual.pdf">Download manual</a>
+    '''
+    urls = [row.url for row in discover_pdf_candidates(html, "https://retailer.example/product/abc123")]
+    assert "https://retailer.example/%5C.pdf" not in urls
+    assert "https://retailer.example/docs/endurance-run-3-manual.pdf" in urls

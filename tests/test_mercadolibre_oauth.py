@@ -4,7 +4,6 @@ import json
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 import pytest
 
@@ -109,7 +108,6 @@ def test_t1_valid_token_is_reused_without_refresh():
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = MemoryStore(state(now=now, expires_delta=timedelta(hours=3)))
     session = FakeSession()
-
     assert service(store, session, now).get_valid_access_token() == "access-old"
     assert session.post_calls == []
 
@@ -118,9 +116,7 @@ def test_t2_expired_token_refreshes_and_persists_rotated_tokens_and_absolute_exp
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = MemoryStore(state(now=now, expires_delta=timedelta(hours=-1)))
     session = FakeSession(posts=[FakeResponse(200, token_payload())])
-
     token = service(store, session, now).get_valid_access_token()
-
     assert token == "access-new"
     assert store.state.access_token == "access-new"
     assert store.state.refresh_token == "refresh-new"
@@ -138,9 +134,7 @@ def test_t3_persisted_expiry_from_yesterday_refreshes_after_service_reconstructi
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = MemoryStore(state(now=now, expires_delta=timedelta(days=-1)))
     session = FakeSession(posts=[FakeResponse(200, token_payload())])
-
     reconstructed = service(store, session, now)
-
     assert reconstructed.get_valid_access_token() == "access-new"
     assert len(session.post_calls) == 1
 
@@ -149,7 +143,6 @@ def test_t4_near_expiry_inside_ten_minute_margin_refreshes():
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = MemoryStore(state(now=now, expires_delta=timedelta(minutes=5)))
     session = FakeSession(posts=[FakeResponse(200, token_payload())])
-
     assert service(store, session, now).get_valid_access_token() == "access-new"
     assert len(session.post_calls) == 1
 
@@ -158,7 +151,6 @@ def test_t5_token_with_hours_remaining_does_not_refresh():
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = MemoryStore(state(now=now, expires_delta=timedelta(hours=2)))
     session = FakeSession()
-
     assert service(store, session, now).get_valid_access_token() == "access-old"
     assert len(session.post_calls) == 0
 
@@ -168,14 +160,8 @@ def test_t6_unexpected_401_forces_one_refresh_and_retries_once():
 
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = MemoryStore(state(now=now))
-    session = FakeSession(
-        posts=[FakeResponse(200, token_payload())],
-        requests=[FakeResponse(401), FakeResponse(200, {"ok": True})],
-    )
-    auth = service(store, session, now)
-
-    response = MercadoLibreApiClient(auth=auth, session=session).request("GET", "/users/me")
-
+    session = FakeSession(posts=[FakeResponse(200, token_payload())], requests=[FakeResponse(401), FakeResponse(200, {"ok": True})])
+    response = MercadoLibreApiClient(auth=service(store, session, now), session=session).request("GET", "/users/me")
     assert response.status_code == 200
     assert len(session.post_calls) == 1
     assert len(session.request_calls) == 2
@@ -188,42 +174,31 @@ def test_t7_second_401_is_controlled_and_never_loops():
 
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = MemoryStore(state(now=now))
-    session = FakeSession(
-        posts=[FakeResponse(200, token_payload())],
-        requests=[FakeResponse(401), FakeResponse(401)],
-    )
-    auth = service(store, session, now)
-
+    session = FakeSession(posts=[FakeResponse(200, token_payload())], requests=[FakeResponse(401), FakeResponse(401)])
     with pytest.raises(MercadoLibreAuthError) as exc:
-        MercadoLibreApiClient(auth=auth, session=session).request("GET", "/users/me")
-
+        MercadoLibreApiClient(auth=service(store, session, now), session=session).request("GET", "/users/me")
     assert exc.value.code == "ERROR_AUTH_MERCADOLIBRE"
     assert len(session.post_calls) == 1
     assert len(session.request_calls) == 2
 
 
-def test_t8_rotated_refresh_token_is_used_on_the_next_refresh():
+def test_t8_rotated_refresh_token_is_persisted():
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = MemoryStore(state(now=now, expires_delta=timedelta(hours=-1)))
     session = FakeSession(posts=[FakeResponse(200, token_payload(refresh="refresh-rotated"))])
-    auth = service(store, session, now)
-
-    auth.get_valid_access_token()
-
+    service(store, session, now).get_valid_access_token()
     assert store.state.refresh_token == "refresh-rotated"
 
 
-def test_t9_failed_refresh_preserves_previous_persisted_credentials():
+def test_t9_failed_refresh_preserves_previous_persisted_credentials_and_hides_secrets():
     from product_intelligence.mercadolibre_oauth import MercadoLibreAuthError
 
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     previous = state(now=now, expires_delta=timedelta(hours=-1))
     store = MemoryStore(previous)
     session = FakeSession(posts=[FakeResponse(400, {"error": "invalid_grant", "message": "bad refresh"})])
-
     with pytest.raises(MercadoLibreAuthError) as exc:
         service(store, session, now).get_valid_access_token()
-
     assert exc.value.code == "ML_REFRESH_TOKEN_INVALID"
     assert store.state == previous
     assert store.save_count == 0
@@ -236,8 +211,7 @@ def test_t10_concurrent_expired_callers_perform_only_one_http_refresh():
     store = MemoryStore(state(now=now, expires_delta=timedelta(hours=-1)))
     session = FakeSession(posts=[FakeResponse(200, token_payload())], post_delay=0.05)
     auth = service(store, session, now)
-    results = []
-    errors = []
+    results, errors = [], []
 
     def worker():
         try:
@@ -250,7 +224,6 @@ def test_t10_concurrent_expired_callers_perform_only_one_http_refresh():
         thread.start()
     for thread in threads:
         thread.join(timeout=2)
-
     assert errors == []
     assert results == ["access-new", "access-new"]
     assert len(session.post_calls) == 1
@@ -266,10 +239,8 @@ def test_token_store_serializes_all_oauth_state_inside_one_keyring_value(monkeyp
     now = datetime(2026, 8, 17, 3, 0, tzinfo=timezone.utc)
     store = ml.MercadoLibreTokenStore()
     current = state(now=now)
-
     store.save(current)
     persisted = json.loads(vault[ml.ML_OAUTH_STATE_KEY])
-
     assert persisted["client_id"] == "app-123"
     assert persisted["client_secret"] == "secret-xyz"
     assert persisted["access_token"] == "access-old"
@@ -284,19 +255,12 @@ def test_configure_refreshes_immediately_and_does_not_destroy_previous_working_s
     previous = state(now=now)
     store = MemoryStore(previous)
     session = FakeSession(posts=[FakeResponse(400, {"error": "invalid_grant"})])
-    auth = service(store, session, now)
-
     with pytest.raises(MercadoLibreAuthError):
-        auth.configure(
-            client_id="new-app",
-            client_secret="new-secret",
-            refresh_token="new-refresh",
-        )
-
+        service(store, session, now).configure(client_id="new-app", client_secret="new-secret", refresh_token="new-refresh")
     assert store.state == previous
 
 
-def test_price_workflow_delegates_mercadolibre_http_to_api_client_without_changing_parser(monkeypatch):
+def test_price_workflow_delegates_mercadolibre_http_to_api_client_without_changing_queries(monkeypatch):
     from product_intelligence import price_workflow
     from product_intelligence.models import ProductIdentity
 
@@ -309,24 +273,19 @@ def test_price_workflow_delegates_mercadolibre_http_to_api_client_without_changi
             return FakeResponse(200, {"results": []})
 
     monkeypatch.setattr(price_workflow, "build_mercadolibre_api_client", lambda timeout=15: Client())
-
     assert price_workflow._try_mercadolibre(identity, timeout=7) == []
     assert len(calls) == len(price_workflow._mercadolibre_queries(identity))
     assert all("api.mercadolibre.com/sites/MPE/search" in url for url, _ in calls)
 
 
-def test_provider_settings_ui_exposes_one_time_mercadolibre_configuration_and_automatic_refresh_contract():
+def test_packaged_settings_ui_exposes_one_time_mercadolibre_configuration_and_auto_refresh_contract():
     from pathlib import Path
 
-    source = Path("src/product_intelligence/provider_desktop.py").read_text(encoding="utf-8")
-    for text in [
-        "Mercado Libre API",
-        "Client ID / App ID",
-        "Client Secret",
-        "Refresh Token",
-        "Probar conexión",
-        "Renovar token ahora",
-    ]:
-        assert text in source
-    assert "MercadoLibreAuthService" in source
-    assert "MercadoLibreApiClient" in source
+    mixin = Path("src/product_intelligence/mercadolibre_desktop.py").read_text(encoding="utf-8")
+    final_shell = Path("src/product_intelligence/final_live_ui_desktop.py").read_text(encoding="utf-8")
+    for text in ["Mercado Libre API", "Client ID / App ID", "Client Secret", "Refresh Token", "Probar conexión", "Renovar token ahora"]:
+        assert text in mixin
+    assert "MercadoLibreAuthService" in mixin
+    assert "MercadoLibreApiClient" in mixin
+    assert "_start_ml_startup_validation" in mixin
+    assert "MercadoLibreDesktopMixin" in final_shell

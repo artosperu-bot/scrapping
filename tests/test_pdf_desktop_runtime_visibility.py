@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from product_intelligence import live_pdf_discovery as live
+from product_intelligence import pdf_desktop_e2e as desktop_e2e
 from product_intelligence.models import ProductIdentity
 from product_intelligence.pdf_desktop_e2e import PdfDesktopE2EMixin
 from product_intelligence.pdf_pipeline import ResolvedPdfIdentity
@@ -179,3 +180,53 @@ def test_desktop_pdf_events_expose_concrete_runtime_detail_and_physical_path(tmp
     assert "FIN" in joined and "descubiertos=2" in joined and "validados=1" in joined and "rechazados=1" in joined
     assert local_pdf.is_file()
     assert any("3/8" in stage for stage in stages)
+
+
+def test_execute_pdf_runtime_state_tracks_real_counts_and_monotonic_progress():
+    state_cls = getattr(desktop_e2e, "PdfExecuteRuntimeState", None)
+    assert state_cls is not None, "Execute needs a dedicated PDF runtime state, not only generic log text"
+
+    state = state_cls()
+    progress = []
+    events = [
+        {"type": "query", "position": 1, "limit": 8, "query": "q1"},
+        {"type": "query", "position": 3, "limit": 8, "query": "q3"},
+        {"type": "candidate", "position": 1, "total": 2, "url": "https://example/a.pdf"},
+        {"type": "download", "status": "STARTED", "url": "https://example/a.pdf"},
+        {"type": "download", "status": "FINISHED", "url": "https://example/a.pdf", "local_path": "C:/pdf/a.pdf"},
+        {"type": "validated", "url": "https://example/a.pdf"},
+        {"type": "rejected", "url": "https://example/b.pdf", "reason": "IDENTITY_MISMATCH"},
+    ]
+    for event in events:
+        state.apply(event)
+        progress.append(state.progress)
+
+    assert state.query_position == 3
+    assert state.query_limit == 8
+    assert state.found == 1
+    assert state.downloaded == 1
+    assert state.validated == 1
+    assert state.rejected == 1
+    assert progress == sorted(progress)
+
+    state.apply(
+        {
+            "type": "final_result",
+            "result": SimpleNamespace(
+                discovered_count=7,
+                downloaded_count=4,
+                validated_count=4,
+                rejected_count=3,
+            ),
+        }
+    )
+    assert state.progress == 100
+    assert state.found == 7
+    assert state.downloaded == 4
+    assert state.validated == 4
+    assert state.rejected == 3
+
+
+def test_execute_workspace_mixin_owns_real_pdf_panel_installation():
+    assert "_install_excel_progress" in PdfDesktopE2EMixin.__dict__, "PDF panel must be installed in Ejecutar"
+    assert "_update_pdf_execute_panel" in PdfDesktopE2EMixin.__dict__, "Live PDF events must update the Ejecutar panel"

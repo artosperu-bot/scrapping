@@ -66,6 +66,9 @@ class PdfExecuteRuntimeState:
             else:
                 self.status = "Descargando PDF"
                 self._advance(62)
+        elif kind == "validation":
+            self.status = "Validando PDF"
+            self._advance(76)
         elif kind == "validated":
             row = event.get("row")
             inspection = getattr(row, "inspection", None)
@@ -403,6 +406,11 @@ class PdfDesktopE2EMixin:
             else:
                 self._emit_pdf_global(f"DESCARGANDO · {url}")
                 self._pdf_progress_stage("PDF · descargando")
+        elif kind == "validation":
+            url = str(event.get("url") or "").strip()
+            local_path = str(event.get("local_path") or "").strip()
+            self._emit_pdf_global(f"VALIDANDO · {local_path or url} · url={url}")
+            self._pdf_progress_stage("PDF · validando evidencia")
         elif kind == "validated":
             row = event.get("row")
             candidate = getattr(row, "candidate", None)

@@ -47,6 +47,24 @@ def test_single_retailer_hostname_cannot_become_product_brand(monkeypatch):
     assert not (result.official_domain_hint or "").startswith("phonix-usa")
 
 
+def test_single_exact_manufacturer_domain_can_establish_identity(monkeypatch):
+    """One exact manufacturer PDP is stronger than one arbitrary retailer domain."""
+    raw = "ABC123XYZ"
+    rows = [
+        ("https://acme.com/products/pulse-530c", "Acme Pulse 530C Wireless Headphones", f"MPN {raw}"),
+    ]
+    monkeypatch.setattr(refinement, "_provider_search", lambda *_a, **_k: rows)
+    original = ProductIdentity(mpn=raw, model=raw)
+
+    result = refinement.refine_code_identity(original, original, timeout=1, max_queries=1)
+
+    assert (result.identity.brand or "").lower() == "acme"
+    assert "pulse 530c" in (result.identity.model or "").lower()
+    assert result.official_domain_hint == "acme.com"
+    assert result.brand_support_domains == 1
+    assert result.model_support_domains == 1
+
+
 def test_url_tokens_never_become_brand(monkeypatch):
     raw = "ABC123"
     rows = [

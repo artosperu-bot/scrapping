@@ -125,7 +125,10 @@ class App(BasePdfReviewApp):
                 self._pdf_review_refresh_tree()
             pending = ", ".join(str(index + 1) for index in missing)
 
-            search_button = getattr(self, "pdf_review_search_button", None)
+            # Read the optional widget directly from the instance dictionary. Tk's
+            # __getattr__ delegates unknown attributes through self.tk, which is unsafe
+            # before Tk initialization and unnecessary for this duplicate-search guard.
+            search_button = self.__dict__.get("pdf_review_search_button")
             if search_button is not None:
                 try:
                     if search_button.instate(["disabled"]):

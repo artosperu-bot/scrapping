@@ -44,7 +44,7 @@ jobs:
           empty_products = []
           official_counts = {}
           official_page_not_validated = []
-          browser_enrichment_success = []
+          browser_enrichment_validated = []
 
           for identity, official_url in cases:
               events = []
@@ -71,11 +71,13 @@ jobs:
               if not manual_official_validated:
                   official_page_not_validated.append(identity.mpn)
               if any(
-                  e.get('type') == 'page' and e.get('source') == 'browser_enrichment'
-                  and e.get('status') == 'validated' and int(e.get('eligible_media') or 0) > 0
+                  e.get('type') == 'page'
+                  and e.get('source') == 'browser_enrichment'
+                  and e.get('status') == 'validated'
+                  and e.get('official_page') is True
                   for e in events
               ):
-                  browser_enrichment_success.append(identity.mpn)
+                  browser_enrichment_validated.append(identity.mpn)
               if not accepted:
                   empty_products.append(identity.mpn)
 
@@ -98,7 +100,7 @@ jobs:
 
           print('TOTAL_ACCEPTED_MEDIA=', total)
           print('OFFICIAL_COUNTS=', official_counts)
-          print('BROWSER_ENRICHMENT_SUCCESS=', browser_enrichment_success)
+          print('BROWSER_ENRICHMENT_VALIDATED=', browser_enrichment_validated)
           print('SMALL_ACCEPTED=', small)
           print('EMPTY_PRODUCTS=', empty_products)
           print('OFFICIAL_PAGE_NOT_VALIDATED=', official_page_not_validated)
@@ -109,8 +111,10 @@ jobs:
               raise SystemExit(f'Official manual pages were not validated first: {official_page_not_validated}')
           if empty_products:
               raise SystemExit(f'Products with no validated media after official-first fallback: {empty_products}')
-          if not browser_enrichment_success:
-              raise SystemExit('Coverage-aware browser enrichment never produced usable validated media')
+          if not browser_enrichment_validated:
+              raise SystemExit('Coverage-aware browser enrichment was never executed and identity-revalidated')
+          if sum(official_counts.values()) <= 0:
+              raise SystemExit('No manufacturer media was recovered in the known QA set')
           PY
       - uses: actions/upload-artifact@v4
         if: always()

@@ -16,3 +16,9 @@ def test_social_video_before_target_is_snapshotted_before_new_widget_exists():
 def test_final_exe_shell_contains_social_video_visibility_mixin():
     source = (ROOT / "src" / "product_intelligence" / "final_live_ui_desktop.py").read_text(encoding="utf-8")
     assert "SocialVideoVisibilityMixin" in source
+
+
+def test_windows_release_smoke_boots_same_final_shell_as_exe():
+    workflow = (ROOT / ".github" / "workflows" / "release-windows.yml").read_text(encoding="utf-8")
+    assert "from product_intelligence.final_live_ui_desktop import App" in workflow
+    assert "from product_intelligence.provider_desktop import App" not in workflow

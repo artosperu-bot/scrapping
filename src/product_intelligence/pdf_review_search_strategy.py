@@ -20,7 +20,8 @@ def build_review_query_tiers(identity: ProductIdentity, official_domain: str | N
             normalized = " ".join(str(query or "").split()).strip()
             key = normalized.lower().replace('"', "")
             if normalized and key not in seen:
-                seen.add(key); result.append(normalized)
+                seen.add(key)
+                result.append(normalized)
         return result
 
     canonical: list[str] = []
@@ -37,17 +38,27 @@ def build_review_query_tiers(identity: ProductIdentity, official_domain: str | N
                 f'{combined} "quick start guide"',
             ])
         else:
-            canonical.extend([f'"{model}" filetype:pdf', f'"{model}" specsheet', f'"{model}" manual', f'"{model}" support downloads'])
+            canonical.extend([
+                f'"{model}" filetype:pdf',
+                f'"{model}" specsheet',
+                f'"{model}" manual',
+                f'"{model}" support downloads',
+            ])
         if domain:
-            canonical.extend([f'site:{domain} "{model}" manual', f'site:{domain} "{model}" datasheet'])
+            canonical.extend([
+                f'site:{domain} "{model}" manual',
+                f'site:{domain} "{model}" datasheet',
+            ])
 
     identifier_precision: list[str] = []
     for strong in strong_values:
         if domain:
             identifier_precision.append(f'site:{domain} "{strong}" filetype:pdf')
         identifier_precision.extend([
-            f'"{strong}" filetype:pdf', f'"{strong}" specifications filetype:pdf',
-            f'"{strong}" datasheet filetype:pdf', f'"{strong}" manual filetype:pdf',
+            f'"{strong}" filetype:pdf',
+            f'"{strong}" specifications filetype:pdf',
+            f'"{strong}" datasheet filetype:pdf',
+            f'"{strong}" manual filetype:pdf',
             f'"{strong}" support downloads',
         ])
 
@@ -70,7 +81,17 @@ def _landing_domain(url: str) -> str | None:
     return core._clean_official_domain(host) if host else None
 
 
-def _discover_official_pdp_documents(identity: ProductIdentity, *, official_domain: str | None, limit: int, timeout: int, trace=None, seen: set[str] | None = None, landing_budget: list[int] | None = None, inspected_landings: set[str] | None = None):
+def _discover_official_pdp_documents(
+    identity: ProductIdentity,
+    *,
+    official_domain: str | None,
+    limit: int,
+    timeout: int,
+    trace=None,
+    seen: set[str] | None = None,
+    landing_budget: list[int] | None = None,
+    inspected_landings: set[str] | None = None,
+):
     domain = core._clean_official_domain(official_domain)
     strong_values = core._strong_identifiers(identity)
     brand = str(identity.brand or identity.manufacturer or "").strip()
@@ -80,6 +101,18 @@ def _discover_official_pdp_documents(identity: ProductIdentity, *, official_doma
     budget = landing_budget if landing_budget is not None else [0]
     inspected = inspected_landings if inspected_landings is not None else set()
     per_query = max(4, min(max(1, int(limit)), 6))
+    found = []
+    found_urls: set[str] = set()
+
+    def collect(rows):
+        for row in rows or []:
+            url = str(getattr(row, "url", "") or "").strip()
+            key = core._canonical_url(url)
+            if not url or key in found_urls:
+                continue
+            found_urls.add(key)
+            found.append(row)
+
     for strong in strong_values[:2]:
         query_specs: list[tuple[str, bool]] = []
         if domain:
@@ -99,64 +132,172 @@ def _discover_official_pdp_documents(identity: ProductIdentity, *, official_doma
                 accepted = core._accept_search_candidate(identity, candidate, trace=trace)
                 if accepted is None or core._looks_like_direct_pdf(accepted.url) or accepted.identity_score < 88 or not accepted.likely_official:
                     continue
-                authority_domain = domain if strict_known_domain and _on_official_domain(accepted.url, domain) else _landing_domain(accepted.url)
+                if strict_known_domain:
+                    if not _on_official_domain(accepted.url, domain):
+                        continue
+                    authority_domain = domain
+                else:
+                    authority_domain = _landing_domain(accepted.url)
                 if not authority_domain:
                     continue
                 exact_landings.append(accepted)
                 if trace:
                     trace.emit("PDF_PDP_VALIDATED", url=accepted.url, identifier=strong, identity_score=accepted.identity_score, authority="MANUFACTURER", domain=authority_domain)
             if exact_landings and budget[0] < core.MAX_LANDING_INSPECTIONS:
-                resolved = core._resolve_valid_candidates(identity, exact_landings, limit=limit, timeout=timeout, trace=trace, landing_budget=budget, inspected_landings=inspected)
+                resolved = core._resolve_valid_candidates(
+                    identity,
+                    exact_landings,
+                    limit=limit,
+                    timeout=timeout,
+                    trace=trace,
+                    landing_budget=budget,
+                    inspected_landings=inspected,
+                )
                 if resolved:
+                    collect(resolved)
                     if trace:
                         trace.emit("PDF_PDP_DOCUMENTS_RESOLVED", count=len(resolved), parent_count=len(exact_landings))
-                    return resolved
-    return []
+    return found
 
 
-def discover_review_product_documents(identity: ProductIdentity, *, limit: int = 6, timeout: int = 8, trace=None, official_domain: str | None = None):
+def discover_review_product_documents(
+    identity: ProductIdentity,
+    *,
+    limit: int = 6,
+    timeout: int = 8,
+    trace=None,
+    official_domain: str | None = None,
+):
+    """Discover document candidates without treating raw links as validated stop conditions.
+
+    This layer does not open/validate PDFs. Therefore it must exhaust its bounded
+    discovery strategies (or budget) instead of returning merely because a URL was
+    resolved from a landing page. The caller owns download/identity validation.
+    """
     tiers = build_review_query_tiers(identity, official_domain=official_domain)
-    seen: set[str] = set(); per_query = max(4, min(limit, 6)); landing_budget = [0]; inspected_landings: set[str] = set()
-    pdp_documents = _discover_official_pdp_documents(identity, official_domain=official_domain, limit=limit, timeout=timeout, trace=trace, seen=seen, landing_budget=landing_budget, inspected_landings=inspected_landings)
-    if pdp_documents:
-        return pdp_documents
+    seen: set[str] = set()
+    per_query = max(4, min(limit, 6))
+    landing_budget = [0]
+    inspected_landings: set[str] = set()
+    discovered = []
+    discovered_urls: set[str] = set()
+
+    def collect(rows):
+        added = 0
+        for row in rows or []:
+            url = str(getattr(row, "url", "") or "").strip()
+            key = core._canonical_url(url)
+            if not url or key in discovered_urls:
+                continue
+            discovered_urls.add(key)
+            discovered.append(row)
+            added += 1
+        return added
+
+    pdp_documents = _discover_official_pdp_documents(
+        identity,
+        official_domain=official_domain,
+        limit=limit,
+        timeout=timeout,
+        trace=trace,
+        seen=seen,
+        landing_budget=landing_budget,
+        inspected_landings=inspected_landings,
+    )
+    if collect(pdp_documents) and trace:
+        trace.emit("PDF_DISCOVERY_CONTINUE_AFTER_RAW_LINKS", source="OFFICIAL_PDP", candidate_count=len(discovered))
+
     query_attempts = 0
     for tier_index, tier in enumerate(tiers):
-        if query_attempts >= core.MAX_QUERY_ATTEMPTS: break
+        if query_attempts >= core.MAX_QUERY_ATTEMPTS:
+            break
         tier_valid = []
         for query in tier:
-            if query_attempts >= core.MAX_QUERY_ATTEMPTS: break
+            if query_attempts >= core.MAX_QUERY_ATTEMPTS:
+                break
             query_attempts += 1
             candidates = core.search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace)
+            query_valid = []
             for candidate in candidates:
                 canonical = core._canonical_url(candidate.url)
                 if canonical in seen:
-                    if trace: trace.emit("PDF_CANDIDATE_DUPLICATE", url=candidate.url)
+                    if trace:
+                        trace.emit("PDF_CANDIDATE_DUPLICATE", url=candidate.url)
                     continue
                 seen.add(canonical)
                 accepted = core._accept_search_candidate(identity, candidate, trace=trace)
-                if accepted is None: continue
+                if accepted is None:
+                    continue
                 tier_valid.append(accepted)
-                if trace and not core._looks_like_direct_pdf(accepted.url) and accepted.identity_score >= 88:
+                query_valid.append(accepted)
+                if core._looks_like_direct_pdf(accepted.url):
+                    collect([accepted])
+                elif trace and accepted.identity_score >= 88:
                     trace.emit("PDF_EXACT_PDP_FOUND", url=accepted.url, identity_score=accepted.identity_score)
-            exact_landings = [row for row in tier_valid if not core._looks_like_direct_pdf(row.url) and row.identity_score >= 88]
+
+            exact_landings = [row for row in query_valid if not core._looks_like_direct_pdf(row.url) and row.identity_score >= 88]
             if exact_landings and landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
-                if trace: trace.emit("PDF_PDP_PIVOT", count=len(exact_landings), tier=tier_index + 1)
-                resolved = core._resolve_valid_candidates(identity, exact_landings, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)
-                if resolved: return resolved
+                if trace:
+                    trace.emit("PDF_PDP_PIVOT", count=len(exact_landings), tier=tier_index + 1)
+                resolved = core._resolve_valid_candidates(
+                    identity,
+                    exact_landings,
+                    limit=limit,
+                    timeout=timeout,
+                    trace=trace,
+                    landing_budget=landing_budget,
+                    inspected_landings=inspected_landings,
+                )
+                if collect(resolved) and trace:
+                    trace.emit("PDF_DISCOVERY_CONTINUE_AFTER_RAW_LINKS", source="PDP_PIVOT", candidate_count=len(discovered))
+
         if tier_valid and landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
-            resolved = core._resolve_valid_candidates(identity, tier_valid, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)
-            if resolved: return resolved
+            resolved = core._resolve_valid_candidates(
+                identity,
+                tier_valid,
+                limit=limit,
+                timeout=timeout,
+                trace=trace,
+                landing_budget=landing_budget,
+                inspected_landings=inspected_landings,
+            )
+            if collect(resolved) and trace:
+                trace.emit("PDF_DISCOVERY_CONTINUE_AFTER_RAW_LINKS", source="TIER", candidate_count=len(discovered))
+
     flattened = [query for tier in tiers for query in tier]
     if landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
-        browser_resolved = core._browser_document_pass(identity, queries=flattened, seen=seen, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)
-        if browser_resolved: return browser_resolved
+        browser_resolved = core._browser_document_pass(
+            identity,
+            queries=flattened,
+            seen=seen,
+            limit=limit,
+            timeout=timeout,
+            trace=trace,
+            landing_budget=landing_budget,
+            inspected_landings=inspected_landings,
+        )
+        collect(browser_resolved)
+
     fallback = []
     for candidate in core.search_web(identity, limit=max(8, limit), timeout=max(10, timeout)):
         canonical = core._canonical_url(candidate.url)
-        if canonical in seen: continue
+        if canonical in seen:
+            continue
         seen.add(canonical)
         accepted = core._accept_search_candidate(identity, candidate, trace=trace)
-        if accepted is not None: fallback.append(accepted)
-        if len(fallback) >= 6: break
-    return core._resolve_valid_candidates(identity, fallback, limit=limit, timeout=timeout, trace=trace, landing_budget=landing_budget, inspected_landings=inspected_landings)
+        if accepted is not None:
+            fallback.append(accepted)
+        if len(fallback) >= 6:
+            break
+    collect(core._resolve_valid_candidates(
+        identity,
+        fallback,
+        limit=limit,
+        timeout=timeout,
+        trace=trace,
+        landing_budget=landing_budget,
+        inspected_landings=inspected_landings,
+    ))
+
+    discovered.sort(key=core._document_rank, reverse=True)
+    return discovered[: max(1, int(limit))]

@@ -37,7 +37,8 @@ def _desktop_review_plan() -> tuple[list[list[str]], list[bool]]:
 
 def _persistent_pdf_dir(out_dir: str, identity) -> Path:
     """Return the user-visible PDF evidence directory for one real desktop product."""
-    root = Path(out_dir).parent
+    output_path = Path(out_dir)
+    root = output_path.parent if output_path.name.lower() == "json" else output_path
     raw = str(
         getattr(identity, "mpn", None)
         or getattr(identity, "ean", None)

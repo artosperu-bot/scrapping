@@ -18,6 +18,7 @@ datas=[]; binaries=[]; hiddenimports=[
     'product_intelligence.update_service',
     'product_intelligence.version',
     'product_intelligence.social_video_downloader',
+    'product_intelligence.video_page_discovery',
 ]
 
 try:

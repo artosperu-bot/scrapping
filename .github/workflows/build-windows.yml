@@ -2,6 +2,19 @@ name: Build Windows EXE
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - release/windows
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'run_desktop.py'
+      - 'run_updater.py'
+      - 'pyproject.toml'
+      - 'ProductIntelligence.spec'
+      - 'vendor/**'
+      - '.github/workflows/build-windows.yml'
+      - '.github/workflows/release-windows.yml'
   push:
     branches:
       - main

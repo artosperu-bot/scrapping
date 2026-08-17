@@ -36,9 +36,7 @@ class MercadoLibreDesktopMixin:
         self.ml_details = tk.StringVar(value=self._ml_details_text(current))
 
         box = ttk.LabelFrame(self.settings_tab, text="Mercado Libre API", style="Card.TLabelframe")
-        # ProviderSettings creates Actualizaciones last. Keep provider credentials grouped
-        # above that card even though this mixin is installed after the base settings UI.
-        box.pack(fill="x", pady=(0, 12), before=getattr(self, "update_status", None) and self.update_status or None)
+        box.pack(fill="x", pady=(0, 12))
 
         ttk.Label(
             box,

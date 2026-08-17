@@ -5,6 +5,8 @@ on:
     branches:
       - release/windows
     paths:
+      - 'src/product_intelligence/identity_refinement.py'
+      - 'src/product_intelligence/pdf_pipeline.py'
       - 'src/product_intelligence/document_discovery.py'
       - 'src/product_intelligence/pdf_review_search_strategy.py'
       - 'src/product_intelligence/live_pdf_discovery.py'
@@ -16,6 +18,7 @@ on:
       - 'src/product_intelligence/pdf_review_batch.py'
       - 'src/product_intelligence/document_ingestion.py'
       - 'src/product_intelligence/pdf_extract.py'
+      - 'tests/test_identity_refinement_provider_contract.py'
       - 'tests/test_pdf_pdp_first_review.py'
       - 'tests/test_pdf_pdp_live_observability.py'
       - 'tests/test_pdf_review_provider_visibility.py'

@@ -31,20 +31,13 @@ def build_format_selector(quality: str) -> str:
                 break
         if ceiling is None:
             raise VideoDownloadError(f"QUALITY_UNSUPPORTED: {quality}")
-
     bound = f"[height<={ceiling}]" if ceiling else ""
-    return (
-        f"bv*{bound}[ext=mp4]+ba[ext=m4a]/"
-        f"b{bound}[ext=mp4]/"
-        f"bv*{bound}+ba/"
-        f"b{bound}"
-    )
+    return f"bv*{bound}[ext=mp4]+ba[ext=m4a]/b{bound}[ext=mp4]/bv*{bound}+ba/b{bound}"
 
 
 def resolve_ffmpeg_exe() -> str | None:
     try:
         import imageio_ffmpeg
-
         candidate = Path(imageio_ffmpeg.get_ffmpeg_exe())
         if candidate.is_file() and candidate.stat().st_size > 0:
             return str(candidate)
@@ -95,17 +88,14 @@ def _candidate_paths(info: dict[str, Any], ydl: Any, output_dir: Path) -> list[P
             rows.append(Path(prepared))
     except Exception:
         pass
-
     expanded: list[Path] = []
     seen: set[str] = set()
     for path in rows:
-        variants = [path, path.with_suffix(".mp4")]
-        for variant in variants:
+        for variant in (path, path.with_suffix(".mp4")):
             key = str(variant.resolve()) if variant.is_absolute() else str(variant)
             if key not in seen:
                 seen.add(key)
                 expanded.append(variant)
-
     video_id = str(info.get("id") or "").strip()
     if video_id:
         expanded.extend(output_dir.glob(f"*[{video_id}].mp4"))
@@ -124,7 +114,6 @@ def _verified_mp4(info: dict[str, Any], ydl: Any, output_dir: Path) -> Path:
 
 
 def _progress_payload(event: dict[str, Any]) -> dict[str, Any]:
-    """Keep only progress values yt-dlp actually supplied; never synthesize metrics."""
     payload: dict[str, Any] = {}
     status = event.get("status")
     if status is not None:
@@ -139,6 +128,38 @@ def _progress_payload(event: dict[str, Any]) -> dict[str, Any]:
     if total is not None:
         payload["total_bytes"] = total
     return payload
+
+
+def social_video_progress_text(progress: dict[str, Any]) -> str:
+    phase = str(progress.get("phase") or "").upper()
+    if phase == "PREPARE":
+        return "Preparando descarga…"
+    if phase == "RESOLVE":
+        return "Resolviendo URL…"
+    if phase == "POSTPROCESS":
+        return "Procesando audio/video y remux MP4…"
+    if phase == "VERIFY":
+        return "Verificando MP4…"
+    if phase == "COMPLETE":
+        path = str(progress.get("local_path") or "").strip()
+        size = progress.get("size_bytes")
+        suffix = f" · {float(size) / (1024 * 1024):.1f} MB" if size is not None else ""
+        return f"MP4 guardado{': ' + Path(path).name if path else ''}{suffix}"
+
+    downloaded = progress.get("downloaded_bytes")
+    total = progress.get("total_bytes")
+    speed = progress.get("speed")
+    eta = progress.get("eta")
+    parts = ["Descargando video…"]
+    if downloaded is not None and total is not None and float(total) > 0:
+        parts.append(f"{float(downloaded) / (1024 * 1024):.1f} MB / {float(total) / (1024 * 1024):.1f} MB")
+    elif downloaded is not None:
+        parts.append(f"{float(downloaded) / (1024 * 1024):.1f} MB")
+    if speed is not None:
+        parts.append(f"{float(speed) / (1024 * 1024):.1f} MB/s")
+    if eta is not None:
+        parts.append(f"ETA {int(eta)}s")
+    return " · ".join(parts)
 
 
 def download_social_video(
@@ -200,7 +221,6 @@ def download_social_video(
         if size is not None:
             complete["size_bytes"] = size
         emit(**complete)
-
         return VideoDownloadResult(
             title=str(info.get("title") or local_path.stem),
             provider=str(info.get("extractor_key") or info.get("extractor") or "yt-dlp"),

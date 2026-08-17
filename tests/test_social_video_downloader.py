@@ -25,11 +25,22 @@ def test_invalid_url_is_rejected_before_yt_dlp(tmp_path):
         download_social_video("file:///etc/passwd", tmp_path)
 
 
-def test_resolve_ffmpeg_prefers_imageio_binary(monkeypatch, tmp_path):
-    exe = tmp_path / "ffmpeg.exe"
-    exe.write_bytes(b"x")
-    monkeypatch.setattr("imageio_ffmpeg.get_ffmpeg_exe", lambda: str(exe))
-    assert resolve_ffmpeg_exe() == str(exe)
+def test_resolve_ffmpeg_prefers_complete_system_binary_when_available(monkeypatch, tmp_path):
+    system_exe = tmp_path / "system-ffmpeg"
+    bundled_exe = tmp_path / "ffmpeg-win64-v7.0.exe"
+    system_exe.write_bytes(b"system")
+    bundled_exe.write_bytes(b"bundled")
+    monkeypatch.setattr("shutil.which", lambda name: str(system_exe) if name == "ffmpeg" else None)
+    monkeypatch.setattr("imageio_ffmpeg.get_ffmpeg_exe", lambda: str(bundled_exe))
+    assert resolve_ffmpeg_exe() == str(system_exe)
+
+
+def test_resolve_ffmpeg_uses_imageio_binary_when_system_ffmpeg_is_absent(monkeypatch, tmp_path):
+    bundled_exe = tmp_path / "ffmpeg-win64-v7.0.exe"
+    bundled_exe.write_bytes(b"bundled")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    monkeypatch.setattr("imageio_ffmpeg.get_ffmpeg_exe", lambda: str(bundled_exe))
+    assert resolve_ffmpeg_exe() == str(bundled_exe)
 
 
 def test_download_uses_yt_dlp_python_api_and_returns_verified_mp4(monkeypatch, tmp_path):

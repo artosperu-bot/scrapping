@@ -1,9 +1,38 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from . import document_discovery as core
 from .models import ProductIdentity
+
+
+@dataclass
+class ReviewQueryBudget:
+    """One hard logical-query budget shared by every review-discovery pass for a product."""
+
+    limit: int = core.MAX_QUERY_ATTEMPTS
+    used: int = 0
+    queries: list[str] = field(default_factory=list)
+    _seen: set[str] = field(default_factory=set, repr=False)
+
+    @property
+    def remaining(self) -> int:
+        return max(0, int(self.limit) - int(self.used))
+
+    @property
+    def exhausted(self) -> bool:
+        return self.remaining <= 0
+
+    def reserve(self, query: str) -> bool:
+        normalized = " ".join(str(query or "").split()).strip()
+        key = normalized.lower()
+        if not normalized or key in self._seen or self.exhausted:
+            return False
+        self._seen.add(key)
+        self.queries.append(normalized)
+        self.used += 1
+        return True
 
 
 def build_review_query_tiers(identity: ProductIdentity, official_domain: str | None = None) -> list[list[str]]:
@@ -32,8 +61,6 @@ def build_review_query_tiers(identity: ProductIdentity, official_domain: str | N
     primary_strong = strong_values[0] if strong_values else ""
     combined = f'"{brand} {model}"' if brand and model else f'"{model}"' if model else ""
 
-    # Reserved runtime slots. With the current budget of eight, each major strategy
-    # gets representation before any verbose fallback expansion is allowed to run.
     reserved: list[str] = []
     if domain and model:
         reserved.append(f'site:{domain} "{model}" filetype:pdf')
@@ -121,6 +148,7 @@ def _discover_official_pdp_documents(
     seen: set[str] | None = None,
     landing_budget: list[int] | None = None,
     inspected_landings: set[str] | None = None,
+    reserve_query=None,
 ):
     domain = core._clean_official_domain(official_domain)
     strong_values = core._strong_identifiers(identity)
@@ -149,6 +177,8 @@ def _discover_official_pdp_documents(
         if brand:
             query_specs.append((f'"{strong}" "{brand}"', False))
         for query, strict_known_domain in query_specs:
+            if reserve_query is not None and not reserve_query(query):
+                continue
             if trace:
                 trace.emit("PDF_PDP_SEARCH", query=query, identifier=strong, domain=domain if strict_known_domain else "AUTO_BRAND_DOMAIN")
             candidates = core.search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace)
@@ -196,12 +226,14 @@ def discover_review_product_documents(
     timeout: int = 8,
     trace=None,
     official_domain: str | None = None,
+    query_budget: ReviewQueryBudget | None = None,
+    max_new_queries: int | None = None,
 ):
-    """Discover document candidates without treating raw links as validated stop conditions.
+    """Discover candidates under one shared per-product query budget.
 
-    This layer does not open/validate PDFs. Therefore it must exhaust its bounded
-    discovery strategies (or budget) instead of returning merely because a URL was
-    resolved from a landing page. The caller owns download/identity validation.
+    Raw/resolved URLs never stop discovery before validation. When ``query_budget``
+    is supplied, every logical document query across PDP-first, tiers and retries
+    consumes the same hard MAX_QUERY_ATTEMPTS budget.
     """
     tiers = build_review_query_tiers(identity, official_domain=official_domain)
     seen: set[str] = set()
@@ -210,6 +242,24 @@ def discover_review_product_documents(
     inspected_landings: set[str] = set()
     discovered = []
     discovered_urls: set[str] = set()
+    shared_budget = query_budget is not None
+    budget = query_budget or ReviewQueryBudget()
+    pass_used = 0
+
+    def can_reserve_more() -> bool:
+        if budget.exhausted:
+            return False
+        return max_new_queries is None or pass_used < max(0, int(max_new_queries))
+
+    def reserve_query(query: str) -> bool:
+        nonlocal pass_used
+        if not can_reserve_more():
+            return False
+        before = budget.used
+        accepted = budget.reserve(query)
+        if accepted and budget.used > before:
+            pass_used += 1
+        return accepted
 
     def collect(rows):
         added = 0
@@ -231,19 +281,20 @@ def discover_review_product_documents(
         seen=seen,
         landing_budget=landing_budget,
         inspected_landings=inspected_landings,
+        reserve_query=reserve_query,
     )
     if collect(pdp_documents) and trace:
         trace.emit("PDF_DISCOVERY_CONTINUE_AFTER_RAW_LINKS", source="OFFICIAL_PDP", candidate_count=len(discovered))
 
-    query_attempts = 0
     for tier_index, tier in enumerate(tiers):
-        if query_attempts >= core.MAX_QUERY_ATTEMPTS:
+        if not can_reserve_more():
             break
         tier_valid = []
         for query in tier:
-            if query_attempts >= core.MAX_QUERY_ATTEMPTS:
+            if not can_reserve_more():
                 break
-            query_attempts += 1
+            if not reserve_query(query):
+                continue
             candidates = core.search_web_query_candidates(identity, query, limit=per_query, timeout=timeout, trace=trace)
             query_valid = []
             for candidate in candidates:
@@ -293,7 +344,7 @@ def discover_review_product_documents(
                 trace.emit("PDF_DISCOVERY_CONTINUE_AFTER_RAW_LINKS", source="TIER", candidate_count=len(discovered))
 
     flattened = [query for tier in tiers for query in tier]
-    if landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
+    if can_reserve_more() and landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
         browser_resolved = core._browser_document_pass(
             identity,
             queries=flattened,
@@ -303,29 +354,36 @@ def discover_review_product_documents(
             trace=trace,
             landing_budget=landing_budget,
             inspected_landings=inspected_landings,
+            reserve_query=reserve_query,
         )
         collect(browser_resolved)
 
-    fallback = []
-    for candidate in core.search_web(identity, limit=max(8, limit), timeout=max(10, timeout)):
-        canonical = core._canonical_url(candidate.url)
-        if canonical in seen:
-            continue
-        seen.add(canonical)
-        accepted = core._accept_search_candidate(identity, candidate, trace=trace)
-        if accepted is not None:
-            fallback.append(accepted)
-        if len(fallback) >= 6:
-            break
-    collect(core._resolve_valid_candidates(
-        identity,
-        fallback,
-        limit=limit,
-        timeout=timeout,
-        trace=trace,
-        landing_budget=landing_budget,
-        inspected_landings=inspected_landings,
-    ))
+    # The broad legacy fallback owns its own query generator, so it is intentionally
+    # disabled when a caller supplies the global end-to-end budget. Otherwise it
+    # could bypass MAX_QUERY_ATTEMPTS invisibly.
+    if not shared_budget:
+        fallback = []
+        for candidate in core.search_web(identity, limit=max(8, limit), timeout=max(10, timeout)):
+            canonical = core._canonical_url(candidate.url)
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            accepted = core._accept_search_candidate(identity, candidate, trace=trace)
+            if accepted is not None:
+                fallback.append(accepted)
+            if len(fallback) >= 6:
+                break
+        collect(core._resolve_valid_candidates(
+            identity,
+            fallback,
+            limit=limit,
+            timeout=timeout,
+            trace=trace,
+            landing_budget=landing_budget,
+            inspected_landings=inspected_landings,
+        ))
 
+    if trace:
+        trace.emit("PDF_QUERY_BUDGET", used=budget.used, limit=budget.limit, remaining=budget.remaining)
     discovered.sort(key=lambda row: core._document_rank(row) if hasattr(row, "url") else (0, 0, 0), reverse=True)
     return discovered[: max(1, int(limit))]

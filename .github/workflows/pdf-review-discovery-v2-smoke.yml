@@ -6,11 +6,19 @@ on:
       - release/windows
     paths:
       - 'src/product_intelligence/document_discovery.py'
+      - 'src/product_intelligence/pdf_review_search_strategy.py'
+      - 'src/product_intelligence/live_pdf_discovery.py'
+      - 'src/product_intelligence/part_number_pdf_search.py'
       - 'src/product_intelligence/pdf_review.py'
       - 'src/product_intelligence/pdf_review_shell.py'
+      - 'src/product_intelligence/pdf_review_provider_ui.py'
+      - 'src/product_intelligence/final_live_ui_desktop.py'
       - 'src/product_intelligence/pdf_review_batch.py'
       - 'src/product_intelligence/document_ingestion.py'
       - 'src/product_intelligence/pdf_extract.py'
+      - 'tests/test_pdf_pdp_first_review.py'
+      - 'tests/test_pdf_pdp_live_observability.py'
+      - 'tests/test_pdf_review_provider_visibility.py'
       - 'scripts/pdf_review_discovery_v2_benchmark.py'
       - '.github/workflows/pdf-review-discovery-v2-smoke.yml'
   workflow_dispatch:

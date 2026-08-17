@@ -1,4 +1,6 @@
+from product_intelligence import identity_bootstrap as bootstrap
 from product_intelligence import identity_refinement as refinement
+from product_intelligence.discovery import SearchCandidate
 from product_intelligence.models import ProductIdentity
 
 
@@ -108,3 +110,19 @@ def test_identity_sanity_pass_rejects_url_model_and_code_fragment_brand():
         ProductIdentity(brand="Nova", model="Tune 530C", mpn=raw),
         raw=raw,
     )
+
+
+def test_bootstrap_cannot_resolve_color_plus_product_category_as_brand():
+    """Retail merchandising text such as 'azul AUDIFONO' is not a manufacturer."""
+    raw = "ABC123XYZ"
+    identity = ProductIdentity(mpn=raw, model=raw)
+    rows = [
+        SearchCandidate("https://retailer-one.example/p/abc123xyz", f"azul AUDIFONO {raw}", ""),
+        SearchCandidate("https://retailer-two.example/p/abc123xyz", f"azul AUDIFONO {raw}", ""),
+        SearchCandidate("https://catalog-three.example/p/abc123xyz", f"azul AUDIFONO {raw}", ""),
+    ]
+
+    result = bootstrap._finalize_resolution(identity, rows)
+
+    assert (result.identity.brand or "").strip().lower() not in {"azul", "audifono", "azul audifono"}
+    assert result.status != "RESOLVED"

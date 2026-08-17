@@ -73,3 +73,21 @@ def test_execute_starts_next_unconfirmed_product_instead_of_repeating_confirmed_
 
     assert result is None
     assert searched == [1]
+
+
+def test_review_gate_explains_in_global_log_that_execution_is_paused_for_pdf_search(monkeypatch):
+    app = _bare_app(3, set())
+    emitted = []
+    stages = []
+    app.emit = emitted.append
+    app._excel_progress_stage = stages.append
+    app._show_workspace = lambda _key: None
+    app._pdf_review_search = lambda: None
+    monkeypatch.setattr("product_intelligence.real_pdf_review_shell.messagebox.showwarning", lambda *_args: None)
+
+    result = App.run(app)
+
+    assert result is None
+    assert any("[PDF REVIEW]" in line for line in emitted), emitted
+    assert any("paus" in line.lower() or "revisi" in line.lower() for line in emitted), emitted
+    assert any("PDF" in stage.upper() for stage in stages), stages

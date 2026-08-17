@@ -86,6 +86,10 @@ jobs:
                       print('EVENT', {k:event.get(k) for k in ('type','url','source','status','official_page','error') if event.get(k) is not None})
               reasons = Counter(e.get('reason') for e in events if e.get('type') == 'media_rejected')
               print('REJECT_REASONS=', dict(reasons))
+              filtered = [e for e in events if e.get('type') == 'media_filtered']
+              print('FILTERED_COUNT=', len(filtered))
+              for event in filtered[:30]:
+                  print('FILTERED', {k:event.get(k) for k in ('url','role','scope','confidence','source') if event.get(k) is not None})
 
           print('TOTAL_ACCEPTED_MEDIA=', total)
           print('OFFICIAL_COUNTS=', official_counts)

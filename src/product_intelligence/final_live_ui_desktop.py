@@ -7,13 +7,7 @@ from .pdf_review_provider_ui import PdfReviewProviderVisibilityMixin
 from .social_video_visibility import SocialVideoVisibilityMixin
 
 
-class App(
-    MercadoLibreDesktopMixin,
-    PdfReviewProviderVisibilityMixin,
-    SocialVideoVisibilityMixin,
-    AuditLiveUiMixin,
-    LiveUiApp,
-):
+class App(MercadoLibreDesktopMixin, PdfReviewProviderVisibilityMixin, SocialVideoVisibilityMixin, AuditLiveUiMixin, LiveUiApp):
     """Final packaged shell: live UI, audit, OAuth, PDF review and video-by-URL visibility."""
 
 

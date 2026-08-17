@@ -36,7 +36,11 @@ class MercadoLibreDesktopMixin:
         self.ml_details = tk.StringVar(value=self._ml_details_text(current))
 
         box = ttk.LabelFrame(self.settings_tab, text="Mercado Libre API", style="Card.TLabelframe")
-        box.pack(fill="x", pady=(0, 12))
+        existing_children = list(self.settings_tab.winfo_children())
+        if len(existing_children) > 1:
+            box.pack(fill="x", pady=(0, 12), before=existing_children[1])
+        else:
+            box.pack(fill="x", pady=(0, 12))
 
         ttk.Label(
             box,

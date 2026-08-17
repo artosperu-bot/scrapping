@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "product-intelligence"
-version = "0.10.29"
+version = "0.10.30"
 description = "Motor de inteligencia de producto con identidad fuerte, evidencia trazable, media intelligence y completado seguro de Excel."
 requires-python = ">=3.10"
 authors = [{ name = "S&T Store" }]
@@ -28,25 +28,16 @@ documents = ["docling>=2.0"]
 api = ["fastapi>=0.115", "uvicorn>=0.30", "python-multipart>=0.0.9"]
 cli = ["typer>=0.12"]
 desktop = ["playwright>=1.55", "pyinstaller>=6.10", "keyring>=25.0", "yt-dlp>=2026.7.4", "imageio-ffmpeg>=0.6.0"]
-dev = ["pytest>=8.0", "keyring>=25.0", "yt-dlp>=2026.7.4", "imageio-ffmpeg>=0.6.0"]
-full = [
-  "playwright>=1.55",
-  "numpy>=1.26",
-  "opencv-python-headless>=4.10",
-  "paddleocr>=2.8",
-  "paddlepaddle>=2.6",
-  "docling>=2.0",
-  "fastapi>=0.115",
-  "uvicorn>=0.30",
-  "python-multipart>=0.0.9",
-  "typer>=0.12",
-  "yt-dlp>=2026.7.4",
-  "imageio-ffmpeg>=0.6.0",
-]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
-product-intel = "product_intelligence.cli:app"
-product-intel-desktop = "product_intelligence.price_desktop:main"
+product-intelligence = "product_intelligence.cli:app"
+product-intelligence-api = "product_intelligence.api:main"
+product-intelligence-desktop = "product_intelligence.desktop:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

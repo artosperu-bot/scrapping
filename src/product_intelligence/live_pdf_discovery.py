@@ -78,10 +78,22 @@ def discover_validated_review_pdfs_live(
         if on_event:
             on_event({"type": event_type, **payload})
 
+    query_budget = ReviewQueryBudget()
+
     class LiveTrace(PdfSearchTrace):
         def emit(self, event: str, **data) -> None:
             super().emit(event, **data)
-            if event == "PDF_PDP_SEARCH":
+            if event == "PDF_SEARCH_QUERY":
+                position = sum(1 for row in self.events if row.get("event") == "PDF_SEARCH_QUERY")
+                emit(
+                    "query",
+                    stage="SEARCH",
+                    status="SEARCHING",
+                    position=position,
+                    limit=query_budget.limit,
+                    query=str(data.get("query") or ""),
+                )
+            elif event == "PDF_PDP_SEARCH":
                 emit("pdp", stage="PDP_SEARCH", status="SEARCHING", **data)
             elif event == "PDF_PDP_VALIDATED":
                 emit("pdp", stage="PDP_VALIDATED", status="VALIDATED", **data)
@@ -93,7 +105,6 @@ def discover_validated_review_pdfs_live(
     emit("stage", stage="IDENTITY", message="Resolviendo identidad…")
     resolved = resolve_pdf_identity(identity, timeout=timeout)
     trace = LiveTrace(str(resolved.identity.mpn or resolved.identity.ean or resolved.identity.upc or resolved.identity.gtin or resolved.identity.model or "product"))
-    query_budget = ReviewQueryBudget()
 
     # When authority is not known yet, reserve half of the eight-query budget for a
     # manufacturer-first pass after an exact/validated PDP teaches us the domain.
@@ -194,7 +205,14 @@ def discover_validated_review_pdfs_live(
                 identity_score=candidate.identity_score,
             )
             downloaded += 1
-            emit("download", stage="VALIDATE", status="FINISHED", url=candidate.url)
+            emit(
+                "download",
+                stage="VALIDATE",
+                status="FINISHED",
+                url=candidate.url,
+                local_path=str(inspection.local_path or ""),
+                pages=inspection.page_count,
+            )
         except Exception as exc:
             rejected += 1
             error = f"{type(exc).__name__}: {exc}"

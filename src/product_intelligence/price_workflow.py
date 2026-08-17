@@ -6,6 +6,7 @@ from urllib.parse import quote_plus, urlparse
 
 import requests
 
+from .mercadolibre_oauth import build_mercadolibre_api_client
 from .models import ProductIdentity
 from .price_adapters import parse_mercadolibre_payload, parse_shopify_product_payload, parse_vtex_payload
 from .price_channel_registry import build_channel_coverage, target_spec_for_url
@@ -76,10 +77,11 @@ def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[Pric
     rows: list[PriceOffer] = []
     errors: list[Exception] = []
     queries = _mercadolibre_queries(identity)
+    client = build_mercadolibre_api_client(timeout=timeout)
     for q in queries:
         try:
             url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}&limit=50"
-            response = requests.get(url, timeout=timeout, headers={"User-Agent": "ProductIntelligence/0.10"})
+            response = client.get(url, timeout=timeout)
             response.raise_for_status()
             rows.extend(parse_mercadolibre_payload(response.json(), identity))
         except Exception as exc:

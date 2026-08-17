@@ -1,4 +1,3 @@
-from pathlib import Path
 from types import SimpleNamespace
 
 from product_intelligence.models import ProductIdentity
@@ -133,16 +132,38 @@ def test_live_pdf_search_never_exceeds_eight_queries_across_authority_retry(monk
     assert len(attempted) <= strategy.core.MAX_QUERY_ATTEMPTS, attempted
 
 
-def test_real_batch_routes_direct_pdf_documents_to_persistent_output_folder():
-    """The desktop batch must retain P60 PDFs instead of processing them in TemporaryDirectory."""
-    text = Path("src/product_intelligence/batch.py").read_text(encoding="utf-8")
+def test_packaged_desktop_batch_retains_processed_pdf_under_output_pdf_evidence(monkeypatch, tmp_path):
+    """A P60 PDF used by the real desktop must survive after processing."""
+    from product_intelligence import pdf_review_batch as review_batch
 
-    assert '"pdf_evidence"' in text or "'pdf_evidence'" in text
-    direct_block = text[text.index("def _ingest_direct_documents"):text.index("def scrape_item")]
-    assert "download_dir" in direct_block
-    assert "process_pdf_document" in direct_block
-    assert "download_dir=" in direct_block
+    identity = ProductIdentity(brand="Acme", model="Model X", mpn="ABC123")
+    item = SimpleNamespace(identity=identity)
+    captured = {}
 
-    scrape_block = text[text.index("def scrape_item"):text.index("def run_batch")]
-    assert "pdf_evidence" in scrape_block
-    assert "download_dir=" in scrape_block or "document_dir=" in scrape_block
+    monkeypatch.setattr(
+        review_batch,
+        "resolve_pdf_identity",
+        lambda *_a, **_k: SimpleNamespace(identity=identity),
+    )
+
+    def fake_process(_identity, url, *args, **kwargs):
+        captured["url"] = url
+        captured["download_dir"] = kwargs.get("download_dir")
+        return SimpleNamespace()
+
+    def fake_scrape(_item, _out_dir, **_kwargs):
+        return review_batch.batch_module.process_pdf_document(identity, "https://acme.example/manual.pdf")
+
+    def fake_run(*_args, **_kwargs):
+        return review_batch.batch_module.scrape_item(item, str(tmp_path / "json"))
+
+    monkeypatch.setattr(review_batch, "_BASE_PROCESS_PDF", fake_process)
+    monkeypatch.setattr(review_batch, "_BASE_SCRAPE_ITEM", fake_scrape)
+    monkeypatch.setattr(review_batch, "_BASE_RUN_BATCH", fake_run)
+
+    review_batch.run_batch_with_review()
+
+    expected = tmp_path / "pdf_evidence" / "ABC123"
+    assert captured["url"].endswith("manual.pdf")
+    assert captured["download_dir"] == expected
+    assert expected.is_dir()

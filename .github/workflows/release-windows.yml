@@ -43,10 +43,10 @@ jobs:
         shell: cmd
         run: python -m pytest -q
 
-      - name: Smoke provider desktop shell
+      - name: Smoke final packaged desktop shell
         shell: cmd
         run: >-
-          python -c "from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); app.destroy(); print('PROGRESS_UI_SMOKE=PASS')"
+          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); app.destroy(); print('FINAL_UI_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd

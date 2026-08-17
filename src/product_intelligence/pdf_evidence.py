@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -15,6 +15,7 @@ from .normalize import key_norm
 from .web_fetch import UA
 
 _DOCUMENT_HINTS=("pdf","datasheet","data sheet","spec sheet","specification","manual","ficha tecnica","ficha técnica","technical sheet","hoja tecnica","hoja técnica")
+_SOCIAL_TRACKING_HOST_MARKERS=("facebook.com","facebook.net","connect.facebook.net","google-analytics.com","googletagmanager.com","doubleclick.net")
 _pdf_enabled: ContextVar[bool]=ContextVar("pdf_enabled",default=True)
 _pdf_output_root: ContextVar[str|None]=ContextVar("pdf_output_root",default=None)
 _pdf_event_sink: ContextVar[object|None]=ContextVar("pdf_event_sink",default=None)
@@ -52,6 +53,34 @@ def _url_has_sibling_model_conflict(model:str|None,url:str)->bool:
             return True
     return False
 
+def _document_link_rejection_reason(url:str,label:str="",source_page_url:str="")->str|None:
+    """Reject obvious non-document endpoints before they become PDF candidates.
+
+    The decision is contextual: URL shape, filename, source host and link label are
+    considered together. Host markers are only one signal, not the admission rule.
+    """
+    text=str(url or "").strip()
+    if not text:
+        return "empty_url"
+    parsed=urlparse(text)
+    host=(parsed.hostname or "").lower().removeprefix("www.")
+    decoded_path=unquote(parsed.path or "")
+    filename=decoded_path.rsplit("/",1)[-1].strip()
+    if "\\" in decoded_path or "%5c" in text.lower():
+        return "malformed_backslash_pdf"
+    if filename.lower()==".pdf" or not filename:
+        return "empty_pdf_filename"
+    source_host=(urlparse(str(source_page_url or "")).hostname or "").lower().removeprefix("www.")
+    host_is_tracking=any(host==marker or host.endswith("."+marker) for marker in _SOCIAL_TRACKING_HOST_MARKERS)
+    label_norm=key_norm(label or "")
+    document_context=any(h in label_norm or h in key_norm(filename) for h in _DOCUMENT_HINTS)
+    related_to_source=bool(host and source_host and (host==source_host or host.endswith("."+source_host) or source_host.endswith("."+host)))
+    if host_is_tracking and not related_to_source:
+        return "social_tracking_endpoint"
+    if host_is_tracking and not document_context:
+        return "social_tracking_endpoint"
+    return None
+
 def discover_pdf_candidates(html:str,base_url:str)->list[PdfCandidate]:
     soup=BeautifulSoup(html or "","lxml")
     out=[]; seen=set()
@@ -60,6 +89,8 @@ def discover_pdf_candidates(html:str,base_url:str)->list[PdfCandidate]:
         label=a.get_text(" ",strip=True)
         hay=key_norm(f"{label} {href}")
         if ".pdf" not in href.lower() and not any(h in hay for h in _DOCUMENT_HINTS):
+            continue
+        if _document_link_rejection_reason(href,label,base_url):
             continue
         if href in seen: continue
         seen.add(href); out.append(PdfCandidate(href,label,base_url))
@@ -79,10 +110,6 @@ def validate_pdf_identity(identity:ProductIdentity,text:str,url:str="")->PdfIden
     if strong:
         matched=next((_compact(x) for x in strong if _compact(x) and _compact(x) in hay),None)
         if matched:
-            # Once brand identity has been resolved, a direct-discovery PDF must bind
-            # the identifier to that brand in its actual content. This prevents an
-            # incidental phrase such as "A 2794" in an unrelated document from being
-            # accepted as product evidence merely because compact normalization matches.
             if brand:
                 if brand in text_hay:
                     return PdfIdentityMatch(True,.99,"strong_identifier_brand")

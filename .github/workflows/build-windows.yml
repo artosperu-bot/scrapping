@@ -2,6 +2,19 @@ name: Build Windows EXE
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - release/windows
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'run_desktop.py'
+      - 'run_updater.py'
+      - 'pyproject.toml'
+      - 'ProductIntelligence.spec'
+      - 'vendor/**'
+      - '.github/workflows/build-windows.yml'
+      - '.github/workflows/release-windows.yml'
   push:
     branches:
       - main
@@ -43,6 +56,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[desktop,dev]"
 
+      - name: Verify version sources match
+        shell: pwsh
+        run: |
+          $appVersion = python -c "ns={}; exec(open('src/product_intelligence/version.py', encoding='utf-8').read(), ns); print(ns['APP_VERSION'])"
+          $projectVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if ($appVersion.Trim() -ne $projectVersion.Trim()) { throw "Version mismatch: app=$appVersion project=$projectVersion" }
+          if ($appVersion.Trim() -ne '0.10.31') { throw "Unexpected release candidate version: $appVersion" }
+
       - name: Run regression tests
         shell: cmd
         run: python -m pytest -q
@@ -51,6 +72,11 @@ jobs:
         shell: cmd
         run: >-
           python -c "from product_intelligence.modern_desktop import App as ModernApp; from product_intelligence.provider_desktop import App; app=App(); app.update_idletasks(); assert app._active_workspace == 'dashboard'; required={'dashboard','products','sources','attributes','media','prices','run','audit','settings'}; assert required.issubset(app._workspace_tabs); assert 'settings' in app._nav_buttons; assert app.update_status.get().startswith('Versión instalada: v'); app.destroy(); print('PROVIDER_DESKTOP_SMOKE=PASS')"
+
+      - name: Smoke final desktop shell
+        shell: cmd
+        run: >-
+          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.31'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); app.destroy(); print('FINAL_UI_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd
@@ -63,14 +89,31 @@ jobs:
         shell: cmd
         run: pyinstaller --noconfirm --clean ProductIntelligence.spec
 
-      - name: Verify executables exist
-        shell: cmd
+      - name: Verify executables and progress resources
+        shell: pwsh
         run: |
-          if not exist dist\ProductIntelligence\ProductIntelligence.exe exit /b 1
-          if not exist dist\ProductIntelligence\ProductIntelligenceUpdater.exe exit /b 1
+          if (-not (Test-Path 'dist/ProductIntelligence/ProductIntelligence.exe')) { throw 'Missing ProductIntelligence.exe' }
+          if (-not (Test-Path 'dist/ProductIntelligence/ProductIntelligenceUpdater.exe')) { throw 'Missing ProductIntelligenceUpdater.exe' }
+          $processing = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'processing.gif'
+          $completed = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'completed.gif'
+          if (-not $processing) { throw 'processing.gif not bundled' }
+          if (-not $completed) { throw 'completed.gif not bundled' }
+          Write-Host "processing.gif=$($processing.FullName)"
+          Write-Host "completed.gif=$($completed.FullName)"
+
+      - name: Verify standalone updater bootstrap
+        shell: pwsh
+        run: |
+          $smokeDir = Join-Path $env:RUNNER_TEMP 'product-intelligence-updater-smoke'
+          if (Test-Path $smokeDir) { Remove-Item $smokeDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $smokeDir | Out-Null
+          $smokeUpdater = Join-Path $smokeDir 'ProductIntelligenceUpdater.exe'
+          Copy-Item 'dist/ProductIntelligence/ProductIntelligenceUpdater.exe' $smokeUpdater
+          $process = Start-Process -FilePath $smokeUpdater -ArgumentList '--help' -WorkingDirectory $smokeDir -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Standalone updater smoke failed with exit code $($process.ExitCode)" }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ProductIntelligence-Windows
+          name: ProductIntelligence-Windows-v0.10.31
           path: dist/ProductIntelligence/
           if-no-files-found: error

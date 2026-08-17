@@ -8,7 +8,12 @@ from typing import Callable
 
 from . import document_discovery as core_discovery
 from .document_discovery import classify_document_candidate
-from .identity_refinement import refine_code_identity
+from .identity_refinement import (
+    brand_sanity_pass,
+    identity_sanity_pass,
+    model_sanity_pass,
+    refine_code_identity,
+)
 from .models import ProductIdentity
 from .normalize import key_norm
 from .pdf_review import PdfInspection, PdfReviewCandidate, inspect_pdf_candidate, score_review_candidate
@@ -56,6 +61,14 @@ def _strong_keys(identity: ProductIdentity) -> set[str]:
     }
 
 
+def _primary_strong_value(identity: ProductIdentity) -> str | None:
+    for value in (identity.mpn, identity.ean, identity.upc, identity.gtin, identity.sku):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
 def _input_is_code_only(identity: ProductIdentity) -> bool:
     strong = _strong_keys(identity)
     model = _compact(identity.model)
@@ -65,9 +78,10 @@ def _input_is_code_only(identity: ProductIdentity) -> bool:
 
 def _has_descriptive_model(identity: ProductIdentity) -> bool:
     strong = _strong_keys(identity)
+    raw = _primary_strong_value(identity)
     for value in (identity.model, identity.product_name):
         text = str(value or "").strip()
-        if text and _compact(text) not in strong and len(text) <= 100:
+        if text and _compact(text) not in strong and len(text) <= 100 and model_sanity_pass(text, raw=raw):
             return True
     return False
 
@@ -101,15 +115,24 @@ def _provider_conflicts_with_input(original: ProductIdentity, provider_identity:
 def _merge_provider_identity(original: ProductIdentity, current: ProductIdentity, provider: ProductIdentity) -> ProductIdentity:
     strong = _strong_keys(original)
     updates = {}
-    if provider.brand and (not current.brand or len(str(current.brand).strip()) > 60):
+    raw = _primary_strong_value(original)
+    if provider.brand and brand_sanity_pass(provider.brand, raw=raw) and (
+        not current.brand or not brand_sanity_pass(current.brand, raw=raw) or len(str(current.brand).strip()) > 60
+    ):
         updates["brand"] = provider.brand
-    if provider.manufacturer and not current.manufacturer:
+    if provider.manufacturer and brand_sanity_pass(provider.manufacturer, raw=raw) and (
+        not current.manufacturer or not brand_sanity_pass(current.manufacturer, raw=raw)
+    ):
         updates["manufacturer"] = provider.manufacturer
     current_model = str(current.model or "").strip()
-    if provider.model and (not current_model or _compact(current_model) in strong or len(current_model) > 100):
+    if provider.model and model_sanity_pass(provider.model, raw=raw) and (
+        not current_model or _compact(current_model) in strong or not model_sanity_pass(current_model, raw=raw) or len(current_model) > 100
+    ):
         updates["model"] = provider.model
     current_name = str(current.product_name or "").strip()
-    if provider.product_name and (not current_name or _compact(current_name) in strong or len(current_name) > 140):
+    if provider.product_name and model_sanity_pass(provider.product_name, raw=raw) and (
+        not current_name or _compact(current_name) in strong or not model_sanity_pass(current_name, raw=raw) or len(current_name) > 140
+    ):
         updates["product_name"] = provider.product_name
     updates["confidence"] = max(float(current.confidence or 0.0), float(provider.confidence or 0.0))
     return _preserve_excel_identifiers(original, current.model_copy(update=updates))
@@ -134,6 +157,7 @@ def _signal_dict(signal) -> dict:
 
 def _best_observed_model(result, original: ProductIdentity) -> str | None:
     strong = _strong_keys(original)
+    raw = _primary_strong_value(original)
     ranked: list[tuple[int, int, str]] = []
     for raw_signal in list(getattr(result, "page_signals", []) or []):
         signal = _signal_dict(raw_signal)
@@ -141,7 +165,7 @@ def _best_observed_model(result, original: ProductIdentity) -> str | None:
             continue
         for field_name in ("model", "product_name"):
             value = str(signal.get(field_name) or "").strip()
-            if not value or _compact(value) in strong or len(value) > 100:
+            if not value or _compact(value) in strong or len(value) > 100 or not model_sanity_pass(value, raw=raw):
                 continue
             score = 0
             score += 8 if signal.get("authority_owned") else 0
@@ -175,15 +199,10 @@ def _upc_diagnostics(diag: dict, lookup) -> None:
 
 
 def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> ResolvedPdfIdentity:
-    """Resolve Excel identity with Web first for MPN and UPCitemdb only when useful.
-
-    - MPN present: existing web bootstrap/refinement remains first.
-    - No MPN + UPC/EAN/GTIN: UPCitemdb may resolve identity first.
-    - Partial web result + UPC/EAN/GTIN: one cached UPCitemdb lookup is allowed.
-    - Provider failures are fail-open; strong identifier conflicts are fail-closed.
-    """
+    """Resolve product identity monotonically: later evidence may improve, never poison, earlier high-authority evidence."""
     code_only_input = _input_is_code_only(identity)
-    if identity.brand and _has_descriptive_model(identity) and not code_only_input:
+    raw_value = _primary_strong_value(identity)
+    if identity_sanity_pass(identity, raw=raw_value) and not code_only_input:
         return ResolvedPdfIdentity(
             identity,
             identity,
@@ -206,7 +225,7 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
             if _provider_conflicts_with_input(identity, lookup.identity):
                 return ResolvedPdfIdentity(identity, identity, None, "CONFLICT", 0.0, provider_first_diag)
             provider_first_identity = _merge_provider_identity(identity, identity, lookup.identity)
-            if provider_first_identity.brand and _has_descriptive_model(provider_first_identity):
+            if identity_sanity_pass(provider_first_identity, raw=raw_value):
                 return ResolvedPdfIdentity(
                     identity,
                     provider_first_identity,
@@ -239,10 +258,15 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
         base = base.model_copy(update={"model": observed_model, "product_name": observed_model})
 
     bootstrap_domain = str(getattr(bootstrap, "official_domain_hint", "") or "").strip() or None
-    suspicious_brand = bool(base.brand and len(str(base.brand).split()) > 1 and not bootstrap_domain)
+    current_brand = base.brand or base.manufacturer
+    current_model = base.model or base.product_name
+    suspicious_brand = bool(
+        not brand_sanity_pass(current_brand, raw=raw_value)
+        or (current_brand and len(str(current_brand).split()) > 1 and not bootstrap_domain)
+    )
     suspicious_model = bool(
-        not _has_descriptive_model(base)
-        or len(str(base.model or base.product_name or "")) > 70
+        not model_sanity_pass(current_model, raw=raw_value)
+        or len(str(current_model or "")) > 70
         or (_compact(identity.mpn) and _compact(identity.mpn) in _compact(base.model or ""))
     )
     needs_refinement = code_only_input or not base.brand or suspicious_brand or suspicious_model
@@ -283,24 +307,65 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
             if "WEB_REFINEMENT" not in providers:
                 providers.append("WEB_REFINEMENT")
             refinement_diag["providers_used"] = providers
+
             updates = {}
-            if refined.brand_support_domains >= 2 and refined.identity.brand:
-                updates["brand"] = refined.identity.brand
-                if refined.identity.manufacturer:
+            refined_brand = refined.identity.brand or refined.identity.manufacturer
+            refined_model = refined.identity.model or refined.identity.product_name
+            current_brand_sane = brand_sanity_pass(base.brand or base.manufacturer, raw=raw_value)
+            current_model_sane = model_sanity_pass(base.model or base.product_name, raw=raw_value)
+            authoritative_refinement = bool(
+                refined.official_domain_hint
+                and refined.brand_support_domains >= 1
+                and brand_sanity_pass(refined_brand, raw=raw_value)
+            )
+            brand_supported = refined.brand_support_domains >= 2 or authoritative_refinement
+            model_supported = refined.model_support_domains >= 2 or (
+                authoritative_refinement and refined.model_support_domains >= 1
+            )
+
+            if (
+                brand_supported
+                and refined_brand
+                and brand_sanity_pass(refined_brand, raw=raw_value)
+                and (not current_brand_sane or not base.brand or suspicious_brand)
+            ):
+                updates["brand"] = refined.identity.brand or refined_brand
+                if refined.identity.manufacturer and brand_sanity_pass(refined.identity.manufacturer, raw=raw_value):
                     updates["manufacturer"] = refined.identity.manufacturer
-            if refined.model_support_domains >= 2 and refined.identity.model:
-                updates["model"] = refined.identity.model
-                updates["product_name"] = refined.identity.product_name or refined.identity.model
+                elif not base.manufacturer or not brand_sanity_pass(base.manufacturer, raw=raw_value):
+                    updates["manufacturer"] = refined_brand
+
+            if (
+                model_supported
+                and refined_model
+                and model_sanity_pass(refined_model, raw=raw_value)
+                and (suspicious_model or not current_model_sane)
+            ):
+                updates["model"] = refined.identity.model or refined_model
+                product_name = refined.identity.product_name or refined.identity.model
+                if product_name and model_sanity_pass(product_name, raw=raw_value):
+                    updates["product_name"] = product_name
+
             if updates:
                 base = base.model_copy(update=updates)
-            refined_domain = refined.official_domain_hint
+
+            # Manufacturer authority is monotonic. A bootstrap-owned domain wins over
+            # later refinement. A single exact manufacturer-owned source may fill an
+            # empty domain because the brand-to-host binding is stronger than a lone
+            # arbitrary retailer; otherwise cross-domain support is still required.
+            if (
+                not bootstrap_domain
+                and refined.official_domain_hint
+                and brand_supported
+                and brand_sanity_pass(refined_brand, raw=raw_value)
+            ):
+                refined_domain = refined.official_domain_hint
         except Exception as exc:
             refinement_diag["refinement_error"] = f"{type(exc).__name__}: {exc}"
 
     base = _preserve_excel_identifiers(identity, base)
-    resolved_enough = bool(base.brand and _has_descriptive_model(base))
+    resolved_enough = identity_sanity_pass(base, raw=raw_value)
 
-    # Early stop: do not consume the FREE API budget when Web already resolved identity.
     if not resolved_enough and trade_identifier and not provider_called:
         lookup = lookup_identity_by_trade_code(trade_identifier, timeout=max(2, min(int(timeout or 7), 7)))
         provider_called = True
@@ -310,18 +375,19 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
                 return ResolvedPdfIdentity(
                     raw=identity,
                     identity=base,
-                    official_domain=refined_domain or bootstrap_domain,
+                    official_domain=bootstrap_domain or refined_domain,
                     status="CONFLICT",
                     confidence=float(base.confidence or 0.0),
                     diagnostics=refinement_diag,
                 )
             base = _merge_provider_identity(identity, base, lookup.identity)
-            resolved_enough = bool(base.brand and _has_descriptive_model(base))
+            resolved_enough = identity_sanity_pass(base, raw=raw_value)
 
+    refinement_diag["identity_sanity_pass"] = bool(identity_sanity_pass(base, raw=raw_value))
     return ResolvedPdfIdentity(
         raw=identity,
         identity=base,
-        official_domain=refined_domain or bootstrap_domain,
+        official_domain=bootstrap_domain or refined_domain,
         status="RESOLVED" if resolved_enough else "PARTIAL_IDENTITY",
         confidence=float(getattr(base, "confidence", 0.0) or getattr(bootstrap, "confidence", 0.0) or 0.0),
         diagnostics=refinement_diag,

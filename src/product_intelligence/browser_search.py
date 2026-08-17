@@ -96,8 +96,6 @@ def _document_like_pdf_url(absolute: str) -> bool:
     has_document_hint = any(hint in semantic for hint in _DOCUMENT_PATH_HINTS)
     if stem in _GENERIC_PDF_STEMS and not has_document_hint:
         return False
-    if len(stem) == 1 and not has_document_hint:
-        return False
     return True
 
 

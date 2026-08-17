@@ -137,12 +137,6 @@ def _brand_ngrams(tokens: list[str]) -> list[str]:
 
 
 def _descriptive_brand_hint(value: str | None, raw: str) -> str | None:
-    """Recover a conservative brand hint from an already descriptive bootstrap model.
-
-    This is intentionally limited to the leading useful token. It prevents a retailer
-    hostname from replacing a product brand that the bootstrap already surfaced in
-    text such as ``JBL Endurance Run 3 ...``.
-    """
     text = str(value or "").strip()
     if not text or _compact(text) == _compact(raw):
         return None
@@ -165,7 +159,6 @@ def _select_brand(candidates: list[SearchCandidate], raw: str, current: str | No
         root_label = _compact(domain.split(".", 1)[0])
         title_tokens = _title_tokens(candidate, raw)
 
-        # Prefix phrases retain support for clean manufacturer-first titles.
         for phrase in _brand_ngrams(title_tokens):
             key = _compact(phrase)
             display.setdefault(key, phrase)
@@ -174,18 +167,12 @@ def _select_brand(candidates: list[SearchCandidate], raw: str, current: str | No
             if root_label and (key == root_label or (len(key) >= 3 and key in root_label)):
                 host_matches[key] += 1
 
-        # Also count individual brand-like tokens across independent domains. This is
-        # what defeats retailer prefixes such as ``LoyaltySource Acme Model X``: the
-        # retailer appears on one host, while ``Acme`` is corroborated across stores.
         for token in title_tokens[:6]:
             if token in _BRAND_GENERIC or any(ch.isdigit() for ch in token) or len(token) < 2:
                 continue
             key = _compact(token)
             if not key:
                 continue
-            # A token equal to its own hostname is presumptively a retailer/site name.
-            # It may still be trusted when it is the existing brand hint, otherwise it
-            # needs independent cross-domain support before becoming a product brand.
             display.setdefault(key, token)
             if domain:
                 domains_by_phrase[key].add(domain)
@@ -198,18 +185,16 @@ def _select_brand(candidates: list[SearchCandidate], raw: str, current: str | No
         words = display[key].split()
         is_current = bool(current_key and (key == current_key or current_key.startswith(key) or key.startswith(current_key)))
 
-        # Never allow a one-domain site/retailer token to manufacture a brand. A
-        # singleton can survive only when it matches an existing trusted hint.
         if support < 2 and not is_current:
             continue
 
         score = support * 10.0
         if is_current:
             score += 12.0
-        # Host matching is supporting evidence only after cross-domain/current proof;
-        # it is no longer sufficient by itself.
         if support >= 2:
             score += min(host_matches[key], support) * 1.5
+            if host_matches[key] and len(words) > 1:
+                score += 2.5
         score -= max(0, len(words) - 1) * 1.25
         scores.append((score, support, -len(words), key))
 
@@ -330,7 +315,6 @@ def refine_code_identity(
     timeout: int = 7,
     max_queries: int = 2,
 ) -> IdentityRefinement:
-    """Refine an incomplete code identity using bounded cross-domain consensus."""
     raw = _raw(original)
     if not raw:
         return IdentityRefinement(current, None, 0, 0, 0)

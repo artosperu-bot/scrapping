@@ -36,6 +36,14 @@ def build_format_selector(quality: str) -> str:
 
 
 def resolve_ffmpeg_exe() -> str | None:
+    system = shutil.which("ffmpeg")
+    if system:
+        try:
+            candidate = Path(system)
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return str(candidate)
+        except OSError:
+            pass
     try:
         import imageio_ffmpeg
         candidate = Path(imageio_ffmpeg.get_ffmpeg_exe())
@@ -43,7 +51,7 @@ def resolve_ffmpeg_exe() -> str | None:
             return str(candidate)
     except Exception:
         pass
-    return shutil.which("ffmpeg")
+    return None
 
 
 def _validate_url(url: str) -> str:

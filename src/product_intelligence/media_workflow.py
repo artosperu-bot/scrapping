@@ -10,7 +10,7 @@ from .media_discovery import discover_media
 from .media_downloader import download_media_item, write_media_metadata
 from .media_url_quality import promote_image_url
 from .models import ProductIdentity
-from .web_fetch import fetch_page
+from .web_fetch import fetch_browser, fetch_page
 
 MediaEventCallback = Callable[[dict], None]
 
@@ -100,10 +100,97 @@ def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
     if official_page and role in {"product_gallery", "product_video"}:
         return confidence >= 0.84
 
+    # discover_media independently records gallery_index only when the image is nested
+    # in a product/gallery/PDP media container. On an already identity-validated
+    # manufacturer PDP that structural evidence is sufficient even if textual role
+    # classification remained unknown. Page assets and related products were rejected
+    # above, and this relaxation never applies to non-official pages.
+    if (
+        official_page
+        and media_type == "image"
+        and role == "unknown_image"
+        and row.get("gallery_index") is not None
+    ):
+        return confidence >= 0.84
+
     if official_page and media_type == "image" and role == "unknown_image" and _looks_like_official_catalog_asset(row):
         return confidence >= 0.84
 
     return confidence >= 0.95
+
+
+def _eligible_count(rows: list[dict], *, official_page: bool) -> int:
+    return sum(1 for row in rows if _eligible_media(row, official_page=official_page))
+
+
+def _browser_enrich_official_media(
+    fetched,
+    final_url: str,
+    identity: ProductIdentity,
+    discovered: list[dict],
+    *,
+    official_page: bool,
+    emit,
+):
+    """Render a validated manufacturer PDP only when static media coverage is empty.
+
+    A successful HTTP 200 is not proof that the product gallery was present in the
+    response HTML. Modern commerce sites often hydrate galleries after load. This
+    fallback is intentionally coverage-aware: it runs only for validated official
+    pages with zero eligible media, and rendered content must independently pass the
+    same product identity gate before any rendered asset can be used.
+    """
+    if not official_page or str(getattr(fetched, "method", "")) == "playwright":
+        return fetched, final_url, discovered
+    if _eligible_count(discovered, official_page=True) > 0:
+        return fetched, final_url, discovered
+
+    emit("page", url=final_url, source="browser_enrichment", status="rendering", official_page=True)
+    try:
+        rendered = fetch_browser(final_url, timeout=40, activate_lazy_media=True)
+    except Exception as exc:
+        emit(
+            "page",
+            url=final_url,
+            source="browser_enrichment",
+            status="render_error",
+            official_page=True,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return fetched, final_url, discovered
+
+    rendered_url = str(getattr(rendered, "final_url", None) or final_url)
+    rendered_html = str(getattr(rendered, "html", "") or "")
+    if not _page_matches_identity(rendered_html, rendered_url, identity):
+        emit(
+            "page",
+            url=rendered_url,
+            source="browser_enrichment",
+            status="rejected_identity",
+            official_page=True,
+        )
+        return fetched, final_url, discovered
+
+    rendered_media = discover_media(
+        rendered_html,
+        rendered_url,
+        identity,
+        network_resources=list(getattr(rendered, "network_resources", []) or []),
+        page_is_validated=True,
+    )
+    eligible = _eligible_count(rendered_media, official_page=True)
+    emit(
+        "page",
+        url=rendered_url,
+        source="browser_enrichment",
+        status="validated",
+        official_page=True,
+        media_candidates=len(rendered_media),
+        eligible_media=eligible,
+    )
+    if eligible <= 0:
+        return fetched, final_url, discovered
+    return rendered, rendered_url, rendered_media
 
 
 def run_media_product(
@@ -129,9 +216,9 @@ def run_media_product(
     for page_url, discovery_source in urls:
         try:
             emit("page", url=page_url, source=discovery_source, status="fetching")
-            # Request/HTML first preserves complete catalog markup on sites such as
-            # Salesforce Commerce Cloud. Playwright remains available as fallback
-            # when the normal request path cannot fetch the page.
+            # Requests remains the cheap first pass. A validated manufacturer PDP that
+            # exposes no usable media is enriched once with Playwright below; a generic
+            # HTTP 200 is not treated as proof that a dynamic gallery was captured.
             fetched = fetch_page(
                 page_url,
                 timeout=30,
@@ -153,6 +240,15 @@ def run_media_product(
                 network_resources=list(getattr(fetched, "network_resources", []) or []),
                 page_is_validated=True,
             )
+            fetched, final_url, discovered = _browser_enrich_official_media(
+                fetched,
+                final_url,
+                relaxed_identity,
+                discovered,
+                official_page=official_page,
+                emit=emit,
+            )
+
             for item in discovered:
                 original_url = str(item.get("url") or "").strip()
                 if not original_url:

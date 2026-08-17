@@ -343,25 +343,25 @@ def discover_review_product_documents(
             if collect(resolved) and trace:
                 trace.emit("PDF_DISCOVERY_CONTINUE_AFTER_RAW_LINKS", source="TIER", candidate_count=len(discovered))
 
-    flattened = [query for tier in tiers for query in tier]
-    if can_reserve_more() and landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
-        browser_resolved = core._browser_document_pass(
-            identity,
-            queries=flattened,
-            seen=seen,
-            limit=limit,
-            timeout=timeout,
-            trace=trace,
-            landing_budget=landing_budget,
-            inspected_landings=inspected_landings,
-            reserve_query=reserve_query,
-        )
-        collect(browser_resolved)
-
-    # The broad legacy fallback owns its own query generator, so it is intentionally
-    # disabled when a caller supplies the global end-to-end budget. Otherwise it
-    # could bypass MAX_QUERY_ATTEMPTS invisibly.
+    # Each normal logical query already gets an HTTP->browser transport fallback in
+    # search_web_query_candidates. The separate broad browser pass would execute
+    # extra searches outside that logical query and is therefore disabled whenever
+    # the end-to-end shared budget is active.
     if not shared_budget:
+        flattened = [query for tier in tiers for query in tier]
+        if landing_budget[0] < core.MAX_LANDING_INSPECTIONS:
+            browser_resolved = core._browser_document_pass(
+                identity,
+                queries=flattened,
+                seen=seen,
+                limit=limit,
+                timeout=timeout,
+                trace=trace,
+                landing_budget=landing_budget,
+                inspected_landings=inspected_landings,
+            )
+            collect(browser_resolved)
+
         fallback = []
         for candidate in core.search_web(identity, limit=max(8, limit), timeout=max(10, timeout)):
             canonical = core._canonical_url(candidate.url)

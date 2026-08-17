@@ -15,7 +15,7 @@ from .pdf_pipeline import (
     sha256_file,
 )
 from .pdf_review import PdfReviewCandidate, inspect_pdf_candidate
-from .pdf_review_search_strategy import discover_review_product_documents
+from .pdf_review_search_strategy import ReviewQueryBudget, discover_review_product_documents
 from .pdf_search_trace import PdfSearchTrace, format_trace_lines
 
 
@@ -28,8 +28,6 @@ def _brand_aligned_domain(identity: ProductIdentity, trace: PdfSearchTrace) -> s
     if len(brand) < 2:
         return None
 
-    # Prefer PDPs explicitly validated by the manufacturer-first pass. Fallback to
-    # exact/inspected landings whose hostname contains the resolved brand label.
     ordered_events = ["PDF_PDP_VALIDATED", "PDF_EXACT_PDP_FOUND", "PDF_LANDING_INSPECTED"]
     for event_name in ordered_events:
         for row in trace.events:
@@ -74,7 +72,7 @@ def discover_validated_review_pdfs_live(
     log: Callable[[str], None] | None = None,
     on_event: Callable[[dict], None] | None = None,
 ) -> ReviewDiscoveryResult:
-    """Live review discovery: identity -> PDP/PDF search -> download/validation; no OCR/Mistral."""
+    """Live review discovery: identity -> bounded PDP/PDF search -> validation; no OCR/Mistral."""
 
     def emit(event_type: str, **payload):
         if on_event:
@@ -95,18 +93,24 @@ def discover_validated_review_pdfs_live(
     emit("stage", stage="IDENTITY", message="Resolviendo identidad…")
     resolved = resolve_pdf_identity(identity, timeout=timeout)
     trace = LiveTrace(str(resolved.identity.mpn or resolved.identity.ean or resolved.identity.upc or resolved.identity.gtin or resolved.identity.model or "product"))
+    query_budget = ReviewQueryBudget()
+
+    # When authority is not known yet, reserve half of the eight-query budget for a
+    # manufacturer-first pass after an exact/validated PDP teaches us the domain.
+    # If no domain is learned, a continuation pass spends the same remaining budget
+    # on unseen queries instead. Every pass shares the same ReviewQueryBudget.
+    initial_cap = max(1, query_budget.limit // 2) if not resolved.official_domain else None
     rows = [] if resolved.status == "CONFLICT" else discover_review_product_documents(
         resolved.identity,
         limit=limit,
         timeout=timeout,
         official_domain=resolved.official_domain,
         trace=trace,
+        query_budget=query_budget,
+        max_new_queries=initial_cap,
     )
 
-    # If discovery itself proves an exact manufacturer PDP while identity started
-    # without an authority domain, feed that evidence back into one bounded
-    # manufacturer-first retry. This prevents retailer-first results from dominating
-    # after the official PDP has already been observed.
+    learned_domain = None
     if not resolved.official_domain and resolved.status != "CONFLICT":
         learned_domain = _brand_aligned_domain(resolved.identity, trace)
         if learned_domain:
@@ -129,8 +133,19 @@ def discover_validated_review_pdfs_live(
                 timeout=timeout,
                 official_domain=learned_domain,
                 trace=trace,
+                query_budget=query_budget,
             )
             rows = _merge_rows(retry_rows, rows, limit)
+        elif query_budget.remaining:
+            continuation_rows = discover_review_product_documents(
+                resolved.identity,
+                limit=limit,
+                timeout=timeout,
+                official_domain=None,
+                trace=trace,
+                query_budget=query_budget,
+            )
+            rows = _merge_rows(rows, continuation_rows, limit)
 
     emit(
         "identity",
@@ -152,6 +167,7 @@ def discover_validated_review_pdfs_live(
         log(f"[IDENTITY DIAGNOSTICS] {resolved.diagnostics}")
         for line in format_trace_lines(trace):
             log(line)
+        log(f"[QUERY_BUDGET] used={query_budget.used} limit={query_budget.limit} remaining={query_budget.remaining}")
 
     validated: list[ValidatedPdfCandidate] = []
     rejected = 0

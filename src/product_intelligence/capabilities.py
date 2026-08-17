@@ -32,8 +32,8 @@ CAPABILITIES: dict[str, Capability] = {
     ),
     "ocr": Capability(
         "ocr",
-        ("paddleocr", "paddle"),
-        "OCR de último recurso para documentos o imágenes sin capa de texto",
+        ("rapidocr", "onnxruntime"),
+        "OCR local CPU de último recurso para documentos o imágenes sin capa de texto",
     ),
     "documents": Capability(
         "documents",

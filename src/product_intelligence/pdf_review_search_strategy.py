@@ -1,16 +1,13 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from . import document_discovery as core
 from .models import ProductIdentity
 
 
 def build_review_query_tiers(identity: ProductIdentity, official_domain: str | None = None) -> list[list[str]]:
-    """Put distinct, high-value PDF intents inside the scarce runtime budget.
-
-    The core ladder remains the fallback source of proven queries. This review-specific
-    ordering prevents equivalent plain `MPN pdf` variants from consuming slots before
-    official-domain, specifications, datasheet, manual, and support intents run.
-    """
+    """Put distinct, high-value PDF intents inside the scarce runtime budget."""
     brand = str(identity.brand or "").strip()
     model = core._descriptive_model(identity)
     strong_values = core._strong_identifiers(identity)
@@ -61,6 +58,124 @@ def build_review_query_tiers(identity: ProductIdentity, official_domain: str | N
     return tiers
 
 
+def _on_official_domain(url: str, official_domain: str) -> bool:
+    host = (urlparse(str(url or "")).hostname or "").lower().removeprefix("www.")
+    domain = core._clean_official_domain(official_domain)
+    return bool(host and domain and (host == domain or host.endswith("." + domain)))
+
+
+def _landing_domain(url: str) -> str | None:
+    host = (urlparse(str(url or "")).hostname or "").lower().removeprefix("www.")
+    return core._clean_official_domain(host) if host else None
+
+
+def _discover_official_pdp_documents(
+    identity: ProductIdentity,
+    *,
+    official_domain: str | None,
+    limit: int,
+    timeout: int,
+    trace=None,
+    seen: set[str] | None = None,
+    landing_budget: list[int] | None = None,
+    inspected_landings: set[str] | None = None,
+):
+    """Inspect exact manufacturer PDPs before spending the generic PDF-query budget.
+
+    A known global manufacturer domain is tried first. If that domain has no usable
+    exact PDP, the same identifier is searched with the resolved brand so regional
+    manufacturer domains can be discovered. Every regional candidate still has to pass
+    the shared likely-official and exact identity gates. No OCR/Mistral runs here.
+    """
+    domain = core._clean_official_domain(official_domain)
+    strong_values = core._strong_identifiers(identity)
+    brand = str(identity.brand or identity.manufacturer or "").strip()
+    if not strong_values or (not domain and not brand):
+        return []
+
+    shared_seen = seen if seen is not None else set()
+    budget = landing_budget if landing_budget is not None else [0]
+    inspected = inspected_landings if inspected_landings is not None else set()
+    per_query = max(4, min(max(1, int(limit)), 6))
+
+    for strong in strong_values[:2]:
+        query_specs: list[tuple[str, bool]] = []
+        if domain:
+            query_specs.append((f'site:{domain} "{strong}"', True))
+        if brand:
+            brand_query = f'"{strong}" "{brand}"'
+            if not query_specs or brand_query != query_specs[0][0]:
+                query_specs.append((brand_query, False))
+
+        for query, strict_known_domain in query_specs:
+            if trace:
+                trace.emit(
+                    "PDF_PDP_SEARCH",
+                    query=query,
+                    identifier=strong,
+                    domain=domain if strict_known_domain else "AUTO_BRAND_DOMAIN",
+                )
+            candidates = core.search_web_query_candidates(
+                identity,
+                query,
+                limit=per_query,
+                timeout=timeout,
+                trace=trace,
+            )
+            exact_landings = []
+            for candidate in candidates:
+                canonical = core._canonical_url(candidate.url)
+                if canonical in shared_seen:
+                    continue
+                shared_seen.add(canonical)
+                accepted = core._accept_search_candidate(identity, candidate, trace=trace)
+                if accepted is None or core._looks_like_direct_pdf(accepted.url):
+                    continue
+                if accepted.identity_score < 88 or not accepted.likely_official:
+                    continue
+
+                if strict_known_domain:
+                    if not _on_official_domain(accepted.url, domain):
+                        continue
+                    authority_domain = domain
+                else:
+                    authority_domain = _landing_domain(accepted.url)
+                    if not authority_domain:
+                        continue
+
+                exact_landings.append(accepted)
+                if trace:
+                    trace.emit(
+                        "PDF_PDP_VALIDATED",
+                        url=accepted.url,
+                        identifier=strong,
+                        identity_score=accepted.identity_score,
+                        authority="MANUFACTURER",
+                        domain=authority_domain,
+                    )
+
+            if not exact_landings or budget[0] >= core.MAX_LANDING_INSPECTIONS:
+                continue
+            resolved = core._resolve_valid_candidates(
+                identity,
+                exact_landings,
+                limit=limit,
+                timeout=timeout,
+                trace=trace,
+                landing_budget=budget,
+                inspected_landings=inspected,
+            )
+            if resolved:
+                if trace:
+                    trace.emit(
+                        "PDF_PDP_DOCUMENTS_RESOLVED",
+                        count=len(resolved),
+                        parent_count=len(exact_landings),
+                    )
+                return resolved
+    return []
+
+
 def discover_review_product_documents(
     identity: ProductIdentity,
     *,
@@ -75,8 +190,21 @@ def discover_review_product_documents(
     per_query = max(4, min(limit, 6))
     landing_budget = [0]
     inspected_landings: set[str] = set()
-    query_attempts = 0
 
+    pdp_documents = _discover_official_pdp_documents(
+        identity,
+        official_domain=official_domain,
+        limit=limit,
+        timeout=timeout,
+        trace=trace,
+        seen=seen,
+        landing_budget=landing_budget,
+        inspected_landings=inspected_landings,
+    )
+    if pdp_documents:
+        return pdp_documents
+
+    query_attempts = 0
     for tier_index, tier in enumerate(tiers):
         if query_attempts >= core.MAX_QUERY_ATTEMPTS:
             break

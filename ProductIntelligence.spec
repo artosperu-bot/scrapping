@@ -11,7 +11,9 @@ datas=[]; binaries=[]; hiddenimports=[
     'product_intelligence.pdf_review_shell',
     'product_intelligence.provider_desktop',
     'product_intelligence.provider_runtime',
+    'product_intelligence.provider_diagnostics_ui',
     'product_intelligence.ocr_space_client',
+    'product_intelligence.local_ocr',
     'product_intelligence.mistral_client',
     'product_intelligence.description_narrator',
     'product_intelligence.progress_animation',
@@ -38,6 +40,18 @@ try:
 except Exception:
     pass
 
+try:
+    d,b,h=collect_all('rapidocr')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
+try:
+    d,b,h=collect_all('onnxruntime')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
 browser_dir=root/'vendor'/'ms-playwright'
 if browser_dir.exists():
     datas.append((str(browser_dir),'vendor/ms-playwright'))
@@ -53,9 +67,12 @@ for progress_name in ('processing.gif', 'completed.gif'):
         raise FileNotFoundError(f"Missing required progress asset: {progress_file}")
     datas.append((str(progress_file),'product_intelligence/assets/progress'))
 
+# PaddleOCR is intentionally excluded from the desktop profile. The packaged local
+# OCR fallback is RapidOCR + ONNX Runtime; numpy/OpenCV dependencies must remain
+# available because the CPU OCR runtime uses them internally.
 common_excludes=[
     'pytest',
-    'paddleocr','paddlepaddle','paddle','cv2','numpy',
+    'paddleocr','paddlepaddle','paddle',
     'docling',
     'fastapi','uvicorn','multipart','python_multipart','typer','click',
 ]

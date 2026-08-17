@@ -224,6 +224,11 @@ def _normalize_provider_candidate(row) -> SearchCandidate | None:
     return None
 
 
+def _plausible_brand_hint(value: str | None) -> bool:
+    tokens = _tokenize(value or "")
+    return bool(tokens and len(tokens) <= 3 and all(token not in _BRAND_GENERIC for token in tokens))
+
+
 def refine_code_identity(
     original: ProductIdentity,
     current: ProductIdentity,
@@ -256,6 +261,22 @@ def refine_code_identity(
             collected.append(candidate)
 
     brand, brand_support, official_domain = _select_brand(collected, raw, brand_hint or None)
+    hint_key = _compact(brand_hint)
+    selected_key = _compact(brand)
+    aligned = bool(
+        not hint_key
+        or not selected_key
+        or hint_key == selected_key
+        or hint_key.startswith(selected_key)
+        or selected_key.startswith(hint_key)
+    )
+    if brand_hint and _plausible_brand_hint(brand_hint) and not aligned:
+        # A clean existing manufacturer name is retained against an unrelated SERP
+        # brand/domain. Noisy labels containing colors/category terms remain repairable.
+        brand = brand_hint
+        brand_support = 0
+        official_domain = None
+
     model, model_support = _select_model(collected, raw, brand)
 
     updates = {}

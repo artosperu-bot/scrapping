@@ -80,13 +80,12 @@ def _discover_official_pdp_documents(
     landing_budget: list[int] | None = None,
     inspected_landings: set[str] | None = None,
 ):
-    """Inspect exact manufacturer PDPs before spending the PDF-query budget.
+    """Inspect exact manufacturer PDPs before spending the generic PDF-query budget.
 
-    If the identity resolver already knows the manufacturer domain, use a strict
-    site-scoped query. If it does not, use the resolved brand + strong identifier to
-    discover a likely-official landing first. The landing still has to pass the same
-    identity score and manufacturer-likelihood gates before any linked PDF inherits
-    provenance. Discovery performs no OCR or Mistral work.
+    A known global manufacturer domain is tried first. If that domain has no usable
+    exact PDP, the same identifier is searched with the resolved brand so regional
+    manufacturer domains can be discovered. Every regional candidate still has to pass
+    the shared likely-official and exact identity gates. No OCR/Mistral runs here.
     """
     domain = core._clean_official_domain(official_domain)
     strong_values = core._strong_identifiers(identity)
@@ -100,70 +99,80 @@ def _discover_official_pdp_documents(
     per_query = max(4, min(max(1, int(limit)), 6))
 
     for strong in strong_values[:2]:
-        query = f'site:{domain} "{strong}"' if domain else f'"{strong}" "{brand}"'
-        if trace:
-            trace.emit(
-                "PDF_PDP_SEARCH",
-                query=query,
-                identifier=strong,
-                domain=domain or "AUTO_BRAND_DOMAIN",
-            )
-        candidates = core.search_web_query_candidates(
-            identity,
-            query,
-            limit=per_query,
-            timeout=timeout,
-            trace=trace,
-        )
-        exact_landings = []
-        for candidate in candidates:
-            canonical = core._canonical_url(candidate.url)
-            if canonical in shared_seen:
-                continue
-            shared_seen.add(canonical)
-            accepted = core._accept_search_candidate(identity, candidate, trace=trace)
-            if accepted is None or core._looks_like_direct_pdf(accepted.url):
-                continue
-            if accepted.identity_score < 88:
-                continue
-            if domain:
-                if not accepted.likely_official or not _on_official_domain(accepted.url, domain):
-                    continue
-                authority_domain = domain
-            else:
-                # `likely_official` is assigned by the shared discovery authority
-                # logic from brand/host evidence; do not manufacture authority here.
-                if not accepted.likely_official:
-                    continue
-                authority_domain = _landing_domain(accepted.url)
-                if not authority_domain:
-                    continue
-            exact_landings.append(accepted)
+        query_specs: list[tuple[str, bool]] = []
+        if domain:
+            query_specs.append((f'site:{domain} "{strong}"', True))
+        if brand:
+            brand_query = f'"{strong}" "{brand}"'
+            if not query_specs or brand_query != query_specs[0][0]:
+                query_specs.append((brand_query, False))
+
+        for query, strict_known_domain in query_specs:
             if trace:
                 trace.emit(
-                    "PDF_PDP_VALIDATED",
-                    url=accepted.url,
+                    "PDF_PDP_SEARCH",
+                    query=query,
                     identifier=strong,
-                    identity_score=accepted.identity_score,
-                    authority="MANUFACTURER",
-                    domain=authority_domain,
+                    domain=domain if strict_known_domain else "AUTO_BRAND_DOMAIN",
                 )
+            candidates = core.search_web_query_candidates(
+                identity,
+                query,
+                limit=per_query,
+                timeout=timeout,
+                trace=trace,
+            )
+            exact_landings = []
+            for candidate in candidates:
+                canonical = core._canonical_url(candidate.url)
+                if canonical in shared_seen:
+                    continue
+                shared_seen.add(canonical)
+                accepted = core._accept_search_candidate(identity, candidate, trace=trace)
+                if accepted is None or core._looks_like_direct_pdf(accepted.url):
+                    continue
+                if accepted.identity_score < 88 or not accepted.likely_official:
+                    continue
 
-        if not exact_landings or budget[0] >= core.MAX_LANDING_INSPECTIONS:
-            continue
-        resolved = core._resolve_valid_candidates(
-            identity,
-            exact_landings,
-            limit=limit,
-            timeout=timeout,
-            trace=trace,
-            landing_budget=budget,
-            inspected_landings=inspected,
-        )
-        if resolved:
-            if trace:
-                trace.emit("PDF_PDP_DOCUMENTS_RESOLVED", count=len(resolved), parent_count=len(exact_landings))
-            return resolved
+                if strict_known_domain:
+                    if not _on_official_domain(accepted.url, domain):
+                        continue
+                    authority_domain = domain
+                else:
+                    authority_domain = _landing_domain(accepted.url)
+                    if not authority_domain:
+                        continue
+
+                exact_landings.append(accepted)
+                if trace:
+                    trace.emit(
+                        "PDF_PDP_VALIDATED",
+                        url=accepted.url,
+                        identifier=strong,
+                        identity_score=accepted.identity_score,
+                        authority="MANUFACTURER",
+                        domain=authority_domain,
+                    )
+
+            if not exact_landings or budget[0] >= core.MAX_LANDING_INSPECTIONS:
+                continue
+            resolved = core._resolve_valid_candidates(
+                identity,
+                exact_landings,
+                limit=limit,
+                timeout=timeout,
+                trace=trace,
+                landing_budget=budget,
+                inspected_landings=inspected,
+            )
+            if resolved:
+                if trace:
+                    trace.emit(
+                        "PDF_PDP_DOCUMENTS_RESOLVED",
+                        count=len(resolved),
+                        parent_count=len(exact_landings),
+                    )
+                return resolved
     return []
 
 

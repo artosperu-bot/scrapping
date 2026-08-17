@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .capabilities import is_available
+from .local_ocr import rapidocr_text
 
 
 @dataclass(frozen=True)
@@ -20,11 +21,7 @@ class OCRUnavailable(RuntimeError):
 
 
 class OCRProvider(Protocol):
-    """Remote/local OCR contract used by PDF extraction and tests.
-
-    Implementations receive bytes and return plain text only. Provider-specific
-    credentials, HTTP details and secrets stay behind the implementation.
-    """
+    """Remote/local OCR contract used by PDF extraction and tests."""
 
     def extract(self, image_bytes: bytes, *, language: str, timeout: int) -> str:
         ...
@@ -37,7 +34,6 @@ def extract_with_provider(
     language: str = "en",
     timeout: int = 20,
 ) -> str:
-    """Invoke a configured provider and fail closed on provider errors."""
     if provider is None:
         return ""
     try:
@@ -51,37 +47,22 @@ def available() -> bool:
 
 
 def extract_text(image_path: str | Path, *, lang: str = "en") -> list[OCRLine]:
-    """Existing local OCR last-resort adapter.
+    """Compatibility adapter backed by the cached RapidOCR CPU engine.
 
-    The caller must validate product/document identity before invoking OCR.
-    OCR output is evidence with lower trust; it is never allowed to overwrite
-    stronger structured HTML/PDF/API evidence by itself.
+    The actual reviewed-PDF path calls ``rapidocr_text`` directly on rendered page
+    bytes. This function remains for legacy callers that supply an image path.
+    Product/document identity must already be validated before invoking OCR.
     """
     if not available():
         raise OCRUnavailable(
-            "OCR no está instalado. Instala el perfil opcional con: pip install -e '.[ocr]'"
+            "OCR local no está instalado. Instala el perfil opcional con: pip install -e '.[ocr]'"
         )
-
-    from paddleocr import PaddleOCR  # lazy optional import
-
-    engine = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
-    raw = engine.ocr(str(image_path), cls=True)
-    lines: list[OCRLine] = []
-
-    for page in raw or []:
-        if not isinstance(page, (list, tuple)):
-            continue
-        for item in page:
-            try:
-                bbox = item[0]
-                payload = item[1]
-                text = str(payload[0]).strip()
-                confidence = float(payload[1])
-            except (TypeError, ValueError, IndexError):
-                continue
-            if text:
-                lines.append(OCRLine(text=text, confidence=confidence, bbox=bbox))
-    return lines
+    try:
+        data = Path(image_path).read_bytes()
+    except OSError:
+        return []
+    text = rapidocr_text(data)
+    return [OCRLine(text=line.strip(), confidence=0.80) for line in text.splitlines() if line.strip()]
 
 
 def joined_text(lines: list[OCRLine], *, min_confidence: float = 0.65) -> str:

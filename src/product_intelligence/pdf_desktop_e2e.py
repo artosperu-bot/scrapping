@@ -151,15 +151,58 @@ class PdfDesktopE2EMixin:
         if kind == "log":
             message = str(event.get("message") or "Buscando PDFs…")
             self._emit_pdf_global(message)
+        elif kind == "query":
+            position = int(event.get("position") or 0)
+            limit = int(event.get("limit") or 0)
+            query = str(event.get("query") or "").strip()
+            self._emit_pdf_global(f"QUERY {position}/{limit} · {query}")
+            self._pdf_progress_stage(f"PDF · query {position}/{limit} · {query}")
+        elif kind == "identity":
+            brand = str(event.get("brand") or "-")
+            model = str(event.get("model") or "-")
+            domain = str(event.get("official_domain") or "-")
+            status = str(event.get("status") or "-")
+            self._emit_pdf_global(f"IDENTIDAD · brand={brand} · model={model} · dominio={domain} · status={status}")
+            self._pdf_progress_stage(f"PDF · identidad {brand} · {model}")
         elif kind == "candidate":
+            title = str(event.get("title") or "documento").strip()
+            url = str(event.get("url") or "").strip()
+            self._emit_pdf_global(f"ENCONTRADO · {title} · {url}")
             self._pdf_progress_stage("PDF · candidatos encontrados")
         elif kind == "download":
             status = str(event.get("status") or "").upper()
-            self._pdf_progress_stage("PDF · descargando" if status != "FINISHED" else "PDF · descarga completada")
+            url = str(event.get("url") or "").strip()
+            local_path = str(event.get("local_path") or "").strip()
+            if status == "FINISHED":
+                self._emit_pdf_global(f"DESCARGADO · {local_path or url} · url={url}")
+                self._pdf_progress_stage("PDF · descarga completada")
+            else:
+                self._emit_pdf_global(f"DESCARGANDO · {url}")
+                self._pdf_progress_stage("PDF · descargando")
         elif kind == "validated":
-            self._pdf_progress_stage("PDF · validando evidencia")
+            row = event.get("row")
+            candidate = getattr(row, "candidate", None)
+            inspection = getattr(row, "inspection", None)
+            url = str(event.get("url") or getattr(candidate, "url", "") or "").strip()
+            title = str(getattr(candidate, "title", "") or Path(url).name or "documento").strip()
+            local_path = str(getattr(inspection, "local_path", "") or "").strip()
+            pages = int(event.get("pages") or getattr(inspection, "page_count", 0) or 0)
+            filename = Path(local_path).name if local_path else title
+            self._emit_pdf_global(
+                f"ACEPTADO · {filename} · pages={pages} · archivo={local_path or '-'} · url={url}"
+            )
+            self._pdf_progress_stage("PDF · evidencia aceptada")
         elif kind == "rejected":
-            self._pdf_progress_stage("PDF · filtrando candidatos")
+            url = str(event.get("url") or "").strip()
+            reason = str(event.get("reason") or event.get("error") or "SIN_MOTIVO").strip()
+            pages = int(event.get("pages") or 0)
+            self._emit_pdf_global(f"RECHAZADO · motivo={reason} · pages={pages} · url={url}")
+            self._pdf_progress_stage("PDF · candidato rechazado")
+        elif kind == "duplicate":
+            url = str(event.get("url") or "").strip()
+            final_url = str(event.get("final_url") or "").strip()
+            self._emit_pdf_global(f"DUPLICADO · {url} · final={final_url or '-'}")
+            self._pdf_progress_stage("PDF · candidato duplicado")
 
         result = super()._apply_pdf_live_event(index, event)
 

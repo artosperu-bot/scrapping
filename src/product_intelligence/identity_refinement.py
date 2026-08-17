@@ -217,11 +217,14 @@ def _select_brand(candidates: list[SearchCandidate], raw: str, current: str | No
         support = len(domains)
         words = display[key].split()
         is_current = bool(current_key and (key == current_key or current_key.startswith(key) or key.startswith(current_key)))
-        if support < 2 and not is_current:
+        manufacturer_owned = bool(host_matches[key])
+        if support < 2 and not is_current and not manufacturer_owned:
             continue
         score = support * 10.0
         if is_current:
             score += 12.0
+        if manufacturer_owned:
+            score += 8.0
         if support >= 2:
             score += min(host_matches[key], support) * 1.5
             if host_matches[key] and len(words) > 1:
@@ -268,10 +271,11 @@ def _model_ngrams(tokens: list[str]) -> list[tuple[str, int]]:
     return out
 
 
-def _select_model(candidates: list[SearchCandidate], raw: str, brand: str | None) -> tuple[str | None, int]:
+def _select_model(candidates: list[SearchCandidate], raw: str, brand: str | None, official_domain: str | None = None) -> tuple[str | None, int]:
     domains_by_ngram: dict[str, set[str]] = defaultdict(set)
     display = {}
     earliest = {}
+    authoritative_domain = _root(official_domain)
     for candidate in candidates:
         domain = _root(urlparse(candidate.url).hostname)
         for sequence in _model_sequences(candidate, raw, brand):
@@ -286,11 +290,12 @@ def _select_model(candidates: list[SearchCandidate], raw: str, brand: str | None
     ranked = []
     for key, domains in domains_by_ngram.items():
         support = len(domains)
-        if support < 2:
+        manufacturer_owned = bool(authoritative_domain and authoritative_domain in domains)
+        if support < 2 and not manufacturer_owned:
             continue
         phrase = display[key]
         words = phrase.split()
-        score = support * 10.0 + (4.0 if any(any(ch.isdigit() for ch in w) for w in words) else 0.0) + max(0, 4 - earliest.get(key, 4)) * 1.5 + min(len(words), 4) * 0.6 - max(0, len(words) - 4) * 1.4
+        score = support * 10.0 + (8.0 if manufacturer_owned else 0.0) + (4.0 if any(any(ch.isdigit() for ch in w) for w in words) else 0.0) + max(0, 4 - earliest.get(key, 4)) * 1.5 + min(len(words), 4) * 0.6 - max(0, len(words) - 4) * 1.4
         ranked.append((score, support, -abs(len(words) - 3), key))
     if not ranked:
         return None, 0
@@ -349,7 +354,7 @@ def refine_code_identity(original: ProductIdentity, current: ProductIdentity, *,
         brand_support = 0
         official_domain = None
 
-    model, model_support = _select_model(collected, raw, brand)
+    model, model_support = _select_model(collected, raw, brand, official_domain=official_domain)
     updates = {}
     current_brand_sane = brand_sanity_pass(current.brand or current.manufacturer, raw=raw)
     if brand and brand_sanity_pass(brand, raw=raw) and (_compact(brand) != _compact(current.brand) or not current_brand_sane):

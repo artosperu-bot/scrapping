@@ -100,6 +100,19 @@ def _eligible_media(row: dict, *, official_page: bool = False) -> bool:
     if official_page and role in {"product_gallery", "product_video"}:
         return confidence >= 0.84
 
+    # discover_media independently records gallery_index only when the image is nested
+    # in a product/gallery/PDP media container. On an already identity-validated
+    # manufacturer PDP that structural evidence is sufficient even if textual role
+    # classification remained unknown. Page assets and related products were rejected
+    # above, and this relaxation never applies to non-official pages.
+    if (
+        official_page
+        and media_type == "image"
+        and role == "unknown_image"
+        and row.get("gallery_index") is not None
+    ):
+        return confidence >= 0.84
+
     if official_page and media_type == "image" and role == "unknown_image" and _looks_like_official_catalog_asset(row):
         return confidence >= 0.84
 

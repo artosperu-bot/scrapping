@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from product_intelligence.models import ProductIdentity
@@ -130,3 +131,18 @@ def test_live_pdf_search_never_exceeds_eight_queries_across_authority_retry(monk
 
     assert result.validated_count == 0
     assert len(attempted) <= strategy.core.MAX_QUERY_ATTEMPTS, attempted
+
+
+def test_real_batch_routes_direct_pdf_documents_to_persistent_output_folder():
+    """The desktop batch must retain P60 PDFs instead of processing them in TemporaryDirectory."""
+    text = Path("src/product_intelligence/batch.py").read_text(encoding="utf-8")
+
+    assert '"pdf_evidence"' in text or "'pdf_evidence'" in text
+    direct_block = text[text.index("def _ingest_direct_documents"):text.index("def scrape_item")]
+    assert "download_dir" in direct_block
+    assert "process_pdf_document" in direct_block
+    assert "download_dir=" in direct_block
+
+    scrape_block = text[text.index("def scrape_item"):text.index("def run_batch")]
+    assert "pdf_evidence" in scrape_block
+    assert "download_dir=" in scrape_block or "document_dir=" in scrape_block

@@ -1,4 +1,4 @@
-__version__ = "0.10.32"
+__version__ = "0.10.33"
 
 from .seller_defaults import install as _install_seller_defaults
 

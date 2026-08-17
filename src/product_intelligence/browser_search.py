@@ -17,7 +17,7 @@ _DOCUMENT_PATH_HINTS = (
     "manual", "guide", "quick", "spec", "datasheet", "data-sheet", "document",
     "download", "instruction", "support", "technical", "ficha", "qsg",
 )
-_GENERIC_PDF_STEMS = {"generated", "file", "this"}
+_GENERIC_PDF_STEMS = {"generated", "file", "this", "i"}
 
 
 def _is_search_host(host: str) -> bool:

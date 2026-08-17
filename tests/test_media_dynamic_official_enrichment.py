@@ -77,3 +77,34 @@ def test_browser_enrichment_must_revalidate_identity_before_using_media(monkeypa
     rows = workflow.run_media_product(identity, tmp_path, manual_urls=[static.final_url], auto_search=False, max_pages=1)
 
     assert rows == []
+
+
+def test_validated_official_pdp_gallery_index_is_sufficient_when_role_text_is_unknown():
+    row = {
+        "media_type": "image",
+        "role": "unknown_image",
+        "scope": "PRODUCT_FAMILY",
+        "confidence": 0.84,
+        "gallery_index": 3,
+        "conflict_reasons": [],
+        "url": "https://cdn.acme.example/assets/hero-3.jpg",
+        "source": "dom:src:['pdp-media-stage']",
+    }
+
+    assert workflow._eligible_media(row, official_page=True) is True
+    assert workflow._eligible_media(row, official_page=False) is False
+
+
+def test_page_asset_never_becomes_gallery_eligible_even_if_index_is_present():
+    row = {
+        "media_type": "image",
+        "role": "page_asset",
+        "scope": "PRODUCT_FAMILY",
+        "confidence": 0.99,
+        "gallery_index": 1,
+        "conflict_reasons": [],
+        "url": "https://cdn.acme.example/logo.svg",
+        "source": "dom:src:['pdp-header-logo']",
+    }
+
+    assert workflow._eligible_media(row, official_page=True) is False

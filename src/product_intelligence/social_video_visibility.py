@@ -33,9 +33,10 @@ class SocialVideoVisibilityMixin:
         ttk.Label(
             social_box,
             text=(
-                "Pega una URL pública de un sitio compatible con el motor de descarga. "
-                "Se descarga un solo video y se normaliza a MP4; contenido privado, "
-                "con login, DRM o no soportado se rechaza con un error explícito."
+                "Pega una URL pública de YouTube, TikTok, Vimeo u otra plataforma, o una página web "
+                "que contenga un video embebido. Primero se intenta la URL directamente y, si hace falta, "
+                "se analiza la página para encontrar la fuente real. Se descarga un solo video y se normaliza "
+                "a MP4; contenido privado, con login, DRM o no soportado se rechaza con un error explícito."
             ),
             wraplength=1040,
             justify="left",
@@ -55,5 +56,5 @@ class SocialVideoVisibilityMixin:
         ).pack(side="left", padx=(0, 8))
         self.social_video_btn = ttk.Button(row, text="Descargar MP4", command=self._start_social_video_download)
         self.social_video_btn.pack(side="left")
-        self.social_video_status = tk.StringVar(value="Listo para descargar un video por URL.")
+        self.social_video_status = tk.StringVar(value="Listo para descargar un video o analizar una página web.")
         ttk.Label(social_box, textvariable=self.social_video_status, font=("Segoe UI", 9, "italic")).pack(anchor="w")

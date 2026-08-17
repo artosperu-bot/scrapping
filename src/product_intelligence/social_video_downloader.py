@@ -11,6 +11,12 @@ class VideoDownloadError(RuntimeError):
     pass
 
 
+class VideoSelectionRequired(VideoDownloadError):
+    def __init__(self, candidates):
+        self.candidates = tuple(candidates or ())
+        super().__init__(f"VIDEO_SELECTION_REQUIRED: {len(self.candidates)} candidatos de video")
+
+
 @dataclass(frozen=True)
 class VideoDownloadResult:
     title: str
@@ -36,6 +42,14 @@ def build_format_selector(quality: str) -> str:
 
 
 def resolve_ffmpeg_exe() -> str | None:
+    system = shutil.which("ffmpeg")
+    if system:
+        try:
+            candidate = Path(system)
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return str(candidate)
+        except OSError:
+            pass
     try:
         import imageio_ffmpeg
         candidate = Path(imageio_ffmpeg.get_ffmpeg_exe())
@@ -43,7 +57,7 @@ def resolve_ffmpeg_exe() -> str | None:
             return str(candidate)
     except Exception:
         pass
-    return shutil.which("ffmpeg")
+    return None
 
 
 def _validate_url(url: str) -> str:
@@ -57,9 +71,17 @@ def _validate_url(url: str) -> str:
 def _normalize_error(exc: Exception) -> VideoDownloadError:
     text = str(exc or "").strip()
     lowered = text.lower()
-    if any(token in lowered for token in ("login", "sign in", "private video", "private content", "cookies")):
+    if any(token in lowered for token in ("drm", "encrypted media", "protected content")):
+        code = "DRM_PROTECTED"
+    elif any(token in lowered for token in ("login", "sign in", "private video", "private content", "cookies")):
         code = "LOGIN_OR_PRIVATE_REQUIRED"
-    elif any(token in lowered for token in ("unsupported url", "no suitable extractor", "unsupported site")):
+    elif any(token in lowered for token in (
+        "unsupported url",
+        "no suitable extractor",
+        "unsupported site",
+        "no video formats found",
+        "no playable media",
+    )):
         code = "UNSUPPORTED_URL"
     elif any(token in lowered for token in ("geo", "not available in your country", "region")):
         code = "GEO_BLOCKED"
@@ -70,6 +92,11 @@ def _normalize_error(exc: Exception) -> VideoDownloadError:
     else:
         code = "DOWNLOAD_FAILED"
     return VideoDownloadError(f"{code}: {text or exc.__class__.__name__}")
+
+
+def _error_code(exc: Exception) -> str:
+    text = str(exc or "")
+    return text.split(":", 1)[0].strip().upper()
 
 
 def _candidate_paths(info: dict[str, Any], ydl: Any, output_dir: Path) -> list[Path]:
@@ -92,7 +119,7 @@ def _candidate_paths(info: dict[str, Any], ydl: Any, output_dir: Path) -> list[P
     seen: set[str] = set()
     for path in rows:
         for variant in (path, path.with_suffix(".mp4")):
-            key = str(variant.resolve()) if variant.is_absolute() else str(variant)
+            key = str(variant.resolve()) if path.is_absolute() else str(variant)
             if key not in seen:
                 seen.add(key)
                 expanded.append(variant)
@@ -136,6 +163,10 @@ def social_video_progress_text(progress: dict[str, Any]) -> str:
         return "Preparando descarga…"
     if phase == "RESOLVE":
         return "Resolviendo URL…"
+    if phase == "DISCOVER_PAGE":
+        return "Analizando la página para encontrar el video…"
+    if phase == "RETRY_CANDIDATE":
+        return "Video encontrado; preparando descarga…"
     if phase == "POSTPROCESS":
         return "Procesando audio/video y remux MP4…"
     if phase == "VERIFY":
@@ -162,16 +193,13 @@ def social_video_progress_text(progress: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
-def download_social_video(
-    url: str,
-    output_dir: str | Path,
+def _download_with_yt_dlp(
+    source_url: str,
+    destination: Path,
     *,
-    quality: str = "best",
-    on_progress: Callable[[dict[str, Any]], None] | None = None,
+    quality: str,
+    on_progress: Callable[[dict[str, Any]], None] | None,
 ) -> VideoDownloadResult:
-    source_url = _validate_url(url)
-    destination = Path(output_dir).expanduser().resolve()
-    destination.mkdir(parents=True, exist_ok=True)
     selector = build_format_selector(quality)
     ffmpeg_exe = resolve_ffmpeg_exe()
 
@@ -179,7 +207,6 @@ def download_social_video(
         if on_progress:
             on_progress(payload)
 
-    emit(phase="PREPARE")
     try:
         import yt_dlp
 
@@ -201,7 +228,9 @@ def download_social_video(
             "restrictfilenames": False,
         }
         if ffmpeg_exe:
-            options["ffmpeg_location"] = str(Path(ffmpeg_exe).parent)
+            # imageio-ffmpeg uses versioned executable names. Passing only its
+            # parent directory makes yt-dlp search for a nonexistent ffmpeg.exe.
+            options["ffmpeg_location"] = str(ffmpeg_exe)
 
         emit(phase="RESOLVE")
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -233,3 +262,67 @@ def download_social_video(
         raise
     except Exception as exc:
         raise _normalize_error(exc) from exc
+
+
+def _needs_selection(candidates) -> bool:
+    if len(candidates) < 2:
+        return False
+    first, second = candidates[0], candidates[1]
+    first_score = float(getattr(first, "score", 0.0) or 0.0)
+    second_score = float(getattr(second, "score", 0.0) or 0.0)
+    return first_score >= 90.0 and second_score >= 90.0 and (first_score - second_score) <= 8.0
+
+
+def download_social_video(
+    url: str,
+    output_dir: str | Path,
+    *,
+    quality: str = "best",
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> VideoDownloadResult:
+    source_url = _validate_url(url)
+    destination = Path(output_dir).expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+
+    def emit(**payload):
+        if on_progress:
+            on_progress(payload)
+
+    emit(phase="PREPARE")
+    try:
+        return _download_with_yt_dlp(
+            source_url,
+            destination,
+            quality=quality,
+            on_progress=on_progress,
+        )
+    except VideoDownloadError as direct_error:
+        if _error_code(direct_error) != "UNSUPPORTED_URL":
+            raise
+
+        emit(phase="DISCOVER_PAGE")
+        try:
+            from .video_page_discovery import discover_video_candidates
+
+            candidates = discover_video_candidates(source_url, limit=8)
+        except Exception:
+            candidates = []
+        if not candidates:
+            raise direct_error
+        if _needs_selection(candidates):
+            raise VideoSelectionRequired(candidates)
+
+        chosen = candidates[0]
+        candidate_url = _validate_url(str(getattr(chosen, "url", "") or ""))
+        emit(
+            phase="RETRY_CANDIDATE",
+            provider=str(getattr(chosen, "provider", "") or ""),
+            source_kind=str(getattr(chosen, "source_kind", "") or ""),
+            candidate_url=candidate_url,
+        )
+        return _download_with_yt_dlp(
+            candidate_url,
+            destination,
+            quality=quality,
+            on_progress=on_progress,
+        )

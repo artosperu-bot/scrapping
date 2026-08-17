@@ -5,10 +5,13 @@ on:
   pull_request:
     paths:
       - 'src/product_intelligence/social_video_downloader.py'
+      - 'src/product_intelligence/video_page_discovery.py'
       - 'src/product_intelligence/media_desktop.py'
       - 'src/product_intelligence/social_video_visibility.py'
       - 'src/product_intelligence/final_live_ui_desktop.py'
       - 'tests/test_social_video_downloader.py'
+      - 'tests/test_social_video_page_fallback.py'
+      - 'tests/test_video_page_discovery.py'
       - 'tests/test_social_video_desktop_contract.py'
       - 'tests/test_social_video_visible_in_final_media_ui.py'
       - 'scripts/social_video_download_smoke.py'
@@ -23,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  live-download:
+  hybrid-video:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -36,7 +39,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - name: Download and verify real MP4
+      - name: Verify FFmpeg merge and webpage discovery
         run: python scripts/social_video_download_smoke.py
       - uses: actions/upload-artifact@v4
         if: always()

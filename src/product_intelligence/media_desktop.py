@@ -11,7 +11,11 @@ from tkinter import messagebox, ttk
 
 from .desktop import App as BaseApp
 from .media_workflow import run_media_product
-from .social_video_downloader import download_social_video, social_video_progress_text
+from .social_video_downloader import (
+    VideoSelectionRequired,
+    download_social_video,
+    social_video_progress_text,
+)
 
 
 class App(BaseApp):
@@ -63,7 +67,7 @@ class App(BaseApp):
         ttk.Label(action_row, textvariable=self.media_status, font=("Segoe UI", 9, "bold")).pack(side="left", padx=12)
 
         social_box = ttk.LabelFrame(self.media_tab, text="Descargar video por URL", padding=8); social_box.pack(fill="x", pady=(3, 7))
-        ttk.Label(social_box, text="Pega un enlace público de YouTube, TikTok, Instagram, X/Twitter, Vimeo u otro sitio compatible. Se guardará como MP4.").pack(anchor="w")
+        ttk.Label(social_box, text="Pega una URL pública de YouTube/TikTok/Vimeo u otra plataforma, o una página web que contenga un video embebido. Se analizará y guardará como MP4.").pack(anchor="w")
         social_row = ttk.Frame(social_box); social_row.pack(fill="x", pady=(5, 3))
         self.social_video_url = tk.StringVar(); ttk.Entry(social_row, textvariable=self.social_video_url).pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.social_video_quality = tk.StringVar(value="Mejor calidad")
@@ -160,7 +164,7 @@ class App(BaseApp):
             messagebox.showinfo("Descargar video", "Ya hay una descarga de video en ejecución."); return
         url = self.social_video_url.get().strip()
         if not url:
-            messagebox.showwarning("Descargar video", "Pega primero el enlace del video."); return
+            messagebox.showwarning("Descargar video", "Pega primero el enlace del video o de la página web."); return
         quality = self.social_video_quality.get().strip() or "Mejor calidad"
         output_dir = Path(self.out.get()) / "multimedia" / "social"; product_index = self._media_selected_index()
         self._social_video_running = True; self.social_video_btn.configure(state="disabled"); self.social_video_status.set("Preparando descarga…")
@@ -170,9 +174,82 @@ class App(BaseApp):
                 def on_progress(progress): self.media_events.put({"type": "social_video_progress", "progress": progress})
                 result = download_social_video(url, output_dir, quality=quality, on_progress=on_progress)
                 self.media_events.put({"type": "social_video_done", "product_index": product_index, "item": {"media_type": "video", "local_path": str(result.local_path), "url": result.source_url, "provider": result.provider, "title": result.title, "confidence": 1.0}})
+            except VideoSelectionRequired as exc:
+                candidates = [
+                    {
+                        "url": str(candidate.url),
+                        "provider": str(candidate.provider),
+                        "source_kind": str(candidate.source_kind),
+                        "title": str(candidate.title or ""),
+                        "score": float(candidate.score),
+                    }
+                    for candidate in exc.candidates[:8]
+                ]
+                self.media_events.put({"type": "social_video_choices", "candidates": candidates})
             except Exception as exc:
                 self.media_events.put({"type": "social_video_error", "error": str(exc)})
         threading.Thread(target=work, daemon=True).start()
+
+    def _show_social_video_choices(self, candidates: list[dict]):
+        rows = list(candidates or [])[:8]
+        if not rows:
+            self._social_video_running = False
+            self.social_video_btn.configure(state="normal")
+            self.social_video_status.set("No se encontraron videos seleccionables.")
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Seleccionar video")
+        dialog.transient(self)
+        dialog.resizable(True, False)
+        ttk.Label(
+            dialog,
+            text="La página contiene varios videos posibles. Selecciona el que deseas descargar:",
+            padding=(12, 10, 12, 5),
+        ).pack(anchor="w")
+        listbox = tk.Listbox(dialog, exportselection=False, width=92, height=min(8, len(rows)))
+        listbox.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        for index, candidate in enumerate(rows, 1):
+            title = str(candidate.get("title") or "").strip() or f"Video {index}"
+            provider = str(candidate.get("provider") or "web")
+            kind = str(candidate.get("source_kind") or "video")
+            listbox.insert("end", f"{title}  ·  {provider}  ·  {kind}")
+        listbox.selection_set(0)
+
+        buttons = ttk.Frame(dialog, padding=(12, 0, 12, 10)); buttons.pack(fill="x")
+
+        def cancel():
+            dialog.destroy()
+            self._social_video_running = False
+            self.social_video_btn.configure(state="normal")
+            self.social_video_status.set("Selección de video cancelada.")
+
+        def choose():
+            selected = listbox.curselection()
+            if not selected:
+                messagebox.showwarning("Seleccionar video", "Selecciona primero un video.", parent=dialog)
+                return
+            candidate = rows[int(selected[0])]
+            candidate_url = str(candidate.get("url") or "").strip()
+            if not candidate_url:
+                messagebox.showerror("Seleccionar video", "El video seleccionado no tiene una URL válida.", parent=dialog)
+                return
+            dialog.destroy()
+            self._social_video_running = False
+            self.social_video_btn.configure(state="normal")
+            self.social_video_url.set(candidate_url)
+            self.social_video_status.set("Video seleccionado; iniciando descarga…")
+            self._start_social_video_download()
+
+        ttk.Button(buttons, text="Cancelar", command=cancel).pack(side="right")
+        ttk.Button(buttons, text="Descargar seleccionado", command=choose).pack(side="right", padx=(0, 8))
+        listbox.bind("<Double-1>", lambda _event: choose())
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        try:
+            dialog.grab_set()
+            dialog.focus_set()
+        except Exception:
+            pass
 
     def _drain_media_events(self):
         try:
@@ -182,6 +259,10 @@ class App(BaseApp):
                     self._add_media_card(event.get("item") or {}, event.get("product_index"))
                 elif event_type == "social_video_progress":
                     self.social_video_status.set(social_video_progress_text(event.get("progress") or {}))
+                elif event_type == "social_video_choices":
+                    self._social_video_running = False; self.social_video_btn.configure(state="normal")
+                    self.social_video_status.set("Se encontraron varios videos; elige uno para continuar.")
+                    self._show_social_video_choices(event.get("candidates") or [])
                 elif event_type == "social_video_done":
                     self._social_video_running = False; self.social_video_btn.configure(state="normal")
                     item = event.get("item") or {}; self._add_media_card(item, event.get("product_index"))

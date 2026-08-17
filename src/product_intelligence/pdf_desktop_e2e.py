@@ -97,19 +97,24 @@ class PdfDesktopE2EMixin:
         emit = self.__dict__.get("emit")
         if not callable(emit):
             emit_fn = getattr(type(self), "emit", None)
-            if callable(emit_fn):
+            if callable(emit_fn) and "tk" in self.__dict__:
                 emit = lambda line, fn=emit_fn: fn(self, line)
         if callable(emit):
             emit(f"[PDF REVIEW] {text}")
 
     def _pdf_progress_stage(self, text: str) -> None:
+        # Unit/state-contract clients may inject a callback directly without
+        # initializing Tk. Prefer that explicit callback. Only call the inherited
+        # Tk implementation when the real desktop root is initialized.
         stage = self.__dict__.get("_excel_progress_stage")
-        if not callable(stage):
-            stage_fn = getattr(type(self), "_excel_progress_stage", None)
-            if callable(stage_fn):
-                stage = lambda line, fn=stage_fn: fn(self, line)
         if callable(stage):
             stage(text)
+            return
+        if "tk" not in self.__dict__:
+            return
+        stage_fn = getattr(type(self), "_excel_progress_stage", None)
+        if callable(stage_fn):
+            stage_fn(self, text)
 
     def run(self):
         rows = list(getattr(self, "product_rows", []) or [])

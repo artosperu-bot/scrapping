@@ -53,13 +53,14 @@ def test_mercadolibre_tries_exact_part_number_and_model_queries(monkeypatch):
         def __init__(self, payload): self.payload = payload
         def raise_for_status(self): return None
         def json(self): return self.payload
-    def fake_get(url, **_kwargs):
-        decoded = unquote_plus(url)
-        requested.append(decoded)
-        if "q=JBL Quantum 350 Wireless" in decoded:
-            return Response({"results":[{"id":"MPE-2","title":"JBL Quantum 350 Wireless","price":319,"currency_id":"PEN","permalink":"https://www.mercadolibre.com.pe/q350-2","attributes":[{"id":"BRAND","value_name":"JBL"},{"id":"MODEL","value_name":"Quantum 350 Wireless"},{"id":"MPN","value_name":"JBLQ350WLBLKAM"}]}]})
-        return Response({"results":[]})
-    monkeypatch.setattr(price_workflow.requests, "get", fake_get)
+    class Client:
+        def get(self, url, **_kwargs):
+            decoded = unquote_plus(url)
+            requested.append(decoded)
+            if "q=JBL Quantum 350 Wireless" in decoded:
+                return Response({"results":[{"id":"MPE-2","title":"JBL Quantum 350 Wireless","price":319,"currency_id":"PEN","permalink":"https://www.mercadolibre.com.pe/q350-2","attributes":[{"id":"BRAND","value_name":"JBL"},{"id":"MODEL","value_name":"Quantum 350 Wireless"},{"id":"MPN","value_name":"JBLQ350WLBLKAM"}]}]})
+            return Response({"results":[]})
+    monkeypatch.setattr(price_workflow, "build_mercadolibre_api_client", lambda timeout=15: Client())
     rows = price_workflow._try_mercadolibre(IDENTITY)
     assert any("q=JBLQ350WLBLKAM" in u for u in requested)
     assert any("q=JBL Quantum 350 Wireless" in u for u in requested)

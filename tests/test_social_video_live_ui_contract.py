@@ -1,5 +1,4 @@
-from product_intelligence.live_ui_desktop import social_video_progress_text
-from product_intelligence.social_video_downloader import _progress_payload
+from product_intelligence.social_video_downloader import _progress_payload, social_video_progress_text
 
 
 def test_progress_payload_omits_unknown_values_instead_of_inventing_them():
@@ -35,6 +34,5 @@ def test_social_progress_text_uses_real_fields_and_phases():
     assert "5.0 MB / 20.0 MB" in text
     assert "2.0 MB/s" in text
     assert "ETA 7s" in text
-
     assert social_video_progress_text({"phase": "POSTPROCESS"}) == "Procesando audio/video y remux MP4…"
     assert social_video_progress_text({"phase": "VERIFY"}) == "Verificando MP4…"

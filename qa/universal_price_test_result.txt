@@ -1,4 +1,4 @@
-commit=cc8dbdb9a8df0e9f8694d244713d28a2c2bea61e
+commit=82593fdd22f543e1276ce7ec6e683e125f223933
 pytest_exit_code=0
 ..........................                                               [100%]
-26 passed in 1.14s
+26 passed in 1.36s

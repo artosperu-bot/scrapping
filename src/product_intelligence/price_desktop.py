@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .media_progress_desktop import App as MediaProgressApp
+from .models import ProductIdentity
 from .price_models import format_money
 from .price_workflow import run_price_product
 from .progress_animation import ProgressAnimation
@@ -26,6 +27,7 @@ class App(MediaProgressApp):
         self._price_had_error = False
         self._price_offer_count = 0
         self._price_last_coverage: dict = {}
+        self._manual_price_identities: list[ProductIdentity] = []
         super().__init__()
         self.after(150, self._drain_price_events)
 
@@ -43,6 +45,16 @@ class App(MediaProgressApp):
         top.pack(fill="x")
         left = ttk.LabelFrame(top, text="Productos detectados", padding=10)
         left.pack(side="left", fill="y")
+
+        ttk.Label(left, text="Part Number / MPN").pack(anchor="w")
+        manual_row = ttk.Frame(left)
+        manual_row.pack(fill="x", pady=(2, 6))
+        self.price_manual_part_number = tk.StringVar()
+        manual_entry = ttk.Entry(manual_row, textvariable=self.price_manual_part_number, width=24)
+        manual_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(manual_row, text="Agregar", command=self._add_manual_price_product).pack(side="left", padx=(5, 0))
+        manual_entry.bind("<Return>", lambda _event: self._add_manual_price_product())
+
         self.price_product_list = tk.Listbox(left, exportselection=False, width=34, height=8)
         self.price_product_list.pack(fill="both", expand=True)
 
@@ -54,7 +66,7 @@ class App(MediaProgressApp):
         self.price_selected_btn.pack(side="left")
         self.price_all_btn = ttk.Button(actions_row, text="Procesar todos los productos", command=self._run_price_all)
         self.price_all_btn.pack(side="left", padx=(8, 0))
-        self.price_status = tk.StringVar(value="Analiza un Excel para cargar productos.")
+        self.price_status = tk.StringVar(value="Analiza un Excel o agrega un Part Number para buscar precios.")
         ttk.Separator(right, orient="horizontal").pack(fill="x", pady=(10, 8))
         ttk.Label(right, text="Estado", font=("Segoe UI", 9, "bold")).pack(anchor="w")
         ttk.Label(right, textvariable=self.price_status, wraplength=760, justify="left").pack(anchor="w", fill="x", pady=(3, 0))
@@ -149,6 +161,7 @@ class App(MediaProgressApp):
         self.price_audit_tree.pack(side="left", fill="both", expand=True)
 
     def analyze_excel(self):
+        self._manual_price_identities.clear()
         if hasattr(self, "price_product_list"):
             self.price_product_list.delete(0, "end")
         super().analyze_excel()
@@ -162,9 +175,32 @@ class App(MediaProgressApp):
             self.price_product_list.selection_set(0)
             self.price_status.set(f"{len(self.product_rows)} productos listos para comparar precios.")
 
+    def _add_manual_price_product(self):
+        part_number = self.price_manual_part_number.get().strip()
+        if not part_number:
+            messagebox.showwarning("Precios", "Ingresa un Part Number / MPN.")
+            return
+        identity = ProductIdentity(mpn=part_number)
+        self._manual_price_identities.append(identity)
+        self.price_product_list.insert("end", part_number)
+        index = self.price_product_list.size() - 1
+        self.price_product_list.selection_clear(0, "end")
+        self.price_product_list.selection_set(index)
+        self.price_product_list.see(index)
+        self.price_manual_part_number.set("")
+        self.price_status.set(f"Producto manual listo: {part_number}")
+
     def _selected_price_index(self):
         sel = self.price_product_list.curselection()
         return int(sel[0]) if sel else None
+
+    def _price_identity_for_list_index(self, index: int) -> ProductIdentity | None:
+        if 0 <= index < len(self.product_rows):
+            return self._identity_for_index(index)
+        manual_index = index - len(self.product_rows)
+        if 0 <= manual_index < len(self._manual_price_identities):
+            return self._manual_price_identities[manual_index]
+        return None
 
     def _run_price_selected(self):
         index = self._selected_price_index()
@@ -191,7 +227,7 @@ class App(MediaProgressApp):
         if self._price_running:
             messagebox.showinfo("Precios", "Ya hay una búsqueda de precios en ejecución.")
             return
-        valid = [(i, self._identity_for_index(i)) for i in indices if self._identity_for_index(i) is not None]
+        valid = [(i, self._price_identity_for_list_index(i)) for i in indices if self._price_identity_for_list_index(i) is not None]
         if not valid:
             messagebox.showerror("Precios", "No hay identidades válidas para procesar.")
             return

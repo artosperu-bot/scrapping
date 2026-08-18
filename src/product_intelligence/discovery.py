@@ -316,16 +316,33 @@ def _field_search_terms(field:str)->list[str]:
     return list(dict.fromkeys(terms))
 
 
-def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12,timeout:int=10,budget_tracker:SearchBudgetTracker|None=None,query_quota:int|None=None)->list[SearchCandidate]:
+def _source_query_hint(source_kind:str|None, category:str|None)->str:
+    kind=str(source_kind or "").strip().upper(); cat=str(category or "").strip().upper()
+    if kind=="MANUFACTURER_SUPPORT":return "official support"
+    if kind=="MANUFACTURER":return "official manufacturer"
+    if kind=="PRODUCT_CONTENT":return "structured product specifications"
+    if kind=="AUTHORIZED_DISTRIBUTOR":return "authorized distributor"
+    if kind=="CATEGORY_PROVIDER":
+        if cat=="ELECTRONIC_COMPONENT":return "component datasheet technical distributor"
+        if cat=="PC_COMPONENT":return "component specifications technical distributor"
+        return "technical product data provider"
+    return ""
+
+
+def search_web_for_fields(identity:ProductIdentity,fields:list[str],limit:int=12,timeout:int=10,budget_tracker:SearchBudgetTracker|None=None,query_quota:int|None=None,source_kind:str|None=None,category:str|None=None)->list[SearchCandidate]:
     base=build_query(identity)
     if not base:return []
     terms=[]
     for field in fields or []:
         for term in _field_search_terms(str(field)):
             if term and term not in terms:terms.append(term)
-    queries=[]
+    queries=[];hint=_source_query_hint(source_kind,category)
     for field in terms[:6]:
-        for query in [f'{base} "{field}"',f'{base} "{field}" specifications']:
+        candidates=[]
+        if hint:
+            candidates.extend([f'{base} "{field}" {hint}',f'{base} "{field}" specifications {hint}'])
+        candidates.extend([f'{base} "{field}"',f'{base} "{field}" specifications'])
+        for query in candidates:
             if query not in queries:queries.append(query)
     if budget_tracker is not None:
         quota=max(0,int(query_quota if query_quota is not None else budget_tracker.remaining_queries()))

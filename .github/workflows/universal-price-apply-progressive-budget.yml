@@ -9,6 +9,15 @@ on:
       - 'scripts/qa_apply_progressive_price_budget.py'
       - 'scripts/qa_fix_progressive_plan_order.py'
       - '.github/workflows/universal-price-apply-progressive-budget.yml'
+  pull_request:
+    branches:
+      - release/windows
+    paths:
+      - 'src/product_intelligence/price_peru_coverage.py'
+      - 'tests/test_price_progressive_budget.py'
+      - 'scripts/qa_apply_progressive_price_budget.py'
+      - 'scripts/qa_fix_progressive_plan_order.py'
+      - '.github/workflows/universal-price-apply-progressive-budget.yml'
 
 permissions:
   contents: write
@@ -103,6 +112,8 @@ jobs:
             git add src/product_intelligence/price_peru_coverage.py
           fi
           git diff --cached --quiet || git commit -m 'perf: bound progressive price discovery queries'
+          git fetch origin feat/universal-price-intelligence
+          git rebase origin/feat/universal-price-intelligence || exit 95
           git push origin HEAD:feat/universal-price-intelligence
           exit $overall
-# retrigger: 2
+# pr-observable: 3

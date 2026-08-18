@@ -54,10 +54,11 @@ def _release_payload(tag="v0.10.6"):
 
 
 def test_app_version_is_current_auto_updatable_version():
-    assert APP_VERSION == "0.10.35"
+    assert APP_VERSION == "0.10.36"
 
 
 def test_semver_comparison_is_numeric_not_lexicographic():
+    assert is_newer_version("0.10.36", "0.10.35") is True
     assert is_newer_version("0.10.18", "0.10.17") is True
     assert is_newer_version("0.10.17", "0.10.16") is True
     assert is_newer_version("0.10.16", "0.10.15") is True
@@ -70,6 +71,16 @@ def test_semver_comparison_is_numeric_not_lexicographic():
     assert is_newer_version("0.10.4", "0.10.4") is False
     assert is_newer_version("0.9.99", "0.10.4") is False
     assert is_newer_version("v1.0.0", "0.10.4") is True
+
+
+def test_v01035_detects_v01036_as_update():
+    session = FakeSession([FakeResponse(payload=_release_payload("v0.10.36"))])
+    service = UpdateService(current_version="0.10.35", session=session)
+    release = service.check_latest()
+    assert release is not None
+    assert release.version == "0.10.36"
+    assert release.zip_url.endswith("ProductIntelligence-Windows.zip")
+    assert release.sha256_url.endswith("ProductIntelligence-Windows.sha256")
 
 
 def test_check_latest_returns_release_only_when_newer():

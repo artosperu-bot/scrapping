@@ -54,7 +54,9 @@ def test_channel_coverage_lists_each_individual_store_instead_of_boolean_yes():
     assert falabella["status"] == "FOUND"
     assert falabella["offers"][0]["seller"] == "TECHNOSHOPS"
     assert falabella["offers"][0]["price"] == 299
-    assert ripley["status"] == "NO_HAY"
+    # No accepted Ripley offer in this report is not evidence that Ripley was searched
+    # and has no product. P0 coverage semantics preserve that distinction.
+    assert ripley["status"] == "NOT_SEARCHED"
     assert [row["channel"] for row in report["individual_stores"]] == ["Memory Kings", "Infiniti"]
     assert report["individual_stores"][0]["price"] == 233.5
     assert report["individual_stores"][0]["stock"] == 2

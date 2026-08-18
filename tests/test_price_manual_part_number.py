@@ -117,3 +117,16 @@ def test_isolated_price_run_accepts_manual_identity_without_excel(monkeypatch, t
     snapshot = next(iter(app._active_snapshots.values()))
     assert len(snapshot.products) == 1
     assert snapshot.products[0].identity.mpn == "sa400s37/960g"
+
+
+def test_packaged_entrypoint_has_manual_price_no_excel_smoke_contract():
+    run_desktop = (ROOT / "run_desktop.py").read_text(encoding="utf-8")
+    smoke_path = ROOT / "src" / "product_intelligence" / "manual_price_ui_smoke.py"
+
+    assert '--manual-price-ui-smoke' in run_desktop
+    assert smoke_path.is_file()
+    smoke = smoke_path.read_text(encoding="utf-8")
+    assert 'sa400s37/960g' in smoke
+    assert '_run_price_all()' in smoke
+    assert '_run_price_selected()' in smoke
+    assert 'snapshot.products[0].identity.mpn' in smoke

@@ -276,7 +276,7 @@ def _tracked_query_plan(identity:ProductIdentity,official_hint:str|None)->list[s
     return plan
 
 
-def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10,budget_tracker:SearchBudgetTracker|None=None,query_quota:int|None=None)->list[SearchCandidate]:
+def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10,budget_tracker:SearchBudgetTracker|None=None,query_quota:int|None=None,allow_identity_bootstrap:bool=True)->list[SearchCandidate]:
     if budget_tracker is not None:
         # Do not invoke the legacy bootstrap here because it performs hidden web
         # queries outside this shared budget. Search the strongest supplied
@@ -290,7 +290,7 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10,budget_track
             groups.append(_budgeted_query(effective_identity,query,max(6,min(timeout,10)),budget_tracker))
         return _merge_ranked(groups,min(limit,budget_tracker.budget.max_candidates_per_query*max(1,len(groups))))
 
-    effective_identity,official_hint=_bootstrap_unknown_identity(identity,timeout)
+    effective_identity,official_hint=_bootstrap_unknown_identity(identity,timeout) if allow_identity_bootstrap else (identity,None)
     q=build_query(effective_identity)
     if not q:return []
     strong_raw=next((x for x in [effective_identity.mpn,effective_identity.ean,effective_identity.upc,effective_identity.gtin,effective_identity.sku] if x),None)

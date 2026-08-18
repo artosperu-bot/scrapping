@@ -1,11 +1,9 @@
-BASE=610d802bcba2554b1aefd835dce63f00f127be64
+BASE=dc1aba796f091cb2b0d2421b6a9bf6f0735575af
 PRICE_TRACE_IDENTITY_PATCH=APPLIED
 PATCH_EXIT=0
 ..........                                                               [100%]
-10 passed in 2.14s
+10 passed in 1.49s
 FOCUSED_EXIT=0
-ERROR: file or directory not found: tests/test_price_channel_registry.py
-
-
-no tests ran in 0.00s
-ADJACENT_EXIT=4
+....................                                                     [100%]
+20 passed in 0.79s
+ADJACENT_EXIT=0

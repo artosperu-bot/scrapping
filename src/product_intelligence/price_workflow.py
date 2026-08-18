@@ -6,6 +6,7 @@ from urllib.parse import quote_plus, urlparse
 
 import requests
 
+from .identity_bootstrap import bootstrap_identity
 from .mercadolibre_oauth import build_mercadolibre_api_client
 from .models import ProductIdentity
 from .price_adapters import parse_mercadolibre_payload, parse_shopify_product_payload, parse_vtex_payload
@@ -20,6 +21,7 @@ from .price_history import (
 from .price_identity import competitor_key, dedupe_offers, filter_market_outliers, is_peru_offer
 from .price_models import PriceOffer
 from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
+from .price_trace import PriceTrace
 from .web_fetch import fetch_page
 
 PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
@@ -34,6 +36,27 @@ BROWSER_PRICE_CHANNELS = {"Ripley", "MercadoLibre", "Mercado Libre", "JBL Perú"
 
 def _query(identity: ProductIdentity) -> str:
     return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
+
+
+def _resolve_price_identity(identity: ProductIdentity) -> tuple[ProductIdentity, dict]:
+    if not _query(identity):
+        return identity, {"status": "IDENTITY_UNRESOLVED", "confidence": 0.0, "reason": "NO_IDENTITY_SIGNAL", "official_domain_hint": None}
+    if identity.brand and (identity.model or identity.product_name) and (identity.mpn or identity.ean or identity.upc or identity.gtin):
+        return identity, {"status": "ALREADY_RESOLVED", "confidence": float(identity.confidence or 1.0), "reason": "INPUT_HAS_STRONG_IDENTITY", "official_domain_hint": None}
+    try:
+        result = bootstrap_identity(identity, limit_per_query=14, timeout=8)
+    except Exception as exc:
+        return identity, {"status": "IDENTITY_UNRESOLVED", "confidence": 0.0, "reason": f"BOOTSTRAP_ERROR:{type(exc).__name__}", "official_domain_hint": None}
+    resolved = getattr(result, "identity", None) or identity
+    status = str(getattr(result, "status", "IDENTITY_UNRESOLVED") or "IDENTITY_UNRESOLVED")
+    if status != "RESOLVED":
+        resolved = identity
+    return resolved, {
+        "status": status,
+        "confidence": float(getattr(result, "confidence", 0.0) or 0.0),
+        "reason": str(getattr(result, "reason", "") or ""),
+        "official_domain_hint": getattr(result, "official_domain_hint", None),
+    }
 
 
 def _channel_from_url(url: str) -> str:
@@ -253,26 +276,61 @@ def _has_trusted_offer(rows: list[PriceOffer]) -> bool:
 
 
 def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_event=None, max_sources: int = 48) -> list[PriceOffer]:
+    input_identity = identity
+    identity, identity_resolution = _resolve_price_identity(input_identity)
+    trace = PriceTrace()
+
     def emit(event_type: str, **payload):
+        if event_type == "page":
+            status = str(payload.get("status") or "").lower()
+            channel = payload.get("channel")
+            url = payload.get("url")
+            if status == "fetching":
+                trace.record("URL_DISCOVERED", channel=channel, url=url)
+                trace.record("FETCH_STARTED", channel=channel, url=url)
+            elif status == "parsed":
+                trace.record("FETCH_OK", channel=channel, url=url)
+                trace.record("PARSER_STARTED", channel=channel, url=url)
+                if int(payload.get("offers") or 0) > 0:
+                    trace.record("PARSER_OK", channel=channel, url=url, offers=int(payload.get("offers") or 0))
+                else:
+                    trace.record("PARSER_ZERO_OFFERS", channel=channel, url=url)
+            elif status in {"error", "browser_error"}:
+                trace.record("FETCH_FAILED", channel=channel, url=url, error=payload.get("error"))
         if on_event:
             on_event({"type": event_type, "identity": identity.model_dump(), **payload})
 
+    emit("identity", input_identity=input_identity.model_dump(), resolved_identity=identity.model_dump(), **identity_resolution)
     offers: list[PriceOffer] = []
     learned_sources = load_validated_source_urls(output_root, identity)
     warm_path = bool(learned_sources)
     emit("status", stage="searching", message="Consultando APIs y fuentes estructuradas de Perú")
 
     for channel, base_url in PERU_STRUCTURED_SOURCES:
+        trace.record("QUERY_EXECUTED", channel=channel, query=_query(identity), method="structured_direct")
         try:
             rows = _try_vtex(base_url, identity, channel)
             offers.extend(rows)
+            if rows:
+                for row in rows:
+                    trace.record("IDENTITY_ACCEPTED", channel=channel, url=row.url, identity_match=row.identity_match)
+                    trace.record("PRICE_EXTRACTED", channel=channel, url=row.url, price=row.selling_price, currency=row.currency)
+            else:
+                trace.record("QUERY_EXECUTED_NO_RESULT", channel=channel, query=_query(identity), method="structured_direct")
             emit("source", channel=channel, status="ok", offers=len(rows), method="structured_direct")
         except Exception as exc:
             emit("source", channel=channel, status="error", error=f"structured: {type(exc).__name__}: {exc}")
 
+    trace.record("QUERY_EXECUTED", channel="Mercado Libre", query=_query(identity), method="mercadolibre_mpe")
     try:
         ml = _try_mercadolibre(identity)
         offers.extend(ml)
+        if ml:
+            for row in ml:
+                trace.record("IDENTITY_ACCEPTED", channel="Mercado Libre", url=row.url, identity_match=row.identity_match)
+                trace.record("PRICE_EXTRACTED", channel="Mercado Libre", url=row.url, price=row.selling_price, currency=row.currency)
+        else:
+            trace.record("QUERY_EXECUTED_NO_RESULT", channel="Mercado Libre", query=_query(identity), method="mercadolibre_mpe")
         emit("source", channel="MercadoLibre", status="ok", offers=len(ml), method="mercadolibre_mpe")
     except Exception as exc:
         emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
@@ -309,17 +367,23 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     if not warm_path or not _has_trusted_offer(offers):
         try:
             marketplace_sources = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
+            for url in marketplace_sources:
+                trace.record("URL_DISCOVERED", channel=_channel_from_url(url), url=url, method="targeted_pdp")
             emit("source", channel="peru_directed", status="ok", offers=0, urls=len(marketplace_sources), method="targeted_pdp")
         except Exception as exc:
             emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
         if not warm_path:
             try:
                 retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2))
+                for url in retail_sources:
+                    trace.record("URL_DISCOVERED", channel=_channel_from_url(url), url=url, method="identifier_and_alias_retail")
                 emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
             except Exception as exc:
                 emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
         try:
-            base_sources = discover_price_sources(identity, limit=max_sources)
+            base_sources = discover_price_sources(identity, limit=max_sources, allow_identity_bootstrap=False)
+            for url in base_sources:
+                trace.record("URL_DISCOVERED", channel=_channel_from_url(url), url=url, method="generic_peru")
             emit("source", channel="web", status="ok", offers=0, urls=len(base_sources), method="generic_peru")
         except Exception as exc:
             emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
@@ -338,7 +402,9 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     if rejected_outliers:
         emit("quality", rejected_outliers=len(rejected_outliers), prices=[r.selling_price for r in rejected_outliers])
 
-    coverage = build_channel_coverage(valid)
+    for row in valid:
+        trace.record("OFFER_ACCEPTED", channel=row.channel, url=row.url, price=row.selling_price, currency=row.currency, seller=row.seller_display_name, identity_match=row.identity_match)
+    coverage = trace.coverage(valid)
     emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas peruanas validadas")
     save_price_run(output_root, valid)
     save_validated_source_bindings(output_root, identity, valid)
@@ -351,7 +417,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         offers=len(valid),
         channels=len({r.channel for r in valid}),
         sellers=len({competitor_key(r) for r in valid}),
-        target_channels_found=sum(1 for row in coverage["channels"] if row["status"] == "FOUND"),
+        target_channels_found=sum(1 for row in coverage["channels"] if row.get("final_status") in {"OFFER_ACCEPTED", "OUT_OF_STOCK"}),
         individual_stores=coverage["individual_store_count"],
         best_by_currency=_best_by_currency(valid),
     )

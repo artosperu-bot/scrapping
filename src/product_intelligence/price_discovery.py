@@ -165,10 +165,11 @@ def discover_price_sources(
     limit: int = 24,
     *,
     priority_domains: tuple[str, ...] = PERU_PRICE_DOMAINS,
+    allow_identity_bootstrap: bool = True,
 ) -> list[str]:
     per_domain = max(3, min(5, max(1, limit // 4)))
     targeted = discover_targeted_peru_sources(identity, limit_per_domain=per_domain)
-    candidates = search_web(identity, limit=max(limit * 3, 24))
+    candidates = search_web(identity, limit=max(limit * 3, 24), allow_identity_bootstrap=allow_identity_bootstrap)
     urls: list[str] = []
     seen: set[str] = set()
     for url in targeted:

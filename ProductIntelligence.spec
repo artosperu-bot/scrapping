@@ -34,6 +34,12 @@ except Exception:
     pass
 
 try:
+    d,b,h=collect_all('yt_dlp_ejs')
+    datas += d; binaries += b; hiddenimports += h
+except Exception:
+    pass
+
+try:
     d,b,h=collect_all('imageio_ffmpeg')
     datas += d; binaries += b; hiddenimports += h
 except Exception:
@@ -42,6 +48,13 @@ except Exception:
 browser_dir=root/'vendor'/'ms-playwright'
 if browser_dir.exists():
     datas.append((str(browser_dir),'vendor/ms-playwright'))
+
+deno_dir=root/'vendor'/'deno'
+if deno_dir.exists():
+    deno_exe=deno_dir/'deno.exe'
+    if not deno_exe.is_file():
+        raise FileNotFoundError(f"Missing required Deno runtime: {deno_exe}")
+    binaries.append((str(deno_exe),'vendor/deno'))
 
 media_assets=root/'src'/'product_intelligence'/'assets'
 if media_assets.exists():

@@ -209,7 +209,7 @@ def _log_source_rejection(exc: Exception, log, prefix: str = "  ") -> None:
 def _ingest_direct_documents(identity:ProductIdentity,*,target_semantics:list[str],seen_urls:set[str],errors:list[str],log,limit:int=6,budget_tracker:SearchBudgetTracker|None=None,accept_limit:int=3)->list[ProductRecord]:
     accepted=[];trace=PdfSearchTrace(_product_key(identity))
     pdf_limit=min(int(limit),budget_tracker.budget.max_pdfs_analyzed_per_product if budget_tracker else int(limit))
-    document_candidates=discover_product_documents(identity,limit=pdf_limit,trace=trace)
+    document_candidates = discover_product_documents(identity,limit=pdf_limit,trace=trace)
     if document_candidates:log(f"  PDF CANDIDATOS: {len(document_candidates)}")
     for candidate in document_candidates:
         if candidate.url in seen_urls:continue
@@ -229,8 +229,15 @@ def _ingest_direct_documents(identity:ProductIdentity,*,target_semantics:list[st
     return accepted
 
 
-def scrape_item(item:BatchItem,out_dir:str,template_plan:dict|None=None,log=lambda m:None,source_strategy:SourceStrategy|None=None)->ProductRecord|None:
-    strategy=(source_strategy or SourceStrategy()).normalized();pipe=ProductPipeline();budget_tracker=SearchBudgetTracker(RUNTIME_RESOLUTION_BUDGET)
+def scrape_item(
+    item: BatchItem,
+    out_dir: str,
+    template_plan: dict | None = None,
+    log=lambda m: None,
+    source_strategy: SourceStrategy | None = None,
+) -> ProductRecord | None:
+    strategy = (source_strategy or SourceStrategy()).normalized()
+    pipe=ProductPipeline();budget_tracker=SearchBudgetTracker(RUNTIME_RESOLUTION_BUDGET)
     manual_urls=list(dict.fromkeys([u for u in ((item.source_urls or [])+([item.source_url] if item.source_url else [])) if u]));eligible_manual_urls=[u for u in manual_urls if strategy.web or (strategy.pdf and _looks_like_pdf_url(u))]
     manual_candidates=[type("Candidate",(),{"url":u,"likely_official":False,"score":2.0,"ai_assisted":False,"manual_source":True})() for u in eligible_manual_urls]
     free_candidates=search_web(item.identity,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=SEARCH_STAGE_QUERY_QUOTAS["INITIAL"]) if strategy.web else []
@@ -273,9 +280,11 @@ def scrape_item(item:BatchItem,out_dir:str,template_plan:dict|None=None,log=lamb
         except Exception as exc:
             errors.append(f"{candidate.url}: {type(exc).__name__}: {exc}");_log_source_rejection(exc,log)
 
-    if not accepted and strategy.pdf and budget_tracker.can_accept_source():
-        accepted.extend(_ingest_direct_documents(item.identity,target_semantics=target_semantics,seen_urls=seen_urls,errors=errors,log=log,budget_tracker=budget_tracker,accept_limit=min(3,RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product)))
-    if not accepted:log("  SIN FUENTE VALIDADA: "+(errors[-1] if errors else "no hubo candidatos"));return None
+    if not accepted and strategy.pdf:
+        if budget_tracker.can_accept_source():
+            accepted.extend(_ingest_direct_documents(item.identity,target_semantics=target_semantics,seen_urls=seen_urls,errors=errors,log=log,budget_tracker=budget_tracker,accept_limit=min(3,RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product)))
+    if not accepted:
+        log("  SIN FUENTE VALIDADA: "+(errors[-1] if errors else "no hubo candidatos"));return None
 
     rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan);gap_terms=list(resolution.get("research_terms") or [])
     if gap_terms and strategy.pdf and budget_tracker.can_accept_source():
@@ -318,8 +327,18 @@ def scrape_item(item:BatchItem,out_dir:str,template_plan:dict|None=None,log=lamb
     return rec
 
 
-def run_batch(template:str,output_dir:str,overwrite:bool=False,log=lambda m:None,manual_part_numbers:list[str]|None=None,manual_identities:list[ProductIdentity]|None=None,manual_source_urls:list[list[str]]|None=None,source_strategy:SourceStrategy|None=None)->dict:
-    strategy=(source_strategy or SourceStrategy()).normalized();out=Path(output_dir);out.mkdir(parents=True,exist_ok=True);template_plan=analyze_template_contract(template);(out/"template_contract.json").write_text(json.dumps(template_plan,ensure_ascii=False,indent=2),encoding="utf-8");ps=template_plan["summary"]
+def run_batch(
+    template: str,
+    output_dir: str,
+    overwrite: bool = False,
+    log=lambda m: None,
+    manual_part_numbers: list[str] | None = None,
+    manual_identities: list[ProductIdentity] | None = None,
+    manual_source_urls: list[list[str]] | None = None,
+    source_strategy: SourceStrategy | None = None,
+) -> dict:
+    strategy = (source_strategy or SourceStrategy()).normalized()
+    out=Path(output_dir);out.mkdir(parents=True,exist_ok=True);template_plan=analyze_template_contract(template);(out/"template_contract.json").write_text(json.dumps(template_plan,ensure_ascii=False,indent=2),encoding="utf-8");ps=template_plan["summary"]
     log(f"Contrato Excel: {ps['fields_total']} campos | {ps['scrape_targets']} datos de producto | {ps['media_slots']} imágenes | {ps['seller_inputs']} datos del vendedor | {ps['marketplace_inputs']} datos marketplace")
     log("Fuentes ejecución: "+f"WEB={'ON' if strategy.web else 'OFF'} | PDF={'ON' if strategy.pdf else 'OFF'} | OCR={'ON' if strategy.ocr else 'OFF'} | MISTRAL={'ON' if strategy.mistral else 'OFF'}")
     manual_mode=bool(manual_identities or manual_part_numbers)

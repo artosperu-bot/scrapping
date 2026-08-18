@@ -136,12 +136,21 @@ class App(WorkspaceApp):
         left = ttk.LabelFrame(top, text="Productos detectados", padding=10)
         right = ttk.LabelFrame(top, text="Acciones y estado", padding=10)
         top.add(left, weight=1); top.add(right, weight=2)
+
+        ttk.Label(left, text="Part Number / MPN").pack(anchor="w")
+        manual_row = ttk.Frame(left)
+        manual_row.pack(fill="x", pady=(2, 6))
+        manual_entry = ttk.Entry(manual_row, textvariable=self.price_manual_part_number, width=24)
+        manual_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(manual_row, text="Agregar", command=self._add_manual_price_product).pack(side="left", padx=(5, 0))
+        manual_entry.bind("<Return>", lambda _event: self._add_manual_price_product())
+
         self.price_product_list = tk.Listbox(left, exportselection=False, height=8)
         self.price_product_list.pack(fill="both", expand=True)
         actions = ttk.Frame(right); actions.pack(fill="x")
         self.price_selected_btn = ttk.Button(actions, text="BUSCAR PRECIOS", command=self._run_price_selected); self.price_selected_btn.pack(side="left")
         self.price_all_btn = ttk.Button(actions, text="Procesar todos", command=self._run_price_all); self.price_all_btn.pack(side="left", padx=(8, 0))
-        self.price_status = tk.StringVar(value="Analiza un Excel para cargar productos.")
+        self.price_status = tk.StringVar(value="Analiza un Excel o agrega un Part Number para buscar precios.")
         ttk.Label(right, textvariable=self.price_status, wraplength=720, justify="left").pack(anchor="w", fill="x", pady=(10, 0))
 
         progress = ttk.LabelFrame(search_tab, text="Progreso", padding=10, height=190); progress.pack(fill="x", pady=(10, 6)); progress.pack_propagate(False)

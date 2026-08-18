@@ -59,6 +59,21 @@ def test_price_identity_resolution_rejects_generic_brand_even_if_marked_resolved
     assert result.identity.mpn == "ABC/123"
 
 
+def test_explicit_brand_identity_skips_redundant_network_bootstrap():
+    original = ProductIdentity(brand="ExampleBrand", model="Model 123", mpn="ABC/123")
+    calls = []
+
+    def bootstrap(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("explicit identity should not require bootstrap")
+
+    result = resolve_price_identity(original, bootstrap=bootstrap)
+    assert result.status == "RESOLVED"
+    assert result.identity.model_dump() == original.model_dump()
+    assert result.reason == "BRAND_PROVIDED"
+    assert calls == []
+
+
 def test_price_query_plan_is_bounded_ordered_and_signal_aware():
     identity = ProductIdentity(
         brand="ExampleBrand",

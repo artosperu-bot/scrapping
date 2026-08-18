@@ -1,4 +1,4 @@
-commit=55e685d185378793483681d0d7d27b8047123f33
+commit=2c454d37b212428e2b86c60831dff7140654e6d1
 pytest_exit_code=1
 ......FFFF                                                               [100%]
 =================================== FAILURES ===================================
@@ -39,7 +39,7 @@ E       KeyError: 'Falabella'
 tests/test_price_trace_identity_integration.py:60: KeyError
 _ test_price_workflow_resolves_partial_identity_once_before_all_price_sources __
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fe76a9ded80>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7eff1ccded50>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_price_workflow_resolves_p0')
 
     def test_price_workflow_resolves_partial_identity_once_before_all_price_sources(monkeypatch, tmp_path):
@@ -73,7 +73,7 @@ E       AttributeError: <module 'product_intelligence.price_workflow' from '/hom
 tests/test_price_trace_identity_integration.py:91: AttributeError
 ____ test_unresolved_identity_continues_without_destroying_original_signal _____
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fe76a9e7a70>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7eff1cbedfa0>
 
     def test_unresolved_identity_continues_without_destroying_original_signal(monkeypatch):
         original = ProductIdentity(mpn="ZX-4109")
@@ -96,4 +96,4 @@ FAILED tests/test_price_trace_identity_integration.py::test_trace_preserves_fetc
 FAILED tests/test_price_trace_identity_integration.py::test_trace_preserves_parser_zero_and_offer_accepted_by_source - KeyError: 'Falabella'
 FAILED tests/test_price_trace_identity_integration.py::test_price_workflow_resolves_partial_identity_once_before_all_price_sources - AttributeError: <module 'product_intelligence.price_workflow' from '/home/runner/work/scrapping/scrapping/src/product_intelligence/price_workflow.py'> has no attribute 'bootstrap_identity'
 FAILED tests/test_price_trace_identity_integration.py::test_unresolved_identity_continues_without_destroying_original_signal - AttributeError: <module 'product_intelligence.price_workflow' from '/home/runner/work/scrapping/scrapping/src/product_intelligence/price_workflow.py'> has no attribute 'bootstrap_identity'
-4 failed, 6 passed in 1.50s
+4 failed, 6 passed in 1.70s

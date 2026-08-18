@@ -66,6 +66,7 @@ class ProductEvidenceOrchestrator:
         source_url: str,
         status: str = "ACCEPTED",
         source_kind: str | None = None,
+        count_source: bool = True,
     ) -> OrchestratorSnapshot:
         before = set(self.store.snapshot().resolved_fields)
         accepted_entries = self.store.ingest_record(record)
@@ -74,7 +75,7 @@ class ProductEvidenceOrchestrator:
         effective_status = status
         if str(status).upper() == "ACCEPTED" and not accepted_entries and not added:
             effective_status = "NO_VALUE"
-        if accepted_entries and self.budget_tracker.can_accept_source():
+        if count_source and accepted_entries and self.budget_tracker.can_accept_source():
             self.budget_tracker.accept_source()
         self.identity = self.store.identity
         self._history_row(

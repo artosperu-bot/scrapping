@@ -12,6 +12,17 @@ from bs4 import BeautifulSoup
 
 from .models import ProductIdentity
 from .normalize import key_norm
+from .product_document_matcher import (
+    EXACT_MODEL,
+    EXACT_SKU,
+    RELATED_FAMILY,
+    SIBLING_VARIANT,
+    UNKNOWN,
+    UNRELATED,
+    DocumentFingerprint,
+    ProductDocumentMatcher,
+    ProductFingerprint,
+)
 from .web_fetch import UA
 
 _DOCUMENT_HINTS=("pdf","datasheet","data sheet","spec sheet","specification","manual","ficha tecnica","ficha técnica","technical sheet","hoja tecnica","hoja técnica")
@@ -31,6 +42,11 @@ class PdfIdentityMatch:
     accepted:bool
     confidence:float
     reason:str
+    relationship:str=UNKNOWN
+    positive_evidence:tuple[str,...]=()
+    negative_evidence:tuple[str,...]=()
+    hard_conflicts:tuple[str,...]=()
+    document_scope:str="NONE"
 
 def _compact(value):
     return re.sub(r"[^a-z0-9]","",key_norm(value or ""))
@@ -100,35 +116,82 @@ def is_pdf_payload(content_type:str|None,data:bytes)->bool:
     c=(content_type or "").lower()
     return "application/pdf" in c or bytes(data[:5])==b"%PDF-"
 
+def _to_pdf_identity_match(result, reason:str)->PdfIdentityMatch:
+    return PdfIdentityMatch(
+        accepted=bool(result.accepted),
+        confidence=float(result.confidence),
+        reason=reason,
+        relationship=str(result.relationship),
+        positive_evidence=tuple(result.positive_evidence),
+        negative_evidence=tuple(result.negative_evidence),
+        hard_conflicts=tuple(result.hard_conflicts),
+        document_scope=str(result.document_scope),
+    )
+
 def validate_pdf_identity(identity:ProductIdentity,text:str,url:str="")->PdfIdentityMatch:
-    hay=_compact(f"{url} {text}")
-    text_hay=_compact(text)
-    strong=[x for x in [identity.mpn,identity.ean,identity.upc,identity.gtin] if x]
-    brand=_compact(identity.brand)
+    """Classify the exact relationship between a requested product and a PDF.
+
+    Acceptance is fail-closed: only EXACT_SKU and EXACT_MODEL relationships are
+    accepted. Family overlap, sibling variants and unknown documents cannot pass.
+    Legacy ``reason`` values are preserved where callers/tests depend on them.
+    """
     model_text=identity.model or identity.product_name
+    strong=[x for x in [identity.mpn,identity.sku,identity.ean,identity.upc,identity.gtin] if x]
+    text_hay=_compact(text)
+    hay=_compact(f"{url} {text}")
+    brand=_compact(identity.brand)
     model=_compact(model_text)
-    if strong:
+
+    # Keep the existing strong sibling URL signal as an additional veto, but do
+    # not let an odd mirror filename override exact identifier evidence inside
+    # the PDF content itself.
+    strong_in_content=any(_compact(x) and _compact(x) in text_hay for x in strong)
+    if _url_has_sibling_model_conflict(model_text,url) and not strong_in_content:
+        return PdfIdentityMatch(
+            False,
+            .99,
+            "sibling_model_url_conflict",
+            relationship=SIBLING_VARIANT,
+            negative_evidence=("URL is bound to a sibling model code",),
+            hard_conflicts=("model code mismatch: sibling model in URL",),
+            document_scope="NONE",
+        )
+
+    product=ProductFingerprint.from_identity(identity)
+    document=DocumentFingerprint.from_evidence(url=url,title="",text=text)
+    result=ProductDocumentMatcher().match(product,document)
+
+    if result.relationship==EXACT_SKU:
+        if brand and brand in text_hay:
+            reason="strong_identifier_brand"
+        elif brand and model and model in text_hay and any(_compact(x) in text_hay for x in strong):
+            reason="strong_identifier_model"
+        else:
+            reason="strong_identifier"
+        return _to_pdf_identity_match(result,reason)
+
+    if result.relationship==EXACT_MODEL:
+        reason="brand_model" if brand and brand in text_hay else "model"
+        return _to_pdf_identity_match(result,reason)
+
+    if result.relationship==SIBLING_VARIANT:
+        return _to_pdf_identity_match(result,"sibling_variant_hard_conflict")
+
+    if result.relationship==RELATED_FAMILY:
+        return _to_pdf_identity_match(result,"related_family_only")
+
+    if result.relationship==UNKNOWN:
         matched=next((_compact(x) for x in strong if _compact(x) and _compact(x) in hay),None)
-        if matched:
-            if brand:
-                if brand in text_hay:
-                    return PdfIdentityMatch(True,.99,"strong_identifier_brand")
-                if model and model in text_hay and matched in text_hay:
-                    return PdfIdentityMatch(True,.94,"strong_identifier_model")
-                return PdfIdentityMatch(False,.0,"strong_identifier_without_brand_binding")
-            return PdfIdentityMatch(True,.97,"strong_identifier")
-        if brand and model and brand in text_hay and model in text_hay:
-            if _url_has_sibling_model_conflict(model_text,url):
-                return PdfIdentityMatch(False,.0,"sibling_model_url_conflict")
-            return PdfIdentityMatch(True,.92,"brand_model")
-        return PdfIdentityMatch(False,.0,"strong_identifier_missing")
-    if _url_has_sibling_model_conflict(model_text,url):
-        return PdfIdentityMatch(False,.0,"sibling_model_url_conflict")
-    if brand and model and brand in text_hay and model in text_hay:
-        return PdfIdentityMatch(True,.92,"brand_model")
-    if model and model in text_hay:
-        return PdfIdentityMatch(True,.86,"model")
-    return PdfIdentityMatch(False,.0,"identity_not_confirmed")
+        if matched and brand:
+            return _to_pdf_identity_match(result,"strong_identifier_without_brand_binding")
+        if strong:
+            return _to_pdf_identity_match(result,"strong_identifier_missing")
+        return _to_pdf_identity_match(result,"identity_not_confirmed")
+
+    if result.relationship==UNRELATED:
+        return _to_pdf_identity_match(result,"strong_identifier_missing" if strong else "identity_not_confirmed")
+
+    return _to_pdf_identity_match(result,"identity_not_confirmed")
 
 def pdf_evidence_enabled()->bool:
     return bool(_pdf_enabled.get())

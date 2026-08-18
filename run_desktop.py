@@ -4,6 +4,10 @@ if "--smart-e2e-smoke" in sys.argv:
     from product_intelligence.smart_packaged_smoke import main as smart_e2e_main
     raise SystemExit(smart_e2e_main())
 
+if "--manual-price-ui-smoke" in sys.argv:
+    from product_intelligence.manual_price_ui_smoke import main as manual_price_ui_smoke_main
+    raise SystemExit(manual_price_ui_smoke_main())
+
 from importlib import import_module
 from product_intelligence.modern_desktop import main
 from product_intelligence.provider_desktop import main as provider_main

@@ -98,6 +98,14 @@ jobs:
           Write-Host "deno=$($denoFiles.FullName -join ', ')"
           Write-Host "ejs_files=$($ejsFiles.Count)"
 
+      - name: Run packaged manual price no-Excel smoke
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'dist/ProductIntelligence/ProductIntelligence.exe').Path
+          $process = Start-Process -FilePath $exe -ArgumentList '--manual-price-ui-smoke' -WorkingDirectory $PWD -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Packaged manual price no-Excel smoke failed with exit code $($process.ExitCode)" }
+          Write-Host 'PACKAGED_MANUAL_PRICE_NO_EXCEL=PASS'
+
       - name: Run packaged SMART E2E smoke
         shell: pwsh
         run: |

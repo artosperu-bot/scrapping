@@ -210,10 +210,11 @@ class App(MediaProgressApp):
         self._start_price_indices([index])
 
     def _run_price_all(self):
-        if not self.product_rows:
-            messagebox.showwarning("Precios", "Analiza primero un Excel con productos.")
+        total = int(self.price_product_list.size())
+        if total <= 0:
+            messagebox.showwarning("Precios", "Analiza un Excel o agrega un Part Number para buscar precios.")
             return
-        self._start_price_indices(list(range(len(self.product_rows))))
+        self._start_price_indices(list(range(total)))
 
     def _clear_price_results(self):
         self._price_offer_count = 0

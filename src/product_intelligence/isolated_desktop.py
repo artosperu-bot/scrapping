@@ -41,6 +41,14 @@ class App(ModernApp):
         label = str(copied.mpn or copied.ean or copied.upc or copied.gtin or copied.model or copied.product_name or f"Producto {index + 1}")
         return ProductSnapshot(index=index, label=label, identity=copied, manual_urls=tuple(manual_urls))
 
+    def _price_product_snapshot(self, index: int) -> ProductSnapshot | None:
+        identity = self._price_identity_for_list_index(index)
+        if identity is None:
+            return None
+        copied = self._copy_identity(identity)
+        label = str(copied.mpn or copied.ean or copied.upc or copied.gtin or copied.model or copied.product_name or f"Producto {index + 1}")
+        return ProductSnapshot(index=index, label=label, identity=copied)
+
     def _audit(self, snapshot: ExecutionSnapshot, *, status: str, stage: str = "", product_id: str = "", source: str = "", url: str = "", detail: str = "", result: str = ""):
         self.audit_sink.emit(AuditEvent.create(snapshot.run_id, snapshot.process_type, status=status, stage=stage, product_id=product_id, source=source, url=url, detail=detail, result=result))
 
@@ -238,7 +246,7 @@ class App(ModernApp):
         if self._price_running:
             messagebox.showinfo("Precios", "Ya hay una búsqueda de precios en ejecución.")
             return
-        products = [snap for index in indices if (snap := self._product_snapshot(index)) is not None]
+        products = [snap for index in indices if (snap := self._price_product_snapshot(index)) is not None]
         if not products:
             messagebox.showerror("Precios", "No hay identidades válidas para procesar.")
             return

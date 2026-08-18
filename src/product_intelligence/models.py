@@ -39,6 +39,18 @@ class Evidence(BaseModel):
     match_level: MatchLevel = "LOW"
     confidence: float = 0.0
 
+    # Universal identity/evidence hardening metadata. These fields are optional
+    # for backward compatibility with existing HTML/API evidence producers, but
+    # once present they become load-bearing at the final write barrier.
+    identity_status: str | None = None
+    authority: str | None = None
+    policy_allowed: bool | None = None
+    document_relationship: str | None = None
+    document_scope: str | None = None
+    hard_conflicts: list[str] = Field(default_factory=list)
+    positive_evidence: list[str] = Field(default_factory=list)
+    negative_evidence: list[str] = Field(default_factory=list)
+
 class ProductRecord(BaseModel):
     identity: ProductIdentity
     specifications: dict[str, Any] = Field(default_factory=dict)

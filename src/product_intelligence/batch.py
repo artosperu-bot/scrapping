@@ -249,6 +249,7 @@ def scrape_item(
     prefer_pdf_first=bool(first_external and first_external.engine=="PDF")
     should_search_initial_web=bool(strategy.web and not eligible_manual_urls and not prefer_pdf_first)
     free_candidates=search_web(item.identity,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=SEARCH_STAGE_QUERY_QUOTAS["INITIAL"]) if should_search_initial_web else []
+    if orchestrator and should_search_initial_web:log(f"  SMART QUERY: used={budget_tracker.queries_used} limit={RUNTIME_RESOLUTION_BUDGET.max_search_queries_per_product} engine={first_external.engine if first_external else 'WEB_STRUCTURED'}")
     known_manual=set(eligible_manual_urls);candidates=manual_candidates+_prioritize([c for c in free_candidates if getattr(c,"url",None) not in known_manual])
     if manual_urls:log(f"  fuentes manuales: {len(manual_urls)}; elegibles por estrategia={len(eligible_manual_urls)}; se validan antes de aceptar evidencia")
     if orchestrator:
@@ -261,8 +262,13 @@ def scrape_item(
         if budget_tracker.pages_fetched>=RUNTIME_RESOLUTION_BUDGET.max_pages_fetched_per_product:
             log("  STOP: PAGE_FETCH_BUDGET agotado");break
         try:
-            log(f"  probando: {candidate.url}")
             is_pdf=bool(strategy.pdf and _looks_like_pdf_url(candidate.url))
+            if orchestrator:
+                fields_text=",".join(smart_snapshot.missing_fields or tuple(target_semantics))
+                source_engine="PDF" if is_pdf else "WEB_STRUCTURED"
+                source_kind="MANUAL_PDF" if is_pdf and getattr(candidate,"manual_source",False) else "CANDIDATE"
+                log(f"  SMART SOURCE: {source_engine} kind={source_kind} fields={fields_text}")
+            log(f"  probando: {candidate.url}")
             if is_pdf:
                 if budget_tracker.pdfs_analyzed>=RUNTIME_RESOLUTION_BUDGET.max_pdfs_analyzed_per_product:continue
                 budget_tracker.pdfs_analyzed+=1;rec=process_pdf_document(item.identity,candidate.url,target_semantics=target_semantics)
@@ -291,6 +297,7 @@ def scrape_item(
                 enriched=_enriched_identity(item,rec)
                 if enriched:
                     followups=search_web(enriched,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=SEARCH_STAGE_QUERY_QUOTAS["IDENTITY_REFINEMENT"]);fresh=[c for c in followups if c.url not in seen_urls]
+                    if orchestrator:log(f"  SMART QUERY: used={budget_tracker.queries_used} limit={RUNTIME_RESOLUTION_BUDGET.max_search_queries_per_product} engine=IDENTITY")
                     for c in fresh:seen_urls.add(c.url)
                     queue[cursor:cursor]=_prioritize(fresh);log(f"  búsqueda fabricante reforzada: {len(fresh)} candidatos nuevos")
                 manufacturer_followup_done=True
@@ -305,12 +312,14 @@ def scrape_item(
     if not accepted and strategy.pdf:
         wants_pdf=not orchestrator or any(intent.engine=="PDF" for intent in (smart_snapshot.next_intents if smart_snapshot else ()))
         if wants_pdf and budget_tracker.can_accept_source():
+            if orchestrator:log(f"  SMART SOURCE: PDF kind=OFFICIAL_PDF fields={','.join(smart_snapshot.missing_fields or tuple(target_semantics))}")
             direct_records=_ingest_direct_documents(item.identity,target_semantics=target_semantics,seen_urls=seen_urls,errors=errors,log=log,budget_tracker=budget_tracker,accept_limit=min(3,RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product))
             accepted.extend(direct_records)
             if orchestrator:
                 for doc_rec in direct_records:
                     source_url=(doc_rec.fetch or {}).get("final_url") or next(iter(doc_rec.sources or []),"PDF_DISCOVERY")
                     smart_snapshot=orchestrator.observe_record(doc_rec,engine="PDF",source_url=source_url,source_kind=(doc_rec.fetch or {}).get("source_class"),count_source=False)
+                    log(f"  SMART FIELDS: verificados={len(smart_snapshot.resolved_fields)} faltantes={len(smart_snapshot.missing_fields)} conflictos={len(smart_snapshot.conflicted_fields)}")
     if not accepted:
         if orchestrator:
             orchestrator.observe_source_outcome(first_external,"NO_RESULT",engine=first_external.engine if first_external else "UNKNOWN",reason="NO_VALIDATED_SOURCE")
@@ -323,6 +332,7 @@ def scrape_item(
     wants_pdf=not orchestrator or any(intent.engine=="PDF" for intent in (smart_snapshot.next_intents if smart_snapshot else ()))
     if gap_terms and strategy.pdf and wants_more and wants_pdf and budget_tracker.can_accept_source():
         remaining_sources=RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product-len(accepted)
+        if orchestrator:log(f"  SMART NEXT_SOURCE: PDF kind=OFFICIAL_PDF fields={','.join(gap_terms)}")
         document_extra=_ingest_direct_documents(rec.identity,target_semantics=gap_terms,seen_urls=seen_urls,errors=errors,log=log,budget_tracker=budget_tracker,accept_limit=max(0,min(3,remaining_sources)))
         if document_extra:
             accepted.extend(document_extra)
@@ -330,6 +340,7 @@ def scrape_item(
                 for doc_rec in document_extra:
                     source_url=(doc_rec.fetch or {}).get("final_url") or next(iter(doc_rec.sources or []),"PDF_DISCOVERY")
                     smart_snapshot=orchestrator.observe_record(doc_rec,engine="PDF",source_url=source_url,source_kind=(doc_rec.fetch or {}).get("source_class"),count_source=False)
+                    log(f"  SMART FIELDS: verificados={len(smart_snapshot.resolved_fields)} faltantes={len(smart_snapshot.missing_fields)} conflictos={len(smart_snapshot.conflicted_fields)}")
             rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan);gap_terms=list(smart_snapshot.missing_fields if smart_snapshot else (resolution.get("research_terms") or []));log(f"  cobertura tras documentos: pendientes={len(gap_terms)}")
 
     smart_snapshot=orchestrator.plan_next() if orchestrator else None
@@ -337,10 +348,14 @@ def scrape_item(
     wants_web=not orchestrator or any(intent.engine in {"IDENTITY","WEB_STRUCTURED","WEB_FALLBACK"} for intent in (smart_snapshot.next_intents if smart_snapshot else ()))
     if strategy.web and gap_terms and wants_web and (not smart_snapshot or not smart_snapshot.early_stop) and budget_tracker.remaining_queries()>0 and budget_tracker.can_accept_source():
         mode="conflictos/huecos" if resolution.get("blocked") else "huecos";log(f"  segunda pasada por {mode}: {len(gap_terms)} campos/grupos pendientes");current_sources=set(rec.sources or []);total_extra=0;max_extra=max(0,RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product-len(accepted))
+        next_web_intent=next((intent for intent in (smart_snapshot.next_intents if smart_snapshot else ()) if intent.engine in {"IDENTITY","WEB_STRUCTURED","WEB_FALLBACK"}),None)
+        if orchestrator and next_web_intent:log(f"  SMART NEXT_SOURCE: {next_web_intent.engine} kind={next_web_intent.source_kind} fields={','.join(gap_terms)}")
         for start in range(0,len(gap_terms),4):
             if total_extra>=max_extra or budget_tracker.remaining_queries()<=0 or not budget_tracker.can_accept_source():break
             chunk=gap_terms[start:start+4];log(f"    buscando específicamente: {', '.join(chunk)}")
-            chunk_candidates=_prioritize(search_web_for_fields(rec.identity,chunk,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=min(SEARCH_STAGE_QUERY_QUOTAS["MISSING_FIELDS"],budget_tracker.remaining_queries())));chunk_extra=[]
+            raw_chunk_candidates=search_web_for_fields(rec.identity,chunk,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=min(SEARCH_STAGE_QUERY_QUOTAS["MISSING_FIELDS"],budget_tracker.remaining_queries()))
+            if orchestrator:log(f"  SMART QUERY: used={budget_tracker.queries_used} limit={RUNTIME_RESOLUTION_BUDGET.max_search_queries_per_product} engine={next_web_intent.engine if next_web_intent else 'WEB_STRUCTURED'}")
+            chunk_candidates=_prioritize(raw_chunk_candidates);chunk_extra=[]
             for candidate in chunk_candidates:
                 if total_extra>=max_extra or not budget_tracker.can_accept_source():break
                 if candidate.url in seen_urls or candidate.url in current_sources:continue
@@ -355,6 +370,7 @@ def scrape_item(
                     if orchestrator:
                         chunk_extra.append(gap_rec);accepted.append(gap_rec);total_extra+=1
                         smart_snapshot=orchestrator.observe_record(gap_rec,engine="WEB_STRUCTURED",source_url=candidate.url,source_kind=(gap_rec.fetch or {}).get("source_class"))
+                        log(f"  SMART FIELDS: verificados={len(smart_snapshot.resolved_fields)} faltantes={len(smart_snapshot.missing_fields)} conflictos={len(smart_snapshot.conflicted_fields)}")
                     else:
                         if not budget_tracker.accept_source():break
                         chunk_extra.append(gap_rec);accepted.append(gap_rec);total_extra+=1

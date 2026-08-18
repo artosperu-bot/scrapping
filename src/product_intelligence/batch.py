@@ -18,6 +18,7 @@ from .models import ProductIdentity, ProductRecord
 from .normalize import key_norm
 from .pdf_search_trace import PdfSearchTrace, format_trace_lines
 from .pipeline import ProductPipeline
+from .product_evidence_orchestrator import ProductEvidenceOrchestrator
 from .record_builder import build_record_strict
 from .resolution_engine import analyze_resolution
 from .semantic_guard import is_placeholder
@@ -179,7 +180,7 @@ def _enriched_identity(item: BatchItem, rec: ProductRecord) -> ProductIdentity |
     learned_brand=rec.identity.brand or item.identity.brand;learned_model=rec.identity.model or rec.identity.product_name or item.identity.model or item.identity.product_name
     strong=item.identity.mpn or item.identity.ean or item.identity.upc or item.identity.gtin or rec.identity.mpn or rec.identity.gtin
     if not learned_brand or not strong:return None
-    return ProductIdentity(mpn=item.identity.mpn or rec.identity.mpn,ean=item.identity.ean or rec.identity.ean,upc=item.identity.upc or rec.identity.upc,gtin=item.identity.gtin or rec.identity.gtin,brand=learned_brand,model=learned_model)
+    return ProductIdentity(mpn=item.identity.mpn or rec.identity.mpn,ean=item.identity.ean or rec.identity.ean,upc=item.identity.upc or rec.identity.upc,gtin=item.identity.gtin or rec.identity.gtin,brand=learned_brand,model=learned_model,confidence=max(float(item.identity.confidence or 0),float(rec.identity.confidence or 0)),match_level=rec.identity.match_level if rec.identity.match_level!="LOW" else item.identity.match_level,identifiers_confirmed=list(dict.fromkeys([*(item.identity.identifiers_confirmed or []),*(rec.identity.identifiers_confirmed or [])])))
 
 
 def _prioritize(candidates) -> list:return sorted(candidates,key=lambda c:(not bool(getattr(c,"likely_official",False)),-float(getattr(c,"score",0))))
@@ -237,13 +238,22 @@ def scrape_item(
     source_strategy: SourceStrategy | None = None,
 ) -> ProductRecord | None:
     strategy = (source_strategy or SourceStrategy()).normalized()
-    pipe=ProductPipeline();budget_tracker=SearchBudgetTracker(RUNTIME_RESOLUTION_BUDGET)
+    pipe=ProductPipeline()
+    media_slots=int((template_plan or {}).get("media_slots",0) or 0);target_semantics=list((template_plan or {}).get("scrape_semantics") or []);include_images=bool(media_slots) and strategy.web;include_pdfs=strategy.pdf and bool((template_plan or {}).get("summary",{}).get("scrape_targets",1))
+    orchestrator=ProductEvidenceOrchestrator(item.identity,target_semantics,budget=RUNTIME_RESOLUTION_BUDGET,source_strategy=strategy) if target_semantics else None
+    budget_tracker=orchestrator.budget_tracker if orchestrator else SearchBudgetTracker(RUNTIME_RESOLUTION_BUDGET)
     manual_urls=list(dict.fromkeys([u for u in ((item.source_urls or [])+([item.source_url] if item.source_url else [])) if u]));eligible_manual_urls=[u for u in manual_urls if strategy.web or (strategy.pdf and _looks_like_pdf_url(u))]
     manual_candidates=[type("Candidate",(),{"url":u,"likely_official":False,"score":2.0,"ai_assisted":False,"manual_source":True})() for u in eligible_manual_urls]
-    free_candidates=search_web(item.identity,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=SEARCH_STAGE_QUERY_QUOTAS["INITIAL"]) if strategy.web else []
+    smart_snapshot=orchestrator.plan_next() if orchestrator else None
+    first_external=next((intent for intent in (smart_snapshot.next_intents if smart_snapshot else ()) if intent.engine!="EXISTING"),None)
+    prefer_pdf_first=bool(first_external and first_external.engine=="PDF")
+    should_search_initial_web=bool(strategy.web and not eligible_manual_urls and not prefer_pdf_first)
+    free_candidates=search_web(item.identity,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=SEARCH_STAGE_QUERY_QUOTAS["INITIAL"]) if should_search_initial_web else []
     known_manual=set(eligible_manual_urls);candidates=manual_candidates+_prioritize([c for c in free_candidates if getattr(c,"url",None) not in known_manual])
     if manual_urls:log(f"  fuentes manuales: {len(manual_urls)}; elegibles por estrategia={len(eligible_manual_urls)}; se validan antes de aceptar evidencia")
-    media_slots=int((template_plan or {}).get("media_slots",0) or 0);target_semantics=list((template_plan or {}).get("scrape_semantics") or []);include_images=bool(media_slots) and strategy.web;include_pdfs=strategy.pdf and bool((template_plan or {}).get("summary",{}).get("scrape_targets",1))
+    if orchestrator:
+        log(f"  SMART IDENTITY: {item.identity.brand or '-'} / {item.identity.model or item.identity.product_name or item.identity.mpn or '-'}")
+        log(f"  SMART PLAN: requeridos={len(target_semantics)} pendientes={len(smart_snapshot.missing_fields)} next={(first_external.engine if first_external else 'STOP')}")
     errors=[];accepted=[];queue=list(candidates);seen_urls={getattr(c,"url","") for c in queue};manufacturer_followup_done=False;cursor=0
 
     while cursor<len(queue) and len(accepted)<MAX_VALIDATED_SOURCES_PER_PRODUCT and budget_tracker.can_accept_source():
@@ -252,7 +262,8 @@ def scrape_item(
             log("  STOP: PAGE_FETCH_BUDGET agotado");break
         try:
             log(f"  probando: {candidate.url}")
-            if strategy.pdf and _looks_like_pdf_url(candidate.url):
+            is_pdf=bool(strategy.pdf and _looks_like_pdf_url(candidate.url))
+            if is_pdf:
                 if budget_tracker.pdfs_analyzed>=RUNTIME_RESOLUTION_BUDGET.max_pdfs_analyzed_per_product:continue
                 budget_tracker.pdfs_analyzed+=1;rec=process_pdf_document(item.identity,candidate.url,target_semantics=target_semantics)
             else:
@@ -262,10 +273,21 @@ def scrape_item(
             if not _log_source_decision(rec,log):raise ValueError("SOURCE_VALIDATION_REJECTED: NO_POLICY_APPROVED_EVIDENCE")
             if rec.identity.identifiers_conflicting:raise ValueError("SOURCE_VALIDATION_REJECTED: IDENTITY_CONFLICT legacy_identifiers")
             if accepted and not _cross_source_consistent(accepted[0],rec,candidate.url):raise ValueError("SOURCE_VALIDATION_REJECTED: CROSS_SOURCE_PRODUCT_CONFLICT")
-            if not budget_tracker.accept_source():break
-            accepted.append(rec);log(f"  fuente validada: {(rec.fetch or {}).get('source_class','?')} / {rec.identity.match_level}")
+            if orchestrator:
+                accepted.append(rec)
+                smart_snapshot=orchestrator.observe_record(rec,engine="PDF" if is_pdf else "WEB_STRUCTURED",source_url=candidate.url,source_kind=(rec.fetch or {}).get("source_class"))
+                log(f"  SMART FIELDS: verificados={len(smart_snapshot.resolved_fields)} faltantes={len(smart_snapshot.missing_fields)} conflictos={len(smart_snapshot.conflicted_fields)}")
+            else:
+                if not budget_tracker.accept_source():break
+                accepted.append(rec)
+            log(f"  fuente validada: {(rec.fetch or {}).get('source_class','?')} / {rec.identity.match_level}")
 
-            if strategy.web and not manufacturer_followup_done and budget_tracker.remaining_queries()>0:
+            if orchestrator and smart_snapshot.early_stop:
+                log(f"  SMART FINAL: STOP reason={smart_snapshot.stop_reason}")
+                break
+
+            needs_identity_refinement=not orchestrator or any(intent.engine=="IDENTITY" for intent in smart_snapshot.next_intents)
+            if strategy.web and not manufacturer_followup_done and budget_tracker.remaining_queries()>0 and needs_identity_refinement:
                 enriched=_enriched_identity(item,rec)
                 if enriched:
                     followups=search_web(enriched,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=SEARCH_STAGE_QUERY_QUOTAS["IDENTITY_REFINEMENT"]);fresh=[c for c in followups if c.url not in seen_urls]
@@ -276,24 +298,44 @@ def scrape_item(
             has_manufacturer=any((r.fetch or {}).get("source_class")=="manufacturer" for r in accepted)
             if has_manufacturer:
                 _merged,partial_resolution=_resolution_for(accepted,template_plan);remaining=list(partial_resolution.get("research_terms") or []);log(f"  cobertura actual: {len(target_semantics)-len(remaining)}/{len(target_semantics)} semánticas; pendientes={len(remaining)}")
-                if _coverage_sufficient(partial_resolution,has_manufacturer=True):log("  cobertura suficiente con fabricante validado; se detiene PASS 1");break
+                if not orchestrator and _coverage_sufficient(partial_resolution,has_manufacturer=True):log("  cobertura suficiente con fabricante validado; se detiene PASS 1");break
         except Exception as exc:
             errors.append(f"{candidate.url}: {type(exc).__name__}: {exc}");_log_source_rejection(exc,log)
 
     if not accepted and strategy.pdf:
-        if budget_tracker.can_accept_source():
-            accepted.extend(_ingest_direct_documents(item.identity,target_semantics=target_semantics,seen_urls=seen_urls,errors=errors,log=log,budget_tracker=budget_tracker,accept_limit=min(3,RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product)))
+        wants_pdf=not orchestrator or any(intent.engine=="PDF" for intent in (smart_snapshot.next_intents if smart_snapshot else ()))
+        if wants_pdf and budget_tracker.can_accept_source():
+            direct_records=_ingest_direct_documents(item.identity,target_semantics=target_semantics,seen_urls=seen_urls,errors=errors,log=log,budget_tracker=budget_tracker,accept_limit=min(3,RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product))
+            accepted.extend(direct_records)
+            if orchestrator:
+                for doc_rec in direct_records:
+                    source_url=(doc_rec.fetch or {}).get("final_url") or next(iter(doc_rec.sources or []),"PDF_DISCOVERY")
+                    smart_snapshot=orchestrator.observe_record(doc_rec,engine="PDF",source_url=source_url,source_kind=(doc_rec.fetch or {}).get("source_class"),count_source=False)
     if not accepted:
+        if orchestrator:
+            orchestrator.observe_source_outcome(first_external,"NO_RESULT",engine=first_external.engine if first_external else "UNKNOWN",reason="NO_VALIDATED_SOURCE")
         log("  SIN FUENTE VALIDADA: "+(errors[-1] if errors else "no hubo candidatos"));return None
 
-    rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan);gap_terms=list(resolution.get("research_terms") or [])
-    if gap_terms and strategy.pdf and budget_tracker.can_accept_source():
+    rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan)
+    smart_snapshot=orchestrator.plan_next() if orchestrator else None
+    gap_terms=list(smart_snapshot.missing_fields if smart_snapshot else (resolution.get("research_terms") or []))
+    wants_more=not smart_snapshot or not smart_snapshot.early_stop
+    wants_pdf=not orchestrator or any(intent.engine=="PDF" for intent in (smart_snapshot.next_intents if smart_snapshot else ()))
+    if gap_terms and strategy.pdf and wants_more and wants_pdf and budget_tracker.can_accept_source():
         remaining_sources=RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product-len(accepted)
         document_extra=_ingest_direct_documents(rec.identity,target_semantics=gap_terms,seen_urls=seen_urls,errors=errors,log=log,budget_tracker=budget_tracker,accept_limit=max(0,min(3,remaining_sources)))
         if document_extra:
-            accepted.extend(document_extra);rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan);gap_terms=list(resolution.get("research_terms") or []);log(f"  cobertura tras documentos: pendientes={len(gap_terms)}")
+            accepted.extend(document_extra)
+            if orchestrator:
+                for doc_rec in document_extra:
+                    source_url=(doc_rec.fetch or {}).get("final_url") or next(iter(doc_rec.sources or []),"PDF_DISCOVERY")
+                    smart_snapshot=orchestrator.observe_record(doc_rec,engine="PDF",source_url=source_url,source_kind=(doc_rec.fetch or {}).get("source_class"),count_source=False)
+            rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan);gap_terms=list(smart_snapshot.missing_fields if smart_snapshot else (resolution.get("research_terms") or []));log(f"  cobertura tras documentos: pendientes={len(gap_terms)}")
 
-    if strategy.web and gap_terms and budget_tracker.remaining_queries()>0 and budget_tracker.can_accept_source():
+    smart_snapshot=orchestrator.plan_next() if orchestrator else None
+    gap_terms=list(smart_snapshot.missing_fields if smart_snapshot else (resolution.get("research_terms") or []))
+    wants_web=not orchestrator or any(intent.engine in {"IDENTITY","WEB_STRUCTURED","WEB_FALLBACK"} for intent in (smart_snapshot.next_intents if smart_snapshot else ()))
+    if strategy.web and gap_terms and wants_web and (not smart_snapshot or not smart_snapshot.early_stop) and budget_tracker.remaining_queries()>0 and budget_tracker.can_accept_source():
         mode="conflictos/huecos" if resolution.get("blocked") else "huecos";log(f"  segunda pasada por {mode}: {len(gap_terms)} campos/grupos pendientes");current_sources=set(rec.sources or []);total_extra=0;max_extra=max(0,RUNTIME_RESOLUTION_BUDGET.max_sources_accepted_per_product-len(accepted))
         for start in range(0,len(gap_terms),4):
             if total_extra>=max_extra or budget_tracker.remaining_queries()<=0 or not budget_tracker.can_accept_source():break
@@ -310,17 +352,28 @@ def scrape_item(
                     if not _log_source_decision(gap_rec,log,prefix="    "):raise ValueError("SOURCE_VALIDATION_REJECTED: NO_POLICY_APPROVED_EVIDENCE")
                     if gap_rec.identity.identifiers_conflicting:raise ValueError("SOURCE_VALIDATION_REJECTED: IDENTITY_CONFLICT legacy_identifiers")
                     if accepted and not _cross_source_consistent(accepted[0],gap_rec,candidate.url):raise ValueError("SOURCE_VALIDATION_REJECTED: CROSS_SOURCE_PRODUCT_CONFLICT")
-                    if not budget_tracker.accept_source():break
-                    chunk_extra.append(gap_rec);accepted.append(gap_rec);total_extra+=1;log(f"    gap fuente validada: {(gap_rec.fetch or {}).get('source_class','?')} / {gap_rec.identity.match_level}")
+                    if orchestrator:
+                        chunk_extra.append(gap_rec);accepted.append(gap_rec);total_extra+=1
+                        smart_snapshot=orchestrator.observe_record(gap_rec,engine="WEB_STRUCTURED",source_url=candidate.url,source_kind=(gap_rec.fetch or {}).get("source_class"))
+                    else:
+                        if not budget_tracker.accept_source():break
+                        chunk_extra.append(gap_rec);accepted.append(gap_rec);total_extra+=1
+                    log(f"    gap fuente validada: {(gap_rec.fetch or {}).get('source_class','?')} / {gap_rec.identity.match_level}")
+                    if orchestrator and smart_snapshot.early_stop:break
                     if len(chunk_extra)>=2:break
                 except Exception as exc:
                     errors.append(f"gap:{candidate.url}: {type(exc).__name__}: {exc}");_log_source_rejection(exc,log,prefix="    ")
             if chunk_extra:
-                rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan);gap_terms=list(resolution.get("research_terms") or [])
+                rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan);gap_terms=list(smart_snapshot.missing_fields if orchestrator else (resolution.get("research_terms") or []))
                 if not gap_terms and not resolution.get("blocked"):log("  PASS 3 completó todos los huecos resolubles");break
+                if orchestrator and smart_snapshot.early_stop:break
 
     rec.evidence_graph=dict(rec.evidence_graph or {});rec.evidence_graph["resolution_audit"]=resolution;rec.evidence_graph["resolution_budget"]={"queries_used":budget_tracker.queries_used,"candidates_admitted":budget_tracker.candidates_admitted,"pages_fetched":budget_tracker.pages_fetched,"pdfs_analyzed":budget_tracker.pdfs_analyzed,"sources_accepted":budget_tracker.sources_accepted,"limits":RUNTIME_RESOLUTION_BUDGET.__dict__}
-    rec.missing_fields=[row["semantic"] for row in resolution.get("fields",[]) if row.get("status")=="INSUFFICIENT_EVIDENCE"]
+    if orchestrator:
+        smart_snapshot=orchestrator.plan_next();rec.evidence_graph["smart_orchestrator"]=orchestrator.audit();rec.missing_fields=list(smart_snapshot.missing_fields)
+        log(f"  SMART FINAL: verified={len(smart_snapshot.resolved_fields)}/{len(smart_snapshot.required_fields)} missing={len(smart_snapshot.missing_fields)} conflicts={len(smart_snapshot.conflicted_fields)} stop={smart_snapshot.stop_reason or 'NO'}")
+    else:
+        rec.missing_fields=[row["semantic"] for row in resolution.get("fields",[]) if row.get("status")=="INSUFFICIENT_EVIDENCE"]
     for issue in resolution.get("cross_field_issues",[]):rec.warnings.append(f"cross_field:{issue.get('code')}")
     if resolution.get("blocked"):rec.warnings.append("final_material_conflict_after_targeted_research")
     Path(out_dir).mkdir(parents=True,exist_ok=True);stem=re.sub(r"[^A-Za-z0-9._-]+","_",item.identity.mpn or item.identity.ean or item.identity.model or f"row_{item.row}");(Path(out_dir)/f"{stem}.json").write_text(rec.model_dump_json(indent=2),encoding="utf-8")

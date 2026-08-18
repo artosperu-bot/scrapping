@@ -75,7 +75,7 @@ jobs:
           $appVersion = python -c "ns={}; exec(open('src/product_intelligence/version.py', encoding='utf-8').read(), ns); print(ns['APP_VERSION'])"
           $projectVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
           if ($appVersion.Trim() -ne $projectVersion.Trim()) { throw "Version mismatch: app=$appVersion project=$projectVersion" }
-          if ($appVersion.Trim() -ne '0.10.36') { throw "Unexpected release candidate version: $appVersion" }
+          if ($appVersion.Trim() -ne '0.10.37') { throw "Unexpected release candidate version: $appVersion" }
 
       - name: Verify YouTube runtime wiring
         shell: pwsh
@@ -94,7 +94,7 @@ jobs:
       - name: Smoke final desktop shell
         shell: cmd
         run: >-
-          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert 'pdf_review' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.36'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); assert hasattr(app, 'pdf_review_open_folder_button'); assert callable(getattr(app, '_pdf_review_open_folder', None)); app.destroy(); print('FINAL_UI_PDF_E2E_SMOKE=PASS')"
+          python -c "from tkinter import ttk; from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert 'pdf_review' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.37'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); assert hasattr(app, 'pdf_review_open_folder_button'); assert callable(getattr(app, '_pdf_review_open_folder', None)); left=app.price_product_list.master; labels=[w for w in left.winfo_children() if isinstance(w, ttk.Label)]; rows=[w for w in left.winfo_children() if isinstance(w, ttk.Frame)]; assert any(w.cget('text') == 'Part Number / MPN' for w in labels); assert rows and any(isinstance(w, ttk.Button) and w.cget('text') == 'Agregar' for w in rows[0].winfo_children()); assert not app.product_rows; app.price_manual_part_number.set('QA-MPN-001'); app._add_manual_price_product(); assert app.price_product_list.get('end') == 'QA-MPN-001'; assert app._price_identity_for_list_index(0).mpn == 'QA-MPN-001'; app.destroy(); print('FINAL_UI_MANUAL_MPN_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd
@@ -178,7 +178,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ProductIntelligence-SMART-E2E-v0.10.36
+          name: ProductIntelligence-SMART-E2E-v0.10.37
           path: smart-packaged-evidence/
           if-no-files-found: warn
           retention-days: 14
@@ -196,6 +196,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ProductIntelligence-Windows-v0.10.36
+          name: ProductIntelligence-Windows-v0.10.37
           path: dist/ProductIntelligence/
           if-no-files-found: error

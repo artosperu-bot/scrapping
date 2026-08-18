@@ -51,6 +51,19 @@ _GENERIC_BRAND_WORDS = {
     "used", "refurbished", "renewed", "preowned", "pre-owned", "open-box", "openbox",
     "sensor", "sensors", "adapter", "charger", "camera", "speaker", "television",
 }
+_GENERIC_PRODUCT_TYPE_WORDS = {
+    # Generic ecommerce/category vocabulary in English and Spanish. These words
+    # can describe a product class but cannot independently prove a manufacturer.
+    "product", "producto", "productos", "item", "articulo", "artículo", "compra", "comprar",
+    "disco", "duro", "unidad", "almacenamiento", "storage", "drive", "ssd", "hdd",
+    "memoria", "memory", "ram", "laptop", "notebook", "monitor", "mouse", "teclado", "keyboard",
+    "audifono", "audífono", "audifonos", "audífonos", "headphone", "headphones", "speaker", "parlante",
+    "celular", "telefono", "teléfono", "smartphone", "tablet", "televisor", "tv", "camera", "cámara",
+    "impresora", "printer", "router", "cable", "adaptador", "adapter", "cargador", "charger",
+    "herramienta", "tool", "taladro", "drill", "juguete", "toy", "perfume", "belleza", "beauty",
+    "electrodomestico", "electrodoméstico", "appliance", "repuesto", "accesorio", "accessory",
+}
+
 _SECOND_TOKEN_DESCRIPTORS = {
     "mobile", "global", "official", "store", "shop", "series", "model", "models", "item", "items",
     "information", "details", "detail", "setup", "support", "product", "products", "specifications",
@@ -447,7 +460,7 @@ def _brand_candidate_quality(brand: str | None, raw: str) -> bool:
     compact = _compact(brand)
     if not compact or len(compact) < 2 or compact == _compact(raw):
         return False
-    generic_keys = {_compact(value) for value in (*_GENERIC_BRAND_WORDS, *_CONTEXT_STOPWORDS)}
+    generic_keys = {_compact(value) for value in (*_GENERIC_BRAND_WORDS, *_CONTEXT_STOPWORDS, *_GENERIC_PRODUCT_TYPE_WORDS)}
     if compact in generic_keys:
         return False
     if _looks_like_sibling_identifier(brand, raw):

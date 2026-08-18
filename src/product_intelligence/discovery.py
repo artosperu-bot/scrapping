@@ -206,20 +206,31 @@ def _merge_ranked(groups:list[list[SearchCandidate]],limit:int)->list[SearchCand
     return sorted(best.values(),key=lambda x:x.score,reverse=True)[:limit]
 
 
-def _budgeted_query(identity:ProductIdentity,query:str,timeout:int,tracker:SearchBudgetTracker)->list[SearchCandidate]:
+def _provider_rows_for_domain(rows:list[tuple[str,str,str]],required_domain:str|None)->list[tuple[str,str,str]]:
+    domain=str(required_domain or "").lower().removeprefix("www.").strip()
+    if not domain:return rows
+    out=[]
+    for row in rows:
+        host=(urlparse(row[0]).hostname or "").lower().removeprefix("www.")
+        if host==domain or host.endswith("."+domain):out.append(row)
+    return out
+
+
+def _budgeted_query(identity:ProductIdentity,query:str,timeout:int,tracker:SearchBudgetTracker,required_domain:str|None=None)->list[SearchCandidate]:
     if not query or not tracker.reserve_query():return []
-    rows=_provider_search(query,timeout)
+    rows=_provider_rows_for_domain(_provider_search(query,timeout),required_domain)
     ranked=_rank_candidates(rows,identity,tracker.budget.max_candidates_per_query)
     tracker.admit_candidates(len(ranked))
     return ranked
 
 
-def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=8,budget_tracker:SearchBudgetTracker|None=None)->list[str]:
+def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=8,budget_tracker:SearchBudgetTracker|None=None,required_domain:str|None=None)->list[str]:
     if not str(query or "").strip():return []
     if budget_tracker is not None:
-        ranked=_budgeted_query(identity,str(query).strip(),timeout,budget_tracker)
+        ranked=_budgeted_query(identity,str(query).strip(),timeout,budget_tracker,required_domain=required_domain)
     else:
-        ranked=_rank_candidates(_provider_search(str(query).strip(),timeout),identity,max(limit*2,limit))
+        rows=_provider_rows_for_domain(_provider_search(str(query).strip(),timeout),required_domain)
+        ranked=_rank_candidates(rows,identity,max(limit*2,limit))
     return [row.url for row in ranked[:limit]]
 
 

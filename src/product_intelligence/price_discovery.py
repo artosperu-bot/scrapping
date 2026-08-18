@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 from .discovery import search_web, search_web_query
 from .models import ProductIdentity
+from .identifiers import canonical_gtin, clean_identifier_value
 from .price_identity import score_offer_identity
 from .price_models import PriceOffer
 
@@ -355,7 +356,8 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                 "mpn": node.get("mpn") or base_evidence.get("mpn"),
                 "brand": (node.get("brand") or {}).get("name") if isinstance(node.get("brand"), dict) else node.get("brand") or base_evidence.get("brand"),
                 "model": node.get("model") or node.get("name") or base_evidence.get("model"),
-                "gtin": node.get("gtin13") or node.get("gtin12") or node.get("gtin") or node.get("sku"),
+                "gtin": canonical_gtin(node.get("gtin14") or node.get("gtin13") or node.get("gtin12") or node.get("gtin8") or node.get("gtin")),
+                "sku": clean_identifier_value(node.get("sku")),
                 "title": node.get("name") or base_evidence.get("title"),
             })
             score, match, conflicts = score_offer_identity(identity, evidence)
@@ -386,7 +388,7 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                     identity_match=match,
                     source_type="structured",
                     source_method="jsonld",
-                    sku=str(node.get("sku") or "") or None,
+                    sku=clean_identifier_value(node.get("sku")),
                     evidence=evidence,
                 ))
 

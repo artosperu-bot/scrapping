@@ -132,7 +132,7 @@ def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_do
             found.append(seed)
     for query in _queries(identity, domain):
         try:
-            urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
+            urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12, required_domain=domain)
         except Exception:
             urls = []
         for raw in urls:
@@ -145,12 +145,12 @@ def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_do
             found.append(url)
             if len(found) >= limit_per_domain:
                 break
-        if found:
+        if len(found) >= limit_per_domain:
             break
-    if not found and model:
+    if len(found) < limit_per_domain and model:
         for query in _alias_queries(identity, domain):
             try:
-                urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12)
+                urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12, required_domain=domain)
             except Exception:
                 urls = []
             for raw in urls:
@@ -163,7 +163,7 @@ def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_do
                 found.append(url)
                 if len(found) >= limit_per_domain:
                     break
-            if found:
+            if len(found) >= limit_per_domain:
                 break
     return found
 

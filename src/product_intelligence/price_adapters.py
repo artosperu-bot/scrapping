@@ -4,6 +4,7 @@ import re
 from typing import Any
 from urllib.parse import urljoin
 
+from .identifiers import clean_gtin
 from .models import ProductIdentity
 from .price_identity import score_offer_identity
 from .price_models import PriceOffer
@@ -44,7 +45,9 @@ def _identity_evidence_from_ml(row: dict) -> dict:
         "mpn": attrs.get("MPN") or attrs.get("PART_NUMBER") or (modelish if modelish and str(modelish).replace("-", "").isalnum() else None),
         "brand": attrs.get("BRAND"),
         "model": attrs.get("MODEL") or row.get("title"),
-        "gtin": attrs.get("GTIN") or attrs.get("EAN"),
+        "gtin": clean_gtin(attrs.get("GTIN") or attrs.get("EAN") or attrs.get("UPC")),
+        "ean": clean_gtin(attrs.get("EAN")),
+        "upc": clean_gtin(attrs.get("UPC")),
         "title": row.get("title"),
     }
 
@@ -62,6 +65,10 @@ def parse_mercadolibre_payload(payload: dict, identity: ProductIdentity) -> list
         if score < 0.70 or conflicts:
             continue
         seller = row.get("seller") if isinstance(row.get("seller"), dict) else {}
+        seller_id = seller.get("id") or row.get("seller_id")
+        listing_id = str(row.get("id") or "") or None
+        catalog_id = str(row.get("catalog_product_id") or "") or None
+        direct_url = str(row.get("permalink") or "")
         out.append(PriceOffer(
             part_number=identity.mpn,
             brand=identity.brand,
@@ -73,12 +80,16 @@ def parse_mercadolibre_payload(payload: dict, identity: ProductIdentity) -> list
             currency=str(row.get("currency_id") or "PEN"),
             stock=_int(row.get("available_quantity")),
             condition=row.get("condition"),
-            url=str(row.get("permalink") or ""),
+            url=direct_url,
             confidence=score,
             identity_match=match,
             source_type="api",
             source_method="mercadolibre_search",
-            publication_id=str(row.get("id") or "") or None,
+            publication_id=listing_id,
+            seller_id=str(seller_id) if seller_id is not None else None,
+            marketplace_product_id=catalog_id,
+            marketplace_listing_id=listing_id,
+            direct_product_url=direct_url,
             evidence=evidence,
         ))
     return out
@@ -119,6 +130,13 @@ def _vtex_item_identity_evidence(product_evidence: dict, item: dict, identity: P
         candidates.append(reference)
     if expected and any(expected in _norm(candidate) for candidate in candidates if candidate):
         evidence["mpn"] = identity.mpn
+    verified = clean_gtin(item.get("ean"))
+    if verified:
+        evidence["gtin"] = verified
+        if len(verified) == 12:
+            evidence["upc"] = verified
+        elif len(verified) == 13:
+            evidence["ean"] = verified
     return evidence
 
 
@@ -167,6 +185,10 @@ def parse_vtex_payload(payload: list[dict] | dict, identity: ProductIdentity, *,
                     source_method="vtex_catalog",
                     publication_id=str(product.get("productId") or "") or None,
                     sku=sku,
+                    seller_id=str(seller.get("sellerId") or "") or None,
+                    seller_sku=sku,
+                    marketplace_product_id=str(product.get("productId") or "") or None,
+                    direct_product_url=product_url,
                     evidence=evidence,
                 ))
     return out
@@ -205,9 +227,12 @@ def parse_shopify_product_payload(
             continue
         sku = str(variant.get("sku") or "").strip()
         barcode = str(variant.get("barcode") or "").strip()
+        verified_barcode = clean_gtin(barcode)
         evidence = {
             "mpn": identity.mpn if expected_mpn and _norm(sku) == expected_mpn else None,
-            "gtin": barcode or None,
+            "gtin": verified_barcode,
+            "upc": verified_barcode if verified_barcode and len(verified_barcode) == 12 else None,
+            "ean": verified_barcode if verified_barcode and len(verified_barcode) == 13 else None,
             "brand": vendor,
             "model": title,
             "title": title,
@@ -237,6 +262,9 @@ def parse_shopify_product_payload(
             source_method="shopify_product_json",
             publication_id=str(payload.get("id") or "") or None,
             sku=sku or (str(variant.get("id") or "") or None),
+            seller_sku=sku or None,
+            internal_product_id=str(payload.get("id") or "") or None,
+            direct_product_url=source_url,
             evidence=evidence,
         ))
     return out

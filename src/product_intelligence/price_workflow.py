@@ -7,7 +7,7 @@ from urllib.parse import quote_plus, urlparse
 import requests
 
 from .identity_bootstrap import bootstrap_identity
-from .mercadolibre_oauth import build_mercadolibre_api_client
+from .mercadolibre_oauth import MercadoLibreAuthError, build_mercadolibre_api_client
 from .models import ProductIdentity
 from .price_adapters import parse_mercadolibre_payload, parse_shopify_product_payload, parse_vtex_payload
 from .price_channel_registry import build_channel_coverage, target_spec_for_url
@@ -33,6 +33,13 @@ PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
 
 STRICT_MARKETPLACE_CHANNELS = {"falabella","ripley","plazavea","oechsle","mercadolibre","sodimac","jblperu"}
 BROWSER_PRICE_CHANNELS = {"Ripley", "MercadoLibre", "Mercado Libre", "JBL Perú"}
+
+
+class PriceFetchBlocked(RuntimeError):
+    def __init__(self, status_code: int, url: str):
+        self.status_code = int(status_code)
+        self.url = str(url)
+        super().__init__(f"HTTP {self.status_code}")
 
 
 def _query(identity: ProductIdentity) -> str:
@@ -180,6 +187,11 @@ def _merge_sources(*groups: list[str], limit: int) -> list[str]:
 def _parse_page_with_dynamic_retry(url: str, identity: ProductIdentity, channel: str, emit) -> tuple[str, list[PriceOffer]]:
     fetched = fetch_page(url, timeout=25, browser_fallback=True, activate_lazy_media=False)
     final_url = str(getattr(fetched, "final_url", None) or url)
+    status_code = int(getattr(fetched, "status_code", 0) or 0)
+    if status_code in {401, 403, 429}:
+        raise PriceFetchBlocked(status_code, final_url)
+    if status_code >= 400:
+        raise requests.HTTPError(f"HTTP {status_code}")
     html = str(getattr(fetched, "html", "") or "")
     page_rows = extract_page_offers(html, final_url, identity, channel=channel)
     if not page_rows and channel in BROWSER_PRICE_CHANNELS and getattr(fetched, "method", "") != "playwright":
@@ -280,6 +292,10 @@ def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit, cap
                     success=any(_is_trusted_final_offer(row) for row in augmented),
                 )
             emit("page", url=url, channel=channel, status="parsed", offers=len(page_rows))
+        except PriceFetchBlocked as exc:
+            emit("page", url=url, channel=channel, status="blocked", http_status=exc.status_code, error=str(exc))
+        except requests.Timeout as exc:
+            emit("page", url=url, channel=channel, status="timeout", error=f"{type(exc).__name__}: {exc}")
         except Exception as exc:
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
     return rows
@@ -315,6 +331,10 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
                     trace.record("PARSER_OK", channel=channel, url=url, offers=int(payload.get("offers") or 0))
                 else:
                     trace.record("PARSER_ZERO_OFFERS", channel=channel, url=url)
+            elif status == "blocked":
+                trace.record("FETCH_BLOCKED", channel=channel, url=url, http_status=payload.get("http_status"), error=payload.get("error"))
+            elif status == "timeout":
+                trace.record("FETCH_TIMEOUT", channel=channel, url=url, error=payload.get("error"))
             elif status in {"error", "browser_error"}:
                 trace.record("FETCH_FAILED", channel=channel, url=url, error=payload.get("error"))
         if on_event:
@@ -352,6 +372,9 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         else:
             trace.record("QUERY_EXECUTED_NO_RESULT", channel="Mercado Libre", query=_query(identity), method="mercadolibre_mpe")
         emit("source", channel="MercadoLibre", status="ok", offers=len(ml), method="mercadolibre_mpe")
+    except MercadoLibreAuthError as exc:
+        trace.record("ML_API_AUTH_FAILED", channel="Mercado Libre", code=exc.code, http_status=exc.http_status)
+        emit("source", channel="MercadoLibre", status="auth_failed", error_code=exc.code)
     except Exception as exc:
         emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
 

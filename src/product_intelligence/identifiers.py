@@ -42,6 +42,14 @@ def is_valid_gtin(value: str | None) -> bool:
     return validate_gtin(value).valid
 
 
+def clean_gtin(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.casefold() in {"null", "none", "n/a", "na", "unknown", "-"}:
+        return None
+    checked = validate_gtin(text)
+    return checked.value if checked.valid else None
+
+
 def _adjacent_transposition(a: str, b: str) -> bool:
     if len(a) != len(b):
         return False

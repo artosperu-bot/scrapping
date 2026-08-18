@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from .discovery import search_web, search_web_query
+from .identifiers import clean_gtin
 from .models import ProductIdentity
 from .price_identity import score_offer_identity
 from .price_models import PriceOffer
@@ -218,6 +219,29 @@ def _money(value):
     return None
 
 
+def _first_verified_gtin(*values) -> str | None:
+    for value in values:
+        cleaned = clean_gtin(value)
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _html_selling_price(text: str) -> float | None:
+    pattern = re.compile(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,7}(?:[.,][0-9]{1,2})?)", re.I)
+    bad_before = ("envío", "envio", "delivery", "shipping", "cuota", "cuotas", "mensual", "mes", "unidad", "unitario", "cupón", "cupon")
+    bad_after = ("/kg", "por kg", "por kilo", "/unidad", "por unidad")
+    for match in pattern.finditer(text or ""):
+        before = (text[max(0, match.start() - 20):match.start()] or "").casefold()
+        after = (text[match.end():match.end() + 22] or "").casefold()
+        if any(marker in before for marker in bad_before) or any(marker in after for marker in bad_after):
+            continue
+        value = _money(match.group(1))
+        if value and value > 0:
+            return value
+    return None
+
+
 def _seller_from_text(text: str) -> str | None:
     patterns = [
         r"Vendido\s+por\s*:\s*([A-Za-zÁÉÍÓÚÑáéíóúñ0-9._& -]{2,120}?)(?=\s+(?:Normal|Internet|Seller Info|Producto publicado|Realiza|Cumple|Ofrece|No existe|S/|Código|Cód\.|$))",
@@ -356,7 +380,9 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                 "mpn": node.get("mpn") or base_evidence.get("mpn"),
                 "brand": (node.get("brand") or {}).get("name") if isinstance(node.get("brand"), dict) else node.get("brand") or base_evidence.get("brand"),
                 "model": node.get("model") or node.get("name") or base_evidence.get("model"),
-                "gtin": node.get("gtin13") or node.get("gtin12") or node.get("gtin14") or node.get("gtin8") or node.get("gtin"),
+                "gtin": _first_verified_gtin(node.get("gtin13"), node.get("gtin12"), node.get("gtin14"), node.get("gtin8"), node.get("gtin")),
+                "upc": clean_gtin(node.get("gtin12")),
+                "ean": clean_gtin(node.get("gtin13")),
                 "title": node.get("name") or base_evidence.get("title"),
             })
             score, match, conflicts = score_offer_identity(identity, evidence)
@@ -388,6 +414,8 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                     source_type="structured",
                     source_method="jsonld",
                     sku=str(node.get("sku") or "") or None,
+                    seller_sku=str(node.get("sku") or "") or None,
+                    direct_product_url=urljoin(url, offer_url),
                     evidence=evidence,
                 ))
 
@@ -412,8 +440,7 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
     if tag and tag.get("content"):
         meta_currency = str(tag.get("content"))
     if not meta_price:
-        match_price = re.search(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,6}(?:[.,][0-9]{1,2})?)", page_text, re.I)
-        meta_price = _money(match_price.group(1)) if match_price else None
+        meta_price = _html_selling_price(page_text)
     if meta_price and meta_price > 0:
         return [PriceOffer(
             part_number=identity.mpn,

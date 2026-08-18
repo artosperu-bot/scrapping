@@ -47,6 +47,23 @@ def _strong_identifiers(identity: ProductIdentity) -> list[str]:
     return out
 
 
+def _identifier_aliases(value: str | None) -> list[str]:
+    original = str(value or "").strip()
+    if not original:
+        return []
+    parts = [part for part in re.split(r"[^A-Za-z0-9]+", original) if part]
+    aliases = [original]
+    if len(parts) >= 2:
+        aliases.extend(["".join(parts), "-".join(parts), " ".join(parts)])
+    out, seen = [], set()
+    for alias in aliases:
+        key = alias.casefold()
+        if alias and key not in seen:
+            seen.add(key)
+            out.append(alias)
+    return out
+
+
 def _strong(identity: ProductIdentity) -> str:
     ids = _strong_identifiers(identity)
     return ids[0] if ids else str(identity.model or identity.product_name or "").strip()
@@ -145,9 +162,9 @@ def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_do
             found.append(url)
             if len(found) >= limit_per_domain:
                 break
-        if found:
+        if len(found) >= limit_per_domain:
             break
-    if not found and model:
+    if len(found) < limit_per_domain and model:
         for query in _alias_queries(identity, domain):
             try:
                 urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12)
@@ -163,7 +180,7 @@ def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_do
                 found.append(url)
                 if len(found) >= limit_per_domain:
                     break
-            if found:
+            if len(found) >= limit_per_domain:
                 break
     return found
 
@@ -201,9 +218,10 @@ def _general_retail_queries(identity: ProductIdentity) -> list[str]:
     brand = str(identity.brand or "").strip()
     q = []
     for strong in ids:
-        q += [f'"{strong}" precio Perú', f'"{strong}" "S/" Perú', f'"{strong}" tienda Perú', f'"{strong}" comprar Perú']
-        if model: q += [f'"{strong}" "{model}" Perú', f'"{model}" "{strong}" {brand} Perú'.strip()]
-        q += [f'"{strong}" site:{domain}' for domain in PERU_RETAIL_HINT_DOMAINS]
+        for alias in _identifier_aliases(strong):
+            q += [f'"{alias}" precio Perú', f'"{alias}" "S/" Perú', f'"{alias}" tienda Perú', f'"{alias}" comprar Perú']
+            if model: q += [f'"{alias}" "{model}" Perú', f'"{model}" "{alias}" {brand} Perú'.strip()]
+            q += [f'"{alias}" site:{domain}' for domain in PERU_RETAIL_HINT_DOMAINS]
     return list(dict.fromkeys(x for x in q if x.strip()))
 
 

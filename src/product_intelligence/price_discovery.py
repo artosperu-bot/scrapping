@@ -355,7 +355,7 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                 "mpn": node.get("mpn") or base_evidence.get("mpn"),
                 "brand": (node.get("brand") or {}).get("name") if isinstance(node.get("brand"), dict) else node.get("brand") or base_evidence.get("brand"),
                 "model": node.get("model") or node.get("name") or base_evidence.get("model"),
-                "gtin": node.get("gtin13") or node.get("gtin12") or node.get("gtin") or node.get("sku"),
+                "gtin": node.get("gtin13") or node.get("gtin12") or node.get("gtin14") or node.get("gtin8") or node.get("gtin"),
                 "title": node.get("name") or base_evidence.get("title"),
             })
             score, match, conflicts = score_offer_identity(identity, evidence)

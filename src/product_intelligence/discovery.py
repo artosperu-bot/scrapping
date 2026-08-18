@@ -206,9 +206,25 @@ def _merge_ranked(groups:list[list[SearchCandidate]],limit:int)->list[SearchCand
     return sorted(best.values(),key=lambda x:x.score,reverse=True)[:limit]
 
 
+def _query_domain_constraint(query:str)->str|None:
+    match=re.search(r"\bsite:([^\s\"\'/]+)",str(query or ""),re.I)
+    if not match:return None
+    return match.group(1).lower().removeprefix("www.")
+
+
+def _filter_query_domain(rows:list[tuple[str,str,str]],query:str)->list[tuple[str,str,str]]:
+    domain=_query_domain_constraint(query)
+    if not domain:return rows
+    out=[]
+    for row in rows:
+        host=(urlparse(row[0]).hostname or "").lower().removeprefix("www.")
+        if host==domain or host.endswith("."+domain):out.append(row)
+    return out
+
+
 def _budgeted_query(identity:ProductIdentity,query:str,timeout:int,tracker:SearchBudgetTracker)->list[SearchCandidate]:
     if not query or not tracker.reserve_query():return []
-    rows=_provider_search(query,timeout)
+    rows=_filter_query_domain(_provider_search(query,timeout),query)
     ranked=_rank_candidates(rows,identity,tracker.budget.max_candidates_per_query)
     tracker.admit_candidates(len(ranked))
     return ranked
@@ -219,7 +235,8 @@ def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=
     if budget_tracker is not None:
         ranked=_budgeted_query(identity,str(query).strip(),timeout,budget_tracker)
     else:
-        ranked=_rank_candidates(_provider_search(str(query).strip(),timeout),identity,max(limit*2,limit))
+        raw=_filter_query_domain(_provider_search(str(query).strip(),timeout),str(query).strip())
+        ranked=_rank_candidates(raw,identity,max(limit*2,limit))
     return [row.url for row in ranked[:limit]]
 
 

@@ -50,6 +50,12 @@ _GENERIC_BRAND_WORDS = {
     "multifunctional", "multi-function", "multifunction", "all-in-one", "allinone", "a4",
     "used", "refurbished", "renewed", "preowned", "pre-owned", "open-box", "openbox",
     "sensor", "sensors", "adapter", "charger", "camera", "speaker", "television",
+    "disco", "duro", "unidad", "estado", "solido", "sólido", "almacenamiento", "ssd", "hdd",
+    "memoria", "memory", "celular", "telefono", "teléfono", "smartphone", "tablet", "monitor",
+    "laptop", "notebook", "computer", "computadora", "mouse", "keyboard", "teclado", "audifono",
+    "audífono", "auricular", "headphone", "headphones", "parlante", "router", "printer", "impresora",
+    "cable", "cargador", "charger", "televisor", "tv", "herramienta", "tool", "taladro", "drill",
+    "perfume", "juguete", "toy", "pañal", "panal", "compra", "comprar", "venta", "precio", "producto",
 }
 _SECOND_TOKEN_DESCRIPTORS = {
     "mobile", "global", "official", "store", "shop", "series", "model", "models", "item", "items",

@@ -108,7 +108,7 @@ def build_channel_coverage(offers: list[PriceOffer]) -> dict:
         channels.append({
             "channel": spec.label,
             "aliases": list(spec.aliases),
-            "status": "FOUND" if rows else "NO_HAY",
+            "status": "FOUND" if rows else "NOT_SEARCHED",
             "offers": [_offer_row(row, channel=spec.label) for row in rows],
         })
 

@@ -18,6 +18,7 @@ from .models import ProductIdentity, ProductRecord
 from .normalize import key_norm
 from .pdf_search_trace import PdfSearchTrace, format_trace_lines
 from .pipeline import ProductPipeline
+from .product_classification import classify_product
 from .product_evidence_orchestrator import ProductEvidenceOrchestrator
 from .record_builder import build_record_strict
 from .resolution_engine import analyze_resolution
@@ -240,7 +241,8 @@ def scrape_item(
     strategy = (source_strategy or SourceStrategy()).normalized()
     pipe=ProductPipeline()
     media_slots=int((template_plan or {}).get("media_slots",0) or 0);target_semantics=list((template_plan or {}).get("scrape_semantics") or []);include_images=bool(media_slots) and strategy.web;include_pdfs=strategy.pdf and bool((template_plan or {}).get("summary",{}).get("scrape_targets",1))
-    orchestrator=ProductEvidenceOrchestrator(item.identity,target_semantics,budget=RUNTIME_RESOLUTION_BUDGET,source_strategy=strategy) if target_semantics else None
+    classification=classify_product(item.identity,required_fields=target_semantics) if target_semantics else None
+    orchestrator=ProductEvidenceOrchestrator(item.identity,target_semantics,category=classification.category if classification else None,budget=RUNTIME_RESOLUTION_BUDGET,source_strategy=strategy) if target_semantics else None
     budget_tracker=orchestrator.budget_tracker if orchestrator else SearchBudgetTracker(RUNTIME_RESOLUTION_BUDGET)
     manual_urls=list(dict.fromkeys([u for u in ((item.source_urls or [])+([item.source_url] if item.source_url else [])) if u]));eligible_manual_urls=[u for u in manual_urls if strategy.web or (strategy.pdf and _looks_like_pdf_url(u))]
     manual_candidates=[type("Candidate",(),{"url":u,"likely_official":False,"score":2.0,"ai_assisted":False,"manual_source":True})() for u in eligible_manual_urls]
@@ -254,7 +256,7 @@ def scrape_item(
     if manual_urls:log(f"  fuentes manuales: {len(manual_urls)}; elegibles por estrategia={len(eligible_manual_urls)}; se validan antes de aceptar evidencia")
     if orchestrator:
         log(f"  SMART IDENTITY: {item.identity.brand or '-'} / {item.identity.model or item.identity.product_name or item.identity.mpn or '-'}")
-        log(f"  SMART PLAN: requeridos={len(target_semantics)} pendientes={len(smart_snapshot.missing_fields)} next={(first_external.engine if first_external else 'STOP')}")
+        log(f"  SMART PLAN: requeridos={len(target_semantics)} pendientes={len(smart_snapshot.missing_fields)} next={(first_external.engine if first_external else 'STOP')} category={orchestrator.category}")
     errors=[];accepted=[];queue=list(candidates);seen_urls={getattr(c,"url","") for c in queue};manufacturer_followup_done=False;cursor=0
 
     while cursor<len(queue) and len(accepted)<MAX_VALIDATED_SOURCES_PER_PRODUCT and budget_tracker.can_accept_source():
@@ -353,7 +355,7 @@ def scrape_item(
         for start in range(0,len(gap_terms),4):
             if total_extra>=max_extra or budget_tracker.remaining_queries()<=0 or not budget_tracker.can_accept_source():break
             chunk=gap_terms[start:start+4];log(f"    buscando específicamente: {', '.join(chunk)}")
-            raw_chunk_candidates=search_web_for_fields(rec.identity,chunk,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=min(SEARCH_STAGE_QUERY_QUOTAS["MISSING_FIELDS"],budget_tracker.remaining_queries()))
+            raw_chunk_candidates=search_web_for_fields(rec.identity,chunk,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=min(SEARCH_STAGE_QUERY_QUOTAS["MISSING_FIELDS"],budget_tracker.remaining_queries()),source_kind=next_web_intent.source_kind if next_web_intent else None,category=orchestrator.category if orchestrator else None)
             if orchestrator:log(f"  SMART QUERY: used={budget_tracker.queries_used} limit={RUNTIME_RESOLUTION_BUDGET.max_search_queries_per_product} engine={next_web_intent.engine if next_web_intent else 'WEB_STRUCTURED'}")
             chunk_candidates=_prioritize(raw_chunk_candidates);chunk_extra=[]
             for candidate in chunk_candidates:

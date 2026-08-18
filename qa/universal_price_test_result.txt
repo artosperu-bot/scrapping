@@ -1,62 +1,18 @@
-commit=d46a2196d7a65121717867d17004e003a0b57c38
-pytest_exit_code=1
-........FF                                                               [100%]
-=================================== FAILURES ===================================
-_ test_price_workflow_resolves_partial_identity_once_before_all_price_sources __
+commit=051deec0a9933967b19147d663770ea740aa0610
+pytest_exit_code=2
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7ff05196ef60>
-tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_price_workflow_resolves_p0')
-
-    def test_price_workflow_resolves_partial_identity_once_before_all_price_sources(monkeypatch, tmp_path):
-        input_identity = ProductIdentity(mpn="ZX-4109")
-        resolved_identity = ProductIdentity(brand="Acme", model="Widget 4109", mpn="ZX-4109")
-        bootstrap_calls: list[ProductIdentity] = []
-        identities_seen: list[ProductIdentity] = []
-        events: list[dict] = []
-    
-        def fake_bootstrap(identity, **_kwargs):
-            bootstrap_calls.append(identity)
-            return SimpleNamespace(
-                status="RESOLVED",
-                identity=resolved_identity,
-                confidence=0.98,
-                reason="TEST_AUTHORITY",
-                official_domain_hint="acme.example",
-            )
-    
-        def fake_vtex(_url, identity, _channel, timeout=12):
-            identities_seen.append(identity)
-            return []
-    
-        def fake_ml(identity, timeout=15):
-            identities_seen.append(identity)
-            return []
-    
->       monkeypatch.setattr(price_workflow, "bootstrap_identity", fake_bootstrap)
-E       AttributeError: <module 'product_intelligence.price_workflow' from '/home/runner/work/scrapping/scrapping/src/product_intelligence/price_workflow.py'> has no attribute 'bootstrap_identity'
-
-tests/test_price_trace_identity_integration.py:91: AttributeError
-____ test_unresolved_identity_continues_without_destroying_original_signal _____
-
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7ff05196e870>
-
-    def test_unresolved_identity_continues_without_destroying_original_signal(monkeypatch):
-        original = ProductIdentity(mpn="ZX-4109")
->       monkeypatch.setattr(
-            price_workflow,
-            "bootstrap_identity",
-            lambda *_a, **_k: SimpleNamespace(
-                status="IDENTITY_UNRESOLVED",
-                identity=ProductIdentity(mpn="ZX-4109"),
-                confidence=0.0,
-                reason="INSUFFICIENT_EVIDENCE",
-                official_domain_hint=None,
-            ),
-        )
-E       AttributeError: <module 'product_intelligence.price_workflow' from '/home/runner/work/scrapping/scrapping/src/product_intelligence/price_workflow.py'> has no attribute 'bootstrap_identity'
-
-tests/test_price_trace_identity_integration.py:116: AttributeError
+==================================== ERRORS ====================================
+___________ ERROR collecting tests/test_price_query_capabilities.py ____________
+ImportError while importing test module '/home/runner/work/scrapping/scrapping/tests/test_price_query_capabilities.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_price_query_capabilities.py:8: in <module>
+    from product_intelligence.price_source_capabilities import SourceCapabilityRegistry, detect_platform
+E   ModuleNotFoundError: No module named 'product_intelligence.price_source_capabilities'
 =========================== short test summary info ============================
-FAILED tests/test_price_trace_identity_integration.py::test_price_workflow_resolves_partial_identity_once_before_all_price_sources - AttributeError: <module 'product_intelligence.price_workflow' from '/home/runner/work/scrapping/scrapping/src/product_intelligence/price_workflow.py'> has no attribute 'bootstrap_identity'
-FAILED tests/test_price_trace_identity_integration.py::test_unresolved_identity_continues_without_destroying_original_signal - AttributeError: <module 'product_intelligence.price_workflow' from '/home/runner/work/scrapping/scrapping/src/product_intelligence/price_workflow.py'> has no attribute 'bootstrap_identity'
-2 failed, 8 passed in 1.67s
+ERROR tests/test_price_query_capabilities.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.66s

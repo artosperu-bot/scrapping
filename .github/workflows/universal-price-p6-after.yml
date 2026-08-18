@@ -7,6 +7,17 @@ on:
     paths:
       - 'scripts/qa_price_after_sa400s37_960g.py'
       - '.github/workflows/universal-price-p6-after.yml'
+  pull_request:
+    branches:
+      - release/windows
+    paths:
+      - 'src/product_intelligence/price_*.py'
+      - 'src/product_intelligence/discovery.py'
+      - 'src/product_intelligence/identity_bootstrap.py'
+      - 'src/product_intelligence/identifiers.py'
+      - 'src/product_intelligence/mercadolibre_oauth.py'
+      - 'scripts/qa_price_after_sa400s37_960g.py'
+      - '.github/workflows/universal-price-p6-after.yml'
 
 permissions:
   contents: write
@@ -89,4 +100,3 @@ jobs:
           path: qa_price_after_output/
           if-no-files-found: error
           retention-days: 30
-# retrigger: 2

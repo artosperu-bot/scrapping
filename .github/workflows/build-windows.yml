@@ -62,7 +62,7 @@ jobs:
           $appVersion = python -c "ns={}; exec(open('src/product_intelligence/version.py', encoding='utf-8').read(), ns); print(ns['APP_VERSION'])"
           $projectVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
           if ($appVersion.Trim() -ne $projectVersion.Trim()) { throw "Version mismatch: app=$appVersion project=$projectVersion" }
-          if ($appVersion.Trim() -ne '0.10.33') { throw "Unexpected release candidate version: $appVersion" }
+          if ($appVersion.Trim() -ne '0.10.34') { throw "Unexpected release candidate version: $appVersion" }
 
       - name: Run regression tests
         shell: cmd
@@ -76,7 +76,7 @@ jobs:
       - name: Smoke final desktop shell
         shell: cmd
         run: >-
-          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert 'pdf_review' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.33'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); assert hasattr(app, 'pdf_review_open_folder_button'); assert callable(getattr(app, '_pdf_review_open_folder', None)); app.destroy(); print('FINAL_UI_PDF_E2E_SMOKE=PASS')"
+          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert 'pdf_review' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.34'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); assert hasattr(app, 'pdf_review_open_folder_button'); assert callable(getattr(app, '_pdf_review_open_folder', None)); app.destroy(); print('FINAL_UI_PDF_E2E_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd
@@ -104,6 +104,61 @@ jobs:
           Write-Host "completed.gif=$($completed.FullName)"
           Write-Host "ffmpeg=$($ffmpegFiles.FullName -join ', ')"
 
+      - name: Run packaged SMART E2E smoke
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $PWD 'smart-packaged-evidence'
+          if (Test-Path $evidence) { Remove-Item $evidence -Recurse -Force }
+          New-Item -ItemType Directory -Path $evidence | Out-Null
+          $exe = (Resolve-Path 'dist/ProductIntelligence/ProductIntelligence.exe').Path
+          $process = Start-Process -FilePath $exe -ArgumentList @('--smart-e2e-smoke', '--output-dir', $evidence) -WorkingDirectory $PWD -Wait -PassThru
+          $exitCode = $process.ExitCode
+          $report = Join-Path $evidence 'smart-packaged-smoke.json'
+          if (-not (Test-Path $report)) { throw 'Packaged SMART smoke did not create smart-packaged-smoke.json' }
+          $env:SMART_EVIDENCE_DIR = $evidence
+          @'
+          import json
+          import os
+          from pathlib import Path
+          from openpyxl import load_workbook
+
+          root = Path(os.environ['SMART_EVIDENCE_DIR'])
+          report = json.loads((root / 'smart-packaged-smoke.json').read_text(encoding='utf-8'))
+          assert report['entrypoint'] == 'SMART_PACKAGED_E2E'
+          assert report['status'] == 'PASS', report
+          assert len(report['scenarios']) >= 3
+
+          exact = next(row for row in report['scenarios'] if row['scenario'] == 'EXACT_SKU_WEB_TO_EXCEL')
+          assert exact['status'] == 'PASS', exact
+          exact_xlsx = Path(exact['output_excel'])
+          assert exact_xlsx.is_file(), exact_xlsx
+          assert load_workbook(exact_xlsx, data_only=False)['Products']['B2'].value == 'Black'
+
+          fallback = next(row for row in report['scenarios'] if row['scenario'] == 'PDF_ZERO_WEB_FALLBACK')
+          assert fallback['status'] == 'PASS', fallback
+          assert fallback['pdf_documents_found'] == 0
+          assert fallback['broad_web_calls'] == 0
+          assert fallback['targeted_web_calls'] == 1
+          assert fallback['resolved_fields'] == ['driver_size']
+
+          sibling = next(row for row in report['scenarios'] if row['scenario'] == 'SIBLING_WRITE_BARRIER')
+          assert sibling['status'] == 'PASS', sibling
+          sibling_xlsx = Path(sibling['output_excel'])
+          assert sibling_xlsx.is_file(), sibling_xlsx
+          assert load_workbook(sibling_xlsx, data_only=False)['Products']['B2'].value is None
+          print('PACKAGED_SMART_E2E=PASS')
+          '@ | python -
+          if ($exitCode -ne 0) { throw "ProductIntelligence.exe SMART smoke failed with exit code $exitCode" }
+
+      - name: Upload packaged SMART E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProductIntelligence-SMART-E2E-v0.10.34
+          path: smart-packaged-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Verify standalone updater bootstrap
         shell: pwsh
         run: |
@@ -117,6 +172,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ProductIntelligence-Windows-v0.10.33
+          name: ProductIntelligence-Windows-v0.10.34
           path: dist/ProductIntelligence/
           if-no-files-found: error

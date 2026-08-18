@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
+from .document_canonicalization import DocumentVariant, group_document_variants
 from .models import ProductIdentity
 from .pdf_pipeline import (
     ResolvedPdfIdentity,
@@ -61,6 +62,53 @@ def _merge_rows(primary, secondary, limit: int):
         if len(merged) >= max(1, int(limit)):
             break
     return merged
+
+
+def _canonical_coverage(resolved: ResolvedPdfIdentity, validated: list[ValidatedPdfCandidate]):
+    product_key = str(
+        resolved.identity.model
+        or resolved.identity.product_name
+        or resolved.identity.mpn
+        or resolved.identity.ean
+        or resolved.identity.upc
+        or resolved.identity.gtin
+        or "product"
+    )
+    variants = []
+    for item in validated:
+        inspection = item.inspection
+        relationship = str(getattr(inspection, "identity_relationship", "") or "").upper()
+        if not relationship:
+            # Validated review candidates reached this point only after the
+            # identity/provenance gate. Legacy inspections predate relationship
+            # metadata, so treat that accepted model binding as EXACT_MODEL for
+            # coverage grouping, never as SKU-specific proof.
+            relationship = "EXACT_MODEL" if (inspection.identity_accepted or inspection.identity_provenance_bound) else "UNKNOWN"
+        variants.append(
+            DocumentVariant(
+                url=str(inspection.final_url or item.candidate.url),
+                title=str(item.candidate.title or Path(urlparse(str(inspection.final_url or item.candidate.url)).path).name),
+                product_key=product_key,
+                document_type=str(item.candidate.document_type or "UNKNOWN"),
+                relationship=relationship,
+            )
+        )
+
+    groups = group_document_variants(variants)
+    canonical_documents = tuple(
+        {
+            "canonical_key": group.canonical_key,
+            "canonical_title": group.canonical_title,
+            "document_type": group.document_type,
+            "preferred_url": group.preferred.url,
+            "preferred_language": group.preferred.language,
+            "variant_count": group.language_variant_count,
+            "languages": tuple(item.language for item in group.variants),
+            "urls": tuple(item.url for item in group.variants),
+        }
+        for group in groups
+    )
+    return groups, canonical_documents
 
 
 def discover_validated_review_pdfs_live(
@@ -246,6 +294,8 @@ def discover_validated_review_pdfs_live(
             if log:
                 log(f"[AUTHORITY] learned official_domain={learned_host} from validated PDF")
 
+    canonical_groups, canonical_documents = _canonical_coverage(resolved, validated)
+    language_variant_count = sum(group.language_variant_count for group in canonical_groups)
     result = ReviewDiscoveryResult(
         resolved=resolved,
         candidates=tuple(validated),
@@ -254,6 +304,24 @@ def discover_validated_review_pdfs_live(
         validated_count=len(validated),
         rejected_count=rejected,
         duplicate_count=duplicates,
+        unique_document_count=len(canonical_groups),
+        language_variant_count=language_variant_count,
+        canonical_documents=canonical_documents,
     )
-    emit("done", stage="DONE", discovered=result.discovered_count, downloaded=result.downloaded_count, validated=result.validated_count, rejected=result.rejected_count, duplicates=result.duplicate_count)
+    emit(
+        "done",
+        stage="DONE",
+        discovered=result.discovered_count,
+        downloaded=result.downloaded_count,
+        validated=result.validated_count,
+        unique_documents=result.unique_document_count,
+        language_variants=result.language_variant_count,
+        rejected=result.rejected_count,
+        duplicates=result.duplicate_count,
+    )
+    if log:
+        log(
+            f"[CANONICAL COVERAGE] unique_documents={result.unique_document_count} "
+            f"language_variants={result.language_variant_count} validated_pdfs={result.validated_count}"
+        )
     return result

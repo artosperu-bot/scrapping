@@ -6,7 +6,8 @@ from urllib.parse import urlparse
 from .models import ProductIdentity, ProductRecord, Evidence
 from .identity import compare_identity
 from .html_extract import extract_page, identity_from_page, table_evidence, structured_evidence
-from .pdf_extract import extract_pdf
+from .pdf_extract import download_bytes, extract_pdf, extract_pdf_bytes
+from .pdf_document_preflight import extract_verified_pdf_bytes
 from .record_builder import build_record_strict
 from .source_policy import classify_source
 from .web_fetch import fetch_page, fetch_browser
@@ -223,25 +224,53 @@ class ProductPipeline:
         followed_document_pages = 0
         followed_pdfs = 0
 
-        def consume_pdf(pdf_url: str):
+        def _bind_pdf_evidence(items, match, confidence_cap: float) -> list[Evidence]:
+            bound: list[Evidence] = []
+            for ev in list(items or []):
+                ev.confidence = min(float(ev.confidence or 0), float(confidence_cap))
+                ev.document_relationship = match.relationship
+                ev.document_scope = match.document_scope
+                ev.hard_conflicts = list(match.hard_conflicts)
+                ev.positive_evidence = list(match.positive_evidence)
+                ev.negative_evidence = list(match.negative_evidence)
+                bound.append(ev)
+            return bound
+
+        def consume_pdf(pdf_url: str, parent_source_url: str | None = None):
             nonlocal followed_pdfs
             try:
-                pdf_text, ev = extract_pdf(pdf_url, candidate.match_level, min(base, .96))
-                pscope, pconf, _pev, pconflicts = validate_resource_identity(
-                    pdf_url, candidate, found_on_validated_product_page=True, surrounding_text=pdf_text[:160000]
+                # Download once. The first pass reads native text/metadata only and
+                # cannot invoke OCR. Full extraction is enabled only after the exact
+                # product-document relationship is accepted.
+                data = download_bytes(pdf_url)
+                verified = extract_verified_pdf_bytes(
+                    candidate,
+                    data,
+                    pdf_url,
+                    full_extract=extract_pdf_bytes,
+                    match_level=candidate.match_level,
+                    confidence=min(base, .96),
+                    parent_source_url=parent_source_url or fetch.final_url,
+                    focus_terms=target_semantics,
                 )
-                if pscope not in {"EXACT_VARIANT", "EXACT_PRODUCT"} or pconflicts:
+                if not verified.accepted:
                     return
-                for _e in ev:
-                    _e.confidence = min(float(_e.confidence or 0), float(pconf))
+
+                pdf_text = verified.text
+                match = verified.match
+                pconf = float(match.confidence)
+                ev = _bind_pdf_evidence(verified.evidence, match, pconf)
                 evidence.extend(ev)
-                evidence.extend(extract_target_evidence(
+
+                target_ev = extract_target_evidence(
                     pdf_text, target_semantics, pdf_url, "official_pdf", candidate.match_level, min(base, .94, pconf)
-                ))
-                evidence.extend(extract_text_evidence(
+                )
+                text_ev = extract_text_evidence(
                     pdf_text, pdf_url, "official_pdf", candidate.match_level, min(base, .95, pconf),
                     expected_capacity=candidate.capacity or expected.capacity,
-                ))
+                )
+                evidence.extend(_bind_pdf_evidence(target_ev, match, pconf))
+                evidence.extend(_bind_pdf_evidence(text_ev, match, pconf))
                 pdf_notes.extend(extract_technical_notes(pdf_text, pdf_url))
                 if pdf_url not in sources:
                     sources.append(pdf_url)
@@ -254,7 +283,7 @@ class ProductPipeline:
             for pdf in page.get("pdfs", [])[:12]:
                 if pdf not in seen_pdfs:
                     seen_pdfs.add(pdf)
-                    consume_pdf(pdf)
+                    consume_pdf(pdf, fetch.final_url)
 
             base_host = (urlparse(fetch.final_url).hostname or "").lower().removeprefix("www.")
             for doc_url in page.get("document_links", [])[:6]:
@@ -284,7 +313,7 @@ class ProductPipeline:
                     for pdf in doc_page.get("pdfs", [])[:12]:
                         if pdf not in seen_pdfs:
                             seen_pdfs.add(pdf)
-                            consume_pdf(pdf)
+                            consume_pdf(pdf, doc_fetch.final_url)
                 except Exception:
                     continue
 
@@ -304,6 +333,9 @@ class ProductPipeline:
                 semantic=ev.attribute,
                 confidence=float(ev.confidence or 0.0),
             )
+            ev.identity_status = identity_assessment.status
+            ev.authority = ev_source_class
+            ev.policy_allowed = bool(policy.allowed)
             if policy.allowed:
                 policy_accepted.append(ev)
             else:

@@ -47,6 +47,9 @@ class ReviewDiscoveryResult:
     validated_count: int
     rejected_count: int
     duplicate_count: int
+    unique_document_count: int = 0
+    language_variant_count: int = 0
+    canonical_documents: tuple[dict, ...] = field(default_factory=tuple)
 
 
 def _compact(value: str | None) -> str:

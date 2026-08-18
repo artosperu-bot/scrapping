@@ -322,9 +322,32 @@ def scrape_item(
                     source_url=(doc_rec.fetch or {}).get("final_url") or next(iter(doc_rec.sources or []),"PDF_DISCOVERY")
                     smart_snapshot=orchestrator.observe_record(doc_rec,engine="PDF",source_url=source_url,source_kind=(doc_rec.fetch or {}).get("source_class"),count_source=False)
                     log(f"  SMART FIELDS: verificados={len(smart_snapshot.resolved_fields)} faltantes={len(smart_snapshot.missing_fields)} conflictos={len(smart_snapshot.conflicted_fields)}")
+    if not accepted and orchestrator:
+        smart_snapshot=orchestrator.observe_source_outcome(first_external,"NO_RESULT",engine=first_external.engine if first_external else "UNKNOWN",reason="NO_VALIDATED_SOURCE")
+        next_web_intent=next((intent for intent in smart_snapshot.next_intents if intent.engine in {"IDENTITY","WEB_STRUCTURED","WEB_FALLBACK"}),None)
+        fallback_fields=list(smart_snapshot.missing_fields or tuple(target_semantics))
+        if strategy.web and next_web_intent and fallback_fields and not smart_snapshot.early_stop and budget_tracker.remaining_queries()>0 and budget_tracker.can_accept_source():
+            log(f"  SMART NEXT_SOURCE: {next_web_intent.engine} kind={next_web_intent.source_kind} fields={','.join(fallback_fields)}")
+            fallback_candidates=_prioritize(search_web_for_fields(item.identity,fallback_fields,limit=RUNTIME_RESOLUTION_BUDGET.max_candidates_per_query,budget_tracker=budget_tracker,query_quota=min(SEARCH_STAGE_QUERY_QUOTAS["MISSING_FIELDS"],budget_tracker.remaining_queries()),source_kind=next_web_intent.source_kind,category=orchestrator.category))
+            log(f"  SMART QUERY: used={budget_tracker.queries_used} limit={RUNTIME_RESOLUTION_BUDGET.max_search_queries_per_product} engine={next_web_intent.engine}")
+            for candidate in fallback_candidates:
+                if not budget_tracker.can_accept_source() or budget_tracker.pages_fetched>=RUNTIME_RESOLUTION_BUDGET.max_pages_fetched_per_product:break
+                if candidate.url in seen_urls:continue
+                seen_urls.add(candidate.url)
+                try:
+                    budget_tracker.pages_fetched+=1
+                    official_domain=_candidate_official_domain(candidate,item.identity,accepted)
+                    fallback_rec=pipe.process_url(item.identity,candidate.url,official_domain=official_domain,include_pdfs=include_pdfs,include_images=include_images,browser_fallback=True,target_semantics=fallback_fields,media_slots=media_slots)
+                    if not _log_source_decision(fallback_rec,log,prefix="    "):raise ValueError("SOURCE_VALIDATION_REJECTED: NO_POLICY_APPROVED_EVIDENCE")
+                    if fallback_rec.identity.identifiers_conflicting:raise ValueError("SOURCE_VALIDATION_REJECTED: IDENTITY_CONFLICT legacy_identifiers")
+                    accepted.append(fallback_rec)
+                    smart_snapshot=orchestrator.observe_record(fallback_rec,engine="WEB_STRUCTURED",source_url=candidate.url,source_kind=(fallback_rec.fetch or {}).get("source_class"))
+                    log(f"  SMART FIELDS: verificados={len(smart_snapshot.resolved_fields)} faltantes={len(smart_snapshot.missing_fields)} conflictos={len(smart_snapshot.conflicted_fields)}")
+                    log(f"    gap fuente validada: {(fallback_rec.fetch or {}).get('source_class','?')} / {fallback_rec.identity.match_level}")
+                    if smart_snapshot.early_stop or len(accepted)>=2:break
+                except Exception as exc:
+                    errors.append(f"fallback:{candidate.url}: {type(exc).__name__}: {exc}");_log_source_rejection(exc,log,prefix="    ")
     if not accepted:
-        if orchestrator:
-            orchestrator.observe_source_outcome(first_external,"NO_RESULT",engine=first_external.engine if first_external else "UNKNOWN",reason="NO_VALIDATED_SOURCE")
         log("  SIN FUENTE VALIDADA: "+(errors[-1] if errors else "no hubo candidatos"));return None
 
     rec=_merge_valid_records(accepted);resolution=analyze_resolution(rec,template_plan)

@@ -6,9 +6,9 @@ ROOT = Path(__file__).parents[1]
 
 def test_desktop_profile_includes_downloader_ejs_and_ffmpeg_runtime():
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    desktop = project.split('desktop = [', 1)[1].split(']', 1)[0]
-    assert 'yt-dlp[default]>=2026.7.4' in desktop
-    assert 'imageio-ffmpeg>=0.6.0' in desktop
+    assert 'desktop = ["playwright>=1.55"' in project
+    assert '"yt-dlp[default]>=2026.7.4"' in project
+    assert '"imageio-ffmpeg>=0.6.0"' in project
 
 
 def test_pyinstaller_collects_yt_dlp_ejs_deno_and_imageio_ffmpeg():

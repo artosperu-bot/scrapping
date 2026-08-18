@@ -12,6 +12,7 @@ on:
       - 'src/product_intelligence/mercadolibre_oauth.py'
       - 'tests/test_price_universal_recall.py'
       - 'tests/test_price_trace_identity_integration.py'
+      - 'tests/test_price_query_capabilities.py'
       - '.github/workflows/universal-price-core-tests.yml'
   pull_request:
     paths:
@@ -22,6 +23,7 @@ on:
       - 'src/product_intelligence/mercadolibre_oauth.py'
       - 'tests/test_price_universal_recall.py'
       - 'tests/test_price_trace_identity_integration.py'
+      - 'tests/test_price_query_capabilities.py'
 
 permissions:
   contents: write
@@ -46,7 +48,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          python -m pytest -q tests/test_price_universal_recall.py tests/test_price_trace_identity_integration.py 2>&1 | tee /tmp/universal-price-test.log
+          python -m pytest -q tests/test_price_universal_recall.py tests/test_price_trace_identity_integration.py tests/test_price_query_capabilities.py 2>&1 | tee /tmp/universal-price-test.log
           status=${PIPESTATUS[0]}
           set -e
           mkdir -p qa
@@ -61,4 +63,4 @@ jobs:
           git diff --cached --quiet || git commit -m 'test: persist universal price focused result'
           git push origin HEAD:feat/universal-price-intelligence
           exit $status
-# red-marker: 2
+# query-capability-red: 1

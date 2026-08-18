@@ -104,6 +104,9 @@ def competitor_key(row: PriceOffer) -> str:
     if tax_id:
         return f"tax:{tax_id}"
     channel = _seller_key(row.channel)
+    seller_id = _norm(row.seller_id)
+    if seller_id:
+        return f"sellerid:{channel}:{seller_id}"
     for value in (row.seller_legal_name, row.seller_display_name):
         key = _seller_key(value)
         if key:
@@ -118,7 +121,7 @@ def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:
     for row in offers:
         canonical = _canonical_url(row.url)
         specific_pdp = bool((urlsplit(row.url).path or "").strip("/"))
-        locator = canonical if specific_pdp else (row.publication_id or row.sku or canonical)
+        locator = canonical if specific_pdp else (row.marketplace_listing_id or row.publication_id or row.internal_product_id or row.sku or canonical)
         key = (_norm(row.channel), competitor_key(row), _norm(row.part_number or row.model), locator)
         current = best.get(key)
         if current is None or row.confidence > current.confidence or (row.confidence == current.confidence and row.source_type == "api" and current.source_type != "api"):

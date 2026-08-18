@@ -1,0 +1,9 @@
+BASE=a820c27b3c6cdc209a7858c4d0f547d43a188c2b
+=== RED ===
+..........                                                               [100%]
+10 passed in 1.19s
+RED_EXIT=0
+RED_EXPECTATION_FAILED=tests unexpectedly passed before implementation
+PATCH_EXIT=NOT_RUN
+FOCUSED_EXIT=NOT_RUN
+ADJACENT_EXIT=NOT_RUN

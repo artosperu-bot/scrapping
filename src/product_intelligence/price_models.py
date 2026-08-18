@@ -42,8 +42,18 @@ class PriceOffer:
     seller_tax_id: str | None = None
     publication_id: str | None = None
     sku: str | None = None
+    seller_id: str | None = None
+    seller_sku: str | None = None
+    marketplace_product_id: str | None = None
+    marketplace_listing_id: str | None = None
+    internal_product_id: str | None = None
+    direct_product_url: str | None = None
     observed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     evidence: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.direct_product_url:
+            self.direct_product_url = self.url
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

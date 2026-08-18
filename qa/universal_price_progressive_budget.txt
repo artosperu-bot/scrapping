@@ -1,0 +1,10 @@
+BASE=8a09af8ee3ba5289bc512a598a5525a5ef5c9cd8
+=== RED ===
+.....                                                                    [100%]
+5 passed in 1.47s
+RED_EXIT=0
+RED_EXPECTATION_FAILED=progressive budget already satisfied unexpectedly
+PATCH_EXIT=NOT_RUN
+ORDER_FIX_EXIT=NOT_RUN
+FOCUSED_EXIT=NOT_RUN
+ADJACENT_EXIT=NOT_RUN

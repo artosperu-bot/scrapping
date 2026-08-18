@@ -1,0 +1,4 @@
+commit=e3e7d1c159f1fc9bfdf06101060e3e8103b528c0
+pytest_exit_code=0
+..........................                                               [100%]
+26 passed in 1.38s

@@ -1,0 +1,102 @@
+name: Universal Price P6 AFTER
+
+on:
+  push:
+    branches:
+      - feat/universal-price-intelligence
+    paths:
+      - 'scripts/qa_price_after_sa400s37_960g.py'
+      - '.github/workflows/universal-price-p6-after.yml'
+  pull_request:
+    branches:
+      - release/windows
+    paths:
+      - 'src/product_intelligence/price_*.py'
+      - 'src/product_intelligence/discovery.py'
+      - 'src/product_intelligence/identity_bootstrap.py'
+      - 'src/product_intelligence/identifiers.py'
+      - 'src/product_intelligence/mercadolibre_oauth.py'
+      - 'scripts/qa_price_after_sa400s37_960g.py'
+      - '.github/workflows/universal-price-p6-after.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  regression-and-after:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install desktop and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[desktop,dev]'
+      - name: Install Chromium
+        run: python -m playwright install chromium
+      - name: Full regression and oracle-blind AFTER
+        shell: bash
+        env:
+          PRICE_AFTER_OUTPUT: qa_price_after_output
+        run: |
+          set +e
+          mkdir -p qa qa_price_after_output
+          : > /tmp/p6-after.log
+          {
+            echo "HEAD=$(git rev-parse HEAD)"
+            echo "=== FOCUSED ==="
+            python -m pytest -q \
+              tests/test_price_universal_recall.py \
+              tests/test_price_trace_identity_integration.py \
+              tests/test_price_query_capabilities.py \
+              tests/test_price_marketplace_access_quality.py
+            focused=$?
+            echo "FOCUSED_EXIT=$focused"
+
+            echo "=== FULL REGRESSION ==="
+            python -m pytest -q
+            full=$?
+            echo "FULL_REGRESSION_EXIT=$full"
+
+            echo "=== SMART REGRESSION ==="
+            python -m product_intelligence.smart_orchestrator_benchmark --output qa_price_after_output/smart-orchestrator-after-guard.json
+            smart=$?
+            echo "SMART_REGRESSION_EXIT=$smart"
+
+            echo "=== ORACLE BLIND KINGSTON AFTER ==="
+            python scripts/qa_price_after_sa400s37_960g.py
+            after=$?
+            echo "AFTER_EXIT=$after"
+
+            overall=0
+            [ "$focused" -eq 0 ] || overall=1
+            [ "$full" -eq 0 ] || overall=1
+            [ "$smart" -eq 0 ] || overall=1
+            [ "$after" -eq 0 ] || overall=1
+            echo "OVERALL_EXIT=$overall"
+            exit $overall
+          } 2>&1 | tee /tmp/p6-after.log
+          overall=${PIPESTATUS[0]}
+          set -e
+
+          cp /tmp/p6-after.log qa/universal_price_p6_after.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add qa/universal_price_p6_after.txt
+          git diff --cached --quiet || git commit -m 'test: persist P6 regression and AFTER evidence'
+          git push origin HEAD:feat/universal-price-intelligence
+          exit $overall
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: universal-price-p6-after-${{ github.sha }}
+          path: qa_price_after_output/
+          if-no-files-found: error
+          retention-days: 30

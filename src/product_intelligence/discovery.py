@@ -206,21 +206,47 @@ def _merge_ranked(groups:list[list[SearchCandidate]],limit:int)->list[SearchCand
     return sorted(best.values(),key=lambda x:x.score,reverse=True)[:limit]
 
 
+def _query_domain_constraint(query:str)->str|None:
+    match=re.search(r"\bsite:([^\s\"\'/]+)",str(query or ""),re.I)
+    if not match:return None
+    return match.group(1).lower().removeprefix("www.")
+
+
+def _filter_query_domain(rows:list[tuple[str,str,str]],query:str)->list[tuple[str,str,str]]:
+    domain=_query_domain_constraint(query)
+    if not domain:return rows
+    out=[]
+    for row in rows:
+        host=(urlparse(row[0]).hostname or "").lower().removeprefix("www.")
+        if host==domain or host.endswith("."+domain):out.append(row)
+    return out
+
+
 def _budgeted_query(identity:ProductIdentity,query:str,timeout:int,tracker:SearchBudgetTracker)->list[SearchCandidate]:
     if not query or not tracker.reserve_query():return []
-    rows=_provider_search(query,timeout)
+    rows=_filter_query_domain(_provider_search(query,timeout),query)
     ranked=_rank_candidates(rows,identity,tracker.budget.max_candidates_per_query)
     tracker.admit_candidates(len(ranked))
     return ranked
 
 
-def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=8,budget_tracker:SearchBudgetTracker|None=None)->list[str]:
-    if not str(query or "").strip():return []
+def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=8,budget_tracker:SearchBudgetTracker|None=None,on_event=None)->list[str]:
+    clean_query=str(query or "").strip()
+    if not clean_query:return []
+    domain=_query_domain_constraint(clean_query)
     if budget_tracker is not None:
-        ranked=_budgeted_query(identity,str(query).strip(),timeout,budget_tracker)
+        ranked=_budgeted_query(identity,clean_query,timeout,budget_tracker)
+        raw_count=None; valid_count=None
     else:
-        ranked=_rank_candidates(_provider_search(str(query).strip(),timeout),identity,max(limit*2,limit))
-    return [row.url for row in ranked[:limit]]
+        raw_all=_provider_search(clean_query,timeout)
+        raw_count=len(raw_all)
+        raw=_filter_query_domain(raw_all,clean_query)
+        valid_count=len(raw)
+        ranked=_rank_candidates(raw,identity,max(limit*2,limit))
+    selected=ranked[:limit]
+    if on_event:
+        on_event({"stage":"QUERY_EXECUTED","query":clean_query,"domain":domain,"raw_results":raw_count,"valid_in_domain":valid_count,"ranked_results":len(selected)})
+    return [row.url for row in selected]
 
 
 def _bootstrap_unknown_identity(identity:ProductIdentity,timeout:int):
@@ -259,7 +285,7 @@ def _tracked_query_plan(identity:ProductIdentity,official_hint:str|None)->list[s
     return plan
 
 
-def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10,budget_tracker:SearchBudgetTracker|None=None,query_quota:int|None=None)->list[SearchCandidate]:
+def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10,budget_tracker:SearchBudgetTracker|None=None,query_quota:int|None=None,allow_identity_bootstrap:bool=True)->list[SearchCandidate]:
     if budget_tracker is not None:
         # Do not invoke the legacy bootstrap here because it performs hidden web
         # queries outside this shared budget. Search the strongest supplied
@@ -273,7 +299,7 @@ def search_web(identity:ProductIdentity,limit:int=12,timeout:int=10,budget_track
             groups.append(_budgeted_query(effective_identity,query,max(6,min(timeout,10)),budget_tracker))
         return _merge_ranked(groups,min(limit,budget_tracker.budget.max_candidates_per_query*max(1,len(groups))))
 
-    effective_identity,official_hint=_bootstrap_unknown_identity(identity,timeout)
+    effective_identity,official_hint=_bootstrap_unknown_identity(identity,timeout) if allow_identity_bootstrap else (identity,None)
     q=build_query(effective_identity)
     if not q:return []
     strong_raw=next((x for x in [effective_identity.mpn,effective_identity.ean,effective_identity.upc,effective_identity.gtin,effective_identity.sku] if x),None)

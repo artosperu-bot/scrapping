@@ -1,0 +1,74 @@
+name: Apply Universal Price Core
+
+on:
+  push:
+    branches:
+      - feat/universal-price-intelligence
+    paths:
+      - 'scripts/qa_apply_universal_price_core.py'
+      - '.github/workflows/universal-price-apply-core.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Apply and verify with durable evidence
+        shell: bash
+        run: |
+          set +e
+          {
+            echo "BASE=$(git rev-parse HEAD)"
+            python scripts/qa_apply_universal_price_core.py
+            patch_status=$?
+            echo "PATCH_EXIT=$patch_status"
+            if [ "$patch_status" -eq 0 ]; then
+              python -m pytest -q tests/test_price_universal_recall.py
+              focused_status=$?
+              echo "FOCUSED_EXIT=$focused_status"
+            else
+              focused_status=99
+              echo "FOCUSED_EXIT=NOT_RUN"
+            fi
+            if [ "$patch_status" -eq 0 ] && [ "$focused_status" -eq 0 ]; then
+              python -m pytest -q tests/test_identity_bootstrap.py tests/test_price_workflow.py
+              adjacent_status=$?
+              echo "ADJACENT_EXIT=$adjacent_status"
+            else
+              adjacent_status=99
+              echo "ADJACENT_EXIT=NOT_RUN"
+            fi
+          } 2>&1 | tee /tmp/universal-core-apply.log
+          overall=0
+          grep -q '^PATCH_EXIT=0$' /tmp/universal-core-apply.log || overall=1
+          grep -q '^FOCUSED_EXIT=0$' /tmp/universal-core-apply.log || overall=1
+          grep -q '^ADJACENT_EXIT=0$' /tmp/universal-core-apply.log || overall=1
+          set -e
+
+          mkdir -p qa
+          cp /tmp/universal-core-apply.log qa/universal_price_apply_core.txt
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add qa/universal_price_apply_core.txt
+          if [ "$overall" -eq 0 ]; then
+            git add src/product_intelligence/price_channel_registry.py src/product_intelligence/identity_bootstrap.py src/product_intelligence/price_discovery.py src/product_intelligence/discovery.py src/product_intelligence/price_peru_coverage.py
+          fi
+          git diff --cached --quiet || git commit -m 'feat: harden universal price discovery core'
+          git push origin HEAD:feat/universal-price-intelligence
+          exit $overall

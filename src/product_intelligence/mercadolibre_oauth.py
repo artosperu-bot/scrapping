@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -48,11 +49,31 @@ class MercadoLibreTokenStore:
 
     def __init__(self, key: str = ML_OAUTH_STATE_KEY):
         self.key = key
+        self._volatile_state: MercadoLibreOAuthState | None = None
+
+    @staticmethod
+    def _environment_state() -> MercadoLibreOAuthState | None:
+        client_id = str(os.environ.get("MERCADOLIBRE_CLIENT_ID") or "").strip()
+        client_secret = str(os.environ.get("MERCADOLIBRE_CLIENT_SECRET") or "").strip()
+        refresh_token = str(os.environ.get("MERCADOLIBRE_REFRESH_TOKEN") or "").strip()
+        access_token = str(os.environ.get("MERCADOLIBRE_ACCESS_TOKEN") or "").strip()
+        if not any((client_id, client_secret, refresh_token, access_token)):
+            return None
+        return MercadoLibreOAuthState(
+            client_id=client_id, client_secret=client_secret, refresh_token=refresh_token, access_token=access_token,
+            expires_at=str(os.environ.get("MERCADOLIBRE_EXPIRES_AT") or "").strip(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
 
     def load(self) -> MercadoLibreOAuthState | None:
-        raw = load_value(self.key)
+        if self._volatile_state is not None:
+            return self._volatile_state
+        try:
+            raw = load_value(self.key)
+        except Exception:
+            raw = None
         if not raw:
-            return None
+            return self._environment_state()
         try:
             data = json.loads(raw)
             if not isinstance(data, dict):
@@ -69,13 +90,21 @@ class MercadoLibreTokenStore:
                 updated_at=str(data.get("updated_at") or ""),
             )
         except (TypeError, ValueError, json.JSONDecodeError):
-            return None
+            return self._environment_state()
 
     def save(self, state: MercadoLibreOAuthState) -> None:
-        save_value(self.key, json.dumps(asdict(state), ensure_ascii=False, separators=(",", ":")))
+        self._volatile_state = state
+        try:
+            save_value(self.key, json.dumps(asdict(state), ensure_ascii=False, separators=(",", ":")))
+        except Exception:
+            return
 
     def clear(self) -> None:
-        delete_value(self.key)
+        self._volatile_state = None
+        try:
+            delete_value(self.key)
+        except Exception:
+            return
 
 
 def _optional_text(value: Any) -> str | None:
@@ -197,7 +226,9 @@ class MercadoLibreAuthService:
             return True
         expiry = _parse_expiry(state.expires_at)
         if expiry is None:
-            return True
+            # Unknown expiry is not proof of expiry. Use the token once; a 401 causes
+            # the API client to refresh and retry exactly once.
+            return False
         return _as_utc(self.now()) >= expiry - self.refresh_margin
 
     @staticmethod

@@ -17,6 +17,7 @@ from .identity_refinement import (
 from .models import ProductIdentity
 from .normalize import key_norm
 from .pdf_review import PdfInspection, PdfReviewCandidate, inspect_pdf_candidate, score_review_candidate
+from .product_document_matcher import ProductFingerprint
 from .upcitemdb_provider import lookup_identity_by_trade_code, trade_codes_equivalent
 
 
@@ -138,7 +139,8 @@ def _merge_provider_identity(original: ProductIdentity, current: ProductIdentity
     ):
         updates["product_name"] = provider.product_name
     updates["confidence"] = max(float(current.confidence or 0.0), float(provider.confidence or 0.0))
-    return _preserve_excel_identifiers(original, current.model_copy(update=updates))
+    merged = _preserve_functional_discriminators(current, current.model_copy(update=updates))
+    return _preserve_excel_identifiers(original, merged)
 
 
 def _signal_dict(signal) -> dict:
@@ -186,6 +188,56 @@ def _preserve_excel_identifiers(original: ProductIdentity, resolved: ProductIden
         if source and not getattr(resolved, name, None):
             updates[name] = source
     return resolved.model_copy(update=updates) if updates else resolved
+
+
+def _preserve_functional_discriminators(previous: ProductIdentity, resolved: ProductIdentity) -> ProductIdentity:
+    """Keep proven identity-defining dimensions when a later source shortens a model.
+
+    Refinement may legitimately replace a verbose marketing product name with a
+    cleaner canonical model, but it must not erase functional distinctions that
+    the document matcher uses as hard-conflict vetoes. Preserve only the shared
+    semantic dimensions already understood by ProductFingerprint (explicit
+    variant, connectivity, interface and generation), not arbitrary marketing
+    adjectives such as color, waterproofing or audience wording.
+    """
+    previous_fp = ProductFingerprint.from_identity(previous)
+    resolved_fp = ProductFingerprint.from_identity(resolved)
+
+    parts: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str | None) -> None:
+        text = str(value or "").strip()
+        key = _compact(text)
+        if not text or not key or key in seen:
+            return
+        seen.add(key)
+        parts.append(text)
+
+    add(resolved.variant)
+
+    # An explicit earlier variant is identity evidence in its own right. Keep it
+    # unless it is already represented by the resolved variant.
+    previous_variant = str(previous.variant or "").strip()
+    if previous_variant and _compact(previous_variant) not in _compact(resolved.variant):
+        add(previous_variant)
+
+    # If a later canonical model omits or contradicts a previously proven
+    # functional dimension, retain the prior discriminator in variant. In the
+    # contradiction case this intentionally makes downstream matching fail
+    # closed rather than silently choosing the later source.
+    if previous_fp.connectivity and previous_fp.connectivity != resolved_fp.connectivity:
+        add(previous_fp.connectivity)
+    if previous_fp.interface and previous_fp.interface != resolved_fp.interface:
+        add(previous_fp.interface)
+    if previous_fp.generation and previous_fp.generation != resolved_fp.generation:
+        add(f"Gen {previous_fp.generation}")
+
+    variant = " ".join(parts).strip()
+    current = str(resolved.variant or "").strip()
+    if variant and _compact(variant) != _compact(current):
+        return resolved.model_copy(update={"variant": variant})
+    return resolved
 
 
 def _upc_diagnostics(diag: dict, lookup) -> None:
@@ -350,7 +402,10 @@ def resolve_pdf_identity(identity: ProductIdentity, timeout: int = 8) -> Resolve
                     updates["product_name"] = product_name
 
             if updates:
-                base = base.model_copy(update=updates)
+                previous_base = base
+                base = _preserve_functional_discriminators(previous_base, base.model_copy(update=updates))
+                if str(base.variant or "").strip() != str(previous_base.variant or "").strip():
+                    refinement_diag["preserved_functional_variant"] = base.variant
 
             # Manufacturer authority is monotonic. A bootstrap-owned domain wins over
             # later refinement. A single exact manufacturer-owned source may fill an

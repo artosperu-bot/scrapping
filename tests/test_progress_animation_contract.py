@@ -116,11 +116,11 @@ def test_pyinstaller_contract_explicitly_keeps_progress_assets():
     assert "completed.gif" in spec
 
 
-def test_release_version_is_01034_everywhere():
+def test_release_version_is_01035_everywhere():
     version_source = (SRC / "version.py").read_text(encoding="utf-8")
     project_source = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'APP_VERSION = "0.10.34"' in version_source
-    assert 'version = "0.10.34"' in project_source
+    assert 'APP_VERSION = "0.10.35"' in version_source
+    assert 'version = "0.10.35"' in project_source
 
 
 def test_progress_animation_broken_gif_never_escapes_into_business_workflow():

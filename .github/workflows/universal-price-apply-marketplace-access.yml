@@ -1,0 +1,101 @@
+name: Apply Marketplace Access Quality
+
+on:
+  push:
+    branches:
+      - feat/universal-price-intelligence
+    paths:
+      - 'scripts/qa_apply_marketplace_access_quality.py'
+      - 'tests/test_price_marketplace_access_quality.py'
+      - '.github/workflows/universal-price-apply-marketplace-access.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  red-green:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-intelligence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: RED then apply P4 P5 P5.5 then GREEN
+        shell: bash
+        run: |
+          set +e
+          mkdir -p qa
+          : > /tmp/marketplace-access.log
+          {
+            echo "BASE=$(git rev-parse HEAD)"
+            echo "=== RED ==="
+            python -m pytest -q tests/test_price_marketplace_access_quality.py
+            red_status=$?
+            echo "RED_EXIT=$red_status"
+            if [ "$red_status" -eq 0 ]; then
+              echo "RED_EXPECTATION_FAILED=tests unexpectedly passed before implementation"
+              echo "PATCH_EXIT=NOT_RUN"
+              echo "FOCUSED_EXIT=NOT_RUN"
+              echo "ADJACENT_EXIT=NOT_RUN"
+              exit 91
+            fi
+
+            echo "=== PATCH ==="
+            python scripts/qa_apply_marketplace_access_quality.py
+            patch_status=$?
+            echo "PATCH_EXIT=$patch_status"
+            if [ "$patch_status" -ne 0 ]; then
+              echo "FOCUSED_EXIT=NOT_RUN"
+              echo "ADJACENT_EXIT=NOT_RUN"
+              exit 92
+            fi
+
+            echo "=== FOCUSED GREEN ==="
+            python -m pytest -q \
+              tests/test_price_universal_recall.py \
+              tests/test_price_trace_identity_integration.py \
+              tests/test_price_query_capabilities.py \
+              tests/test_price_marketplace_access_quality.py
+            focused_status=$?
+            echo "FOCUSED_EXIT=$focused_status"
+            if [ "$focused_status" -ne 0 ]; then
+              echo "ADJACENT_EXIT=NOT_RUN"
+              exit 93
+            fi
+
+            echo "=== ADJACENT ==="
+            python -m pytest -q tests/test_price_workflow.py tests/test_identity_bootstrap.py
+            adjacent_status=$?
+            echo "ADJACENT_EXIT=$adjacent_status"
+            exit $adjacent_status
+          } 2>&1 | tee /tmp/marketplace-access.log
+          overall=${PIPESTATUS[0]}
+          set -e
+
+          cp /tmp/marketplace-access.log qa/universal_price_marketplace_access.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add qa/universal_price_marketplace_access.txt
+          if [ "$overall" -eq 0 ]; then
+            git add \
+              src/product_intelligence/identifiers.py \
+              src/product_intelligence/price_models.py \
+              src/product_intelligence/price_adapters.py \
+              src/product_intelligence/price_discovery.py \
+              src/product_intelligence/price_identity.py \
+              src/product_intelligence/mercadolibre_oauth.py \
+              src/product_intelligence/price_workflow.py \
+              src/product_intelligence/price_trace.py
+          fi
+          git diff --cached --quiet || git commit -m 'feat: harden marketplace access and price quality'
+          git push origin HEAD:feat/universal-price-intelligence
+          exit $overall

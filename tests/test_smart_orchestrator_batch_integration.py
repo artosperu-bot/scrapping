@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from product_intelligence import batch
 from product_intelligence.models import Evidence, ProductIdentity, ProductRecord
 from product_intelligence.source_strategy import SourceStrategy
@@ -69,9 +67,14 @@ def _plan(*fields):
     }
 
 
+def _index(logs, marker):
+    return next(i for i, row in enumerate(logs) if marker in row)
+
+
 def test_manual_exact_pdf_that_resolves_all_technical_fields_stops_before_web(monkeypatch, tmp_path):
     broad_web_calls = []
     targeted_web_calls = []
+    logs = []
 
     monkeypatch.setattr(batch, "search_web", lambda *a, **k: broad_web_calls.append((a, k)) or [])
     monkeypatch.setattr(batch, "search_web_for_fields", lambda *a, **k: targeted_web_calls.append((a, k)) or [])
@@ -86,6 +89,7 @@ def test_manual_exact_pdf_that_resolves_all_technical_fields_stops_before_web(mo
         _item(),
         str(tmp_path),
         template_plan=_plan("battery_capacity", "driver_size"),
+        log=logs.append,
         source_strategy=SourceStrategy(web=True, pdf=True, ocr=False, mistral=False),
     )
 
@@ -97,11 +101,16 @@ def test_manual_exact_pdf_that_resolves_all_technical_fields_stops_before_web(mo
     assert audit["missing_fields"] == []
     assert audit["early_stop"] is True
     assert audit["stop_reason"] == "SUFFICIENT_FIELD_COVERAGE"
+    assert _index(logs, "SMART IDENTITY") < _index(logs, "SMART PLAN")
+    assert _index(logs, "SMART PLAN") < _index(logs, "SMART SOURCE")
+    assert _index(logs, "SMART SOURCE") < _index(logs, "SMART FIELDS")
+    assert _index(logs, "SMART FIELDS") < _index(logs, "SMART FINAL")
 
 
 def test_partial_pdf_sends_only_remaining_field_to_targeted_web(monkeypatch, tmp_path):
     broad_web_calls = []
     targeted_fields = []
+    logs = []
 
     monkeypatch.setattr(batch, "search_web", lambda *a, **k: broad_web_calls.append((a, k)) or [])
 
@@ -117,6 +126,7 @@ def test_partial_pdf_sends_only_remaining_field_to_targeted_web(monkeypatch, tmp
         _item(),
         str(tmp_path),
         template_plan=_plan("battery_capacity", "driver_size"),
+        log=logs.append,
         source_strategy=SourceStrategy(web=True, pdf=True, ocr=False, mistral=False),
     )
 
@@ -126,3 +136,5 @@ def test_partial_pdf_sends_only_remaining_field_to_targeted_web(monkeypatch, tmp
     audit = result.evidence_graph["smart_orchestrator"]
     assert audit["resolved_fields"] == ["battery_capacity"]
     assert audit["missing_fields"] == ["driver_size"]
+    assert any("SMART NEXT_SOURCE: WEB_STRUCTURED" in row and "driver_size" in row for row in logs)
+    assert any("SMART QUERY:" in row and "engine=WEB_STRUCTURED" in row for row in logs)

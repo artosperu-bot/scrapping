@@ -1,4 +1,4 @@
-BASE=364436c19bcaf49f271aebec1bfe6ffc033b6f23
+BASE=b35ab8fd1ac7c54eba327246cf8aa37c57e338f6
 === RED ===
 FFFFF                                                                    [100%]
 =================================== FAILURES ===================================
@@ -20,7 +20,7 @@ E         ?     +    +++++++
 tests/test_price_progressive_budget.py:13: AssertionError
 ________ test_target_domain_default_budget_does_not_expand_every_alias _________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f68e3ba8e30>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa03af03b30>
 
     def test_target_domain_default_budget_does_not_expand_every_alias(monkeypatch):
         identity = ProductIdentity(brand="Acme", model="Widget Pro", mpn="ABC/123")
@@ -48,7 +48,7 @@ E        +  where 6 = len(['"ABC/123" site:shop.example.com.pe', '"ABC/123" "Acm
 tests/test_price_progressive_budget.py:37: AssertionError
 _ test_open_retail_discovery_has_global_query_budget_even_when_no_query_finds_anything _
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f68e2546420>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa03af035f0>
 
     def test_open_retail_discovery_has_global_query_budget_even_when_no_query_finds_anything(monkeypatch):
         identity = ProductIdentity(brand="Acme", model="Widget Pro", mpn="ABC/123")
@@ -72,7 +72,7 @@ E       TypeError: discover_general_peru_retailers() got an unexpected keyword a
 tests/test_price_progressive_budget.py:53: TypeError
 _________ test_open_retail_stops_early_when_candidate_budget_is_filled _________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f68e25479e0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa03af47dd0>
 
     def test_open_retail_stops_early_when_candidate_budget_is_filled(monkeypatch):
         identity = ProductIdentity(brand="Acme", model="Widget Pro", mpn="ABC/123")
@@ -101,7 +101,7 @@ E       TypeError: discover_general_peru_retailers() got an unexpected keyword a
 tests/test_price_progressive_budget.py:83: TypeError
 _ test_open_retail_progresses_to_compact_alias_only_when_exact_queries_have_not_saturated _
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f68e251dc40>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa03af454c0>
 
     def test_open_retail_progresses_to_compact_alias_only_when_exact_queries_have_not_saturated(monkeypatch):
         identity = ProductIdentity(brand="Acme", model="Widget Pro", mpn="ABC/123")
@@ -131,55 +131,19 @@ FAILED tests/test_price_progressive_budget.py::test_target_domain_default_budget
 FAILED tests/test_price_progressive_budget.py::test_open_retail_discovery_has_global_query_budget_even_when_no_query_finds_anything - TypeError: discover_general_peru_retailers() got an unexpected keyword argument 'max_queries'
 FAILED tests/test_price_progressive_budget.py::test_open_retail_stops_early_when_candidate_budget_is_filled - TypeError: discover_general_peru_retailers() got an unexpected keyword argument 'max_queries'
 FAILED tests/test_price_progressive_budget.py::test_open_retail_progresses_to_compact_alias_only_when_exact_queries_have_not_saturated - TypeError: discover_general_peru_retailers() got an unexpected keyword argument 'max_queries'
-5 failed in 1.68s
+5 failed in 1.29s
 RED_EXIT=1
 === PATCH ===
 PROGRESSIVE_PRICE_BUDGET_PATCH=APPLIED
 PATCH_EXIT=0
+=== PRESERVE MODEL FALLBACK ORDER ===
+PROGRESSIVE_PLAN_ORDER_FIX=APPLIED
+ORDER_FIX_EXIT=0
 === FOCUSED GREEN ===
 ...............................                                          [100%]
-31 passed in 0.78s
+31 passed in 0.79s
 FOCUSED_EXIT=0
 === ADJACENT ===
-.......................F.                                                [100%]
-=================================== FAILURES ===================================
-_ test_individual_retailer_discovery_falls_back_to_brand_model_without_weakening_final_identity _
-
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa246b955b0>
-
-    def test_individual_retailer_discovery_falls_back_to_brand_model_without_weakening_final_identity(monkeypatch):
-        identity = ProductIdentity(brand="JBL", model="Quantum 350 Wireless", mpn="JBLQ350WLBLKAM")
-        calls = []
-    
-        def fake_search(search_identity, query, **_kwargs):
-            calls.append((search_identity.mpn, query))
-            if search_identity.mpn is None and "site:bigmarketperu.com" in query and "Quantum 350 Wireless" in query:
-                return ["https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless"]
-            return []
-    
-        monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
-        urls = price_peru_coverage.discover_general_peru_retailers(identity, limit=5)
->       assert urls == ["https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless"]
-E       AssertionError: assert [] == ['https://big...350-wireless']
-E         
-E         Right contains one more item: 'https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless'
-E         
-E         Full diff:
-E         + []
-E         - [
-E         -     'https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless',
-E         - ]
-
-tests/test_price_channel_coverage.py:78: AssertionError
-=========================== short test summary info ============================
-FAILED tests/test_price_channel_coverage.py::test_individual_retailer_discovery_falls_back_to_brand_model_without_weakening_final_identity - AssertionError: assert [] == ['https://big...350-wireless']
-  
-  Right contains one more item: 'https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless'
-  
-  Full diff:
-  + []
-  - [
-  -     'https://bigmarketperu.com/productos/audifonos-gamer-jbl-quantum-350-wireless',
-  - ]
-1 failed, 24 passed in 0.91s
-ADJACENT_EXIT=1
+.........................                                                [100%]
+25 passed in 0.85s
+ADJACENT_EXIT=0

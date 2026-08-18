@@ -62,7 +62,7 @@ jobs:
           $appVersion = python -c "ns={}; exec(open('src/product_intelligence/version.py', encoding='utf-8').read(), ns); print(ns['APP_VERSION'])"
           $projectVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
           if ($appVersion.Trim() -ne $projectVersion.Trim()) { throw "Version mismatch: app=$appVersion project=$projectVersion" }
-          if ($appVersion.Trim() -ne '0.10.33') { throw "Unexpected release candidate version: $appVersion" }
+          if ($appVersion.Trim() -ne '0.10.34') { throw "Unexpected release candidate version: $appVersion" }
 
       - name: Run regression tests
         shell: cmd
@@ -76,7 +76,7 @@ jobs:
       - name: Smoke final desktop shell
         shell: cmd
         run: >-
-          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert 'pdf_review' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.33'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); assert hasattr(app, 'pdf_review_open_folder_button'); assert callable(getattr(app, '_pdf_review_open_folder', None)); app.destroy(); print('FINAL_UI_PDF_E2E_SMOKE=PASS')"
+          python -c "from product_intelligence.final_live_ui_desktop import App; app=App(); app.update_idletasks(); assert 'settings' in app._workspace_tabs; assert 'pdf_review' in app._workspace_tabs; assert app.update_status.get().startswith('Versión instalada: v0.10.34'); assert hasattr(app, 'excel_progress_animation'); assert hasattr(app, 'media_progress_animation'); assert hasattr(app, 'price_progress_animation'); assert hasattr(app, 'social_video_btn'); assert hasattr(app, 'pdf_review_open_folder_button'); assert callable(getattr(app, '_pdf_review_open_folder', None)); app.destroy(); print('FINAL_UI_PDF_E2E_SMOKE=PASS')"
 
       - name: Install bundled Chromium
         shell: cmd
@@ -154,7 +154,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ProductIntelligence-SMART-E2E-v0.10.33
+          name: ProductIntelligence-SMART-E2E-v0.10.34
           path: smart-packaged-evidence/
           if-no-files-found: warn
           retention-days: 14
@@ -172,6 +172,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ProductIntelligence-Windows-v0.10.33
+          name: ProductIntelligence-Windows-v0.10.34
           path: dist/ProductIntelligence/
           if-no-files-found: error

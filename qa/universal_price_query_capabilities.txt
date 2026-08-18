@@ -1,0 +1,9 @@
+BASE=e067ddf0082687f36e88ce917d9d5b74607045b5
+QUERY_CAPABILITIES_PATCH=APPLIED
+PATCH_EXIT=0
+................                                                         [100%]
+16 passed in 1.49s
+FOCUSED_EXIT=0
+....................                                                     [100%]
+20 passed in 0.89s
+ADJACENT_EXIT=0

@@ -100,9 +100,16 @@ def _queries(identity: ProductIdentity, domain: str) -> list[str]:
     strong = _strong(identity)
     model = str(identity.model or identity.product_name or "").strip()
     brand = str(identity.brand or "").strip()
-    q = [f'"{strong}" site:{domain}']
+    aliases = _identifier_aliases(strong) or ([strong] if strong else [])
+    q: list[str] = []
+    for alias in aliases:
+        q.append(f'"{alias}" site:{domain}')
+        if brand:
+            q.append(f'"{alias}" "{brand}" site:{domain}')
+        if model:
+            q.append(f'"{alias}" "{model}" site:{domain}')
     if model:
-        q += [f'"{strong}" "{model}" site:{domain}', f'"{model}" {brand} site:{domain}'.strip()]
+        q.append(f'"{model}" "{brand}" site:{domain}'.strip())
     extras = {
         "falabella.com.pe": [
             f'"{strong}" site:falabella.com.pe/falabella-pe/product',
@@ -137,61 +144,73 @@ def _alias_queries(identity: ProductIdentity, domain: str) -> list[str]:
     ]))
 
 
-def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_domain: int) -> list[str]:
+def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_domain: int, *, on_event=None, max_queries: int = 6) -> list[str]:
     strong = _strong(identity)
     model = str(identity.model or identity.product_name or "").strip()
     alias_identity = _alias_identity(identity)
     found: list[str] = []
     seen: set[str] = set()
+    query_count = 0
+    no_gain_streak = 0
+
+    def emit(stage: str, **payload) -> None:
+        if on_event:
+            on_event({"stage": stage, "domain": domain, **payload})
+
     for seed in _deterministic_pdps(identity):
         if _host_matches(seed, domain) and _is_pdp(seed, domain, strong):
             seen.add(seed)
             found.append(seed)
-    for query in _queries(identity, domain):
+    if len(found) >= limit_per_domain:
+        emit("DISCOVERY_STOP", reason="candidate_budget_full", total_pdps=len(found), queries=query_count)
+        return found[:limit_per_domain]
+
+    plans = [(identity, query, strong) for query in _queries(identity, domain)]
+    if model:
+        plans.extend((alias_identity, query, model) for query in _alias_queries(identity, domain))
+
+    stop_reason = "query_plan_exhausted"
+    for query_identity, query, marker in plans:
+        if query_count >= max_queries:
+            stop_reason = "query_budget_exhausted"
+            break
+        query_count += 1
+        before = len(found)
         try:
-            urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
-        except Exception:
+            urls = search_web_query(query_identity, query, limit=limit_per_domain, timeout=12, on_event=on_event)
+        except Exception as exc:
             urls = []
+            emit("QUERY_EXECUTED", query=query, raw_results=None, valid_in_domain=None, ranked_results=0, error=f"{type(exc).__name__}: {exc}")
         for raw in urls:
             url = str(raw or "").strip()
             if not url.startswith(("http://", "https://")) or url in seen:
                 continue
-            if not _host_matches(url, domain) or not _is_pdp(url, domain, strong):
+            if not _host_matches(url, domain) or not _is_pdp(url, domain, marker):
                 continue
             seen.add(url)
             found.append(url)
             if len(found) >= limit_per_domain:
                 break
+        gain = len(found) - before
+        emit("QUERY_INFORMATION_GAIN", query=query, new_urls=gain, new_pdps=gain, total_pdps=len(found), information_gain=gain)
+        no_gain_streak = 0 if gain else no_gain_streak + 1
         if len(found) >= limit_per_domain:
+            stop_reason = "candidate_budget_full"
             break
-    if len(found) < limit_per_domain and model:
-        for query in _alias_queries(identity, domain):
-            try:
-                urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12)
-            except Exception:
-                urls = []
-            for raw in urls:
-                url = str(raw or "").strip()
-                if not url.startswith(("http://", "https://")) or url in seen:
-                    continue
-                if not _host_matches(url, domain) or not _is_pdp(url, domain, model):
-                    continue
-                seen.add(url)
-                found.append(url)
-                if len(found) >= limit_per_domain:
-                    break
-            if len(found) >= limit_per_domain:
-                break
+        if found and no_gain_streak >= 2:
+            stop_reason = "no_new_pdps"
+            break
+    emit("DISCOVERY_STOP", reason=stop_reason, total_pdps=len(found), queries=query_count)
     return found
 
 
-def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain: int = 10, domains: tuple[str, ...] = PERU_MARKETPLACE_DOMAINS) -> list[str]:
+def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain: int = 10, domains: tuple[str, ...] = PERU_MARKETPLACE_DOMAINS, on_event=None) -> list[str]:
     strong = _strong(identity)
     if not strong or not domains:
         return []
     workers = max(1, min(TARGET_DISCOVERY_WORKERS, len(domains)))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="peru-channel") as pool:
-        per_domain = list(pool.map(lambda domain: _discover_target_domain(identity, domain, limit_per_domain), domains))
+        per_domain = list(pool.map(lambda domain: _discover_target_domain(identity, domain, limit_per_domain, on_event=on_event), domains))
     merged, seen_all = [], set()
     for index in range(limit_per_domain):
         for rows in per_domain:
@@ -235,13 +254,13 @@ def _general_alias_queries(identity: ProductIdentity) -> list[str]:
     return list(dict.fromkeys(queries))
 
 
-def _search_query_batches(identity: ProductIdentity, queries: list[str], per_query: int) -> list[list[str]]:
+def _search_query_batches(identity: ProductIdentity, queries: list[str], per_query: int, on_event=None) -> list[list[str]]:
     if not queries:
         return []
     workers = max(1, min(RETAIL_QUERY_WORKERS, len(queries)))
     def run(query: str) -> list[str]:
         try:
-            return search_web_query(identity, query, limit=per_query, timeout=12)
+            return search_web_query(identity, query, limit=per_query, timeout=12, on_event=on_event)
         except Exception:
             return []
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="peru-retail") as pool:
@@ -263,7 +282,7 @@ def _append_retail_candidates(rows: list[str], seen: set[str], batches: list[lis
     return False
 
 
-def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 20) -> list[str]:
+def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 20, on_event=None) -> list[str]:
     strong = _strong(identity)
     if not strong or limit <= 0:
         return []
@@ -271,13 +290,13 @@ def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 2
     seen: set[str] = set()
     per_query = max(6, min(20, limit * 2))
 
-    exact_batches = _search_query_batches(identity, _general_retail_queries(identity), per_query)
+    exact_batches = _search_query_batches(identity, _general_retail_queries(identity), per_query, on_event=on_event)
     if _append_retail_candidates(rows, seen, exact_batches, strong, limit):
         return rows
 
     model = str(identity.model or identity.product_name or "").strip()
     if model and len(rows) < limit:
         alias_identity = _alias_identity(identity)
-        alias_batches = _search_query_batches(alias_identity, _general_alias_queries(identity), per_query)
+        alias_batches = _search_query_batches(alias_identity, _general_alias_queries(identity), per_query, on_event=on_event)
         _append_retail_candidates(rows, seen, alias_batches, model, limit)
     return rows

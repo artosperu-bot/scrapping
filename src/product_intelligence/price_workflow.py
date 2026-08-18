@@ -21,6 +21,7 @@ from .price_history import (
 from .price_identity import competitor_key, dedupe_offers, filter_market_outliers, is_peru_offer
 from .price_models import PriceOffer
 from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
+from .price_source_capabilities import SourceCapabilityRegistry, detect_platform
 from .price_trace import PriceTrace
 from .web_fetch import fetch_page
 
@@ -256,7 +257,7 @@ def _refresh_learned_sources(urls: list[str], identity: ProductIdentity, emit) -
     return dedupe_offers(rows)
 
 
-def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit) -> list[PriceOffer]:
+def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit, capabilities: SourceCapabilityRegistry | None = None) -> list[PriceOffer]:
     rows: list[PriceOffer] = []
     emit("status", stage="validating", message=f"Revisando {len(sources)} publicaciones web de Perú")
     for pos, url in enumerate(sources, 1):
@@ -264,7 +265,20 @@ def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit) -> 
         try:
             emit("page", url=url, channel=channel, position=pos, total=len(sources), status="fetching")
             html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
-            rows.extend(_augment_page_rows(url, html, page_rows, identity, channel))
+            augmented = _augment_page_rows(url, html, page_rows, identity, channel)
+            rows.extend(augmented)
+            if capabilities is not None:
+                method = next((row.source_method for row in augmented if row.source_method), None)
+                capabilities.observe(
+                    url,
+                    platform=detect_platform(url, html),
+                    discovery_method="price_discovery",
+                    extraction_method=method,
+                    price_capable=bool(augmented),
+                    stock_capable=any(row.stock is not None or bool(row.availability) for row in augmented),
+                    seller_capable=any(bool(row.seller_display_name or row.seller_legal_name) for row in augmented),
+                    success=any(_is_trusted_final_offer(row) for row in augmented),
+                )
             emit("page", url=url, channel=channel, status="parsed", offers=len(page_rows))
         except Exception as exc:
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
@@ -279,6 +293,12 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     input_identity = identity
     identity, identity_resolution = _resolve_price_identity(input_identity)
     trace = PriceTrace()
+    capabilities = SourceCapabilityRegistry(Path(output_root) / "price_intelligence" / "source_capabilities.json")
+
+    def discovery_event(event: dict) -> None:
+        stage = str(event.get("stage") or "QUERY_EXECUTED")
+        payload = {k: v for k, v in event.items() if k != "stage"}
+        trace.record(stage, **payload)
 
     def emit(event_type: str, **payload):
         if event_type == "page":
@@ -344,6 +364,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
                 discover_general_peru_retailers,
                 identity,
                 limit=max(10, max_sources // 2),
+                on_event=discovery_event,
             )
             try:
                 learned_rows = learned_future.result()
@@ -360,13 +381,13 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
         learned_set = set(learned_sources)
         fresh_retail = [url for url in retail_sources if url not in learned_set]
-        offers.extend(_collect_web_offers(fresh_retail[:max_sources], identity, emit))
+        offers.extend(_collect_web_offers(fresh_retail[:max_sources], identity, emit, capabilities))
 
     marketplace_sources: list[str] = []
     base_sources: list[str] = []
     if not warm_path or not _has_trusted_offer(offers):
         try:
-            marketplace_sources = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
+            marketplace_sources = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)), on_event=discovery_event)
             for url in marketplace_sources:
                 trace.record("URL_DISCOVERED", channel=_channel_from_url(url), url=url, method="targeted_pdp")
             emit("source", channel="peru_directed", status="ok", offers=0, urls=len(marketplace_sources), method="targeted_pdp")
@@ -374,7 +395,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
         if not warm_path:
             try:
-                retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2))
+                retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2), on_event=discovery_event)
                 for url in retail_sources:
                     trace.record("URL_DISCOVERED", channel=_channel_from_url(url), url=url, method="identifier_and_alias_retail")
                 emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
@@ -394,7 +415,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             for url in _merge_sources(marketplace_sources, retail_sources, base_sources, limit=max_sources)
             if url not in skip_urls
         ]
-        offers.extend(_collect_web_offers(sources, identity, emit))
+        offers.extend(_collect_web_offers(sources, identity, emit, capabilities))
 
     deduped = dedupe_offers(offers)
     trusted = [row for row in deduped if _is_trusted_final_offer(row)]
@@ -409,6 +430,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     save_price_run(output_root, valid)
     save_validated_source_bindings(output_root, identity, valid)
     save_channel_coverage(output_root, coverage)
+    capabilities.save()
     emit("coverage", report=coverage)
     for row in valid:
         emit("offer", offer=row.to_dict())

@@ -230,14 +230,23 @@ def _budgeted_query(identity:ProductIdentity,query:str,timeout:int,tracker:Searc
     return ranked
 
 
-def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=8,budget_tracker:SearchBudgetTracker|None=None)->list[str]:
-    if not str(query or "").strip():return []
+def search_web_query(identity:ProductIdentity,query:str,limit:int=6,timeout:int=8,budget_tracker:SearchBudgetTracker|None=None,on_event=None)->list[str]:
+    clean_query=str(query or "").strip()
+    if not clean_query:return []
+    domain=_query_domain_constraint(clean_query)
     if budget_tracker is not None:
-        ranked=_budgeted_query(identity,str(query).strip(),timeout,budget_tracker)
+        ranked=_budgeted_query(identity,clean_query,timeout,budget_tracker)
+        raw_count=None; valid_count=None
     else:
-        raw=_filter_query_domain(_provider_search(str(query).strip(),timeout),str(query).strip())
+        raw_all=_provider_search(clean_query,timeout)
+        raw_count=len(raw_all)
+        raw=_filter_query_domain(raw_all,clean_query)
+        valid_count=len(raw)
         ranked=_rank_candidates(raw,identity,max(limit*2,limit))
-    return [row.url for row in ranked[:limit]]
+    selected=ranked[:limit]
+    if on_event:
+        on_event({"stage":"QUERY_EXECUTED","query":clean_query,"domain":domain,"raw_results":raw_count,"valid_in_domain":valid_count,"ranked_results":len(selected)})
+    return [row.url for row in selected]
 
 
 def _bootstrap_unknown_identity(identity:ProductIdentity,timeout:int):

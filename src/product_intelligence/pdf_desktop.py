@@ -25,6 +25,7 @@ from .source_strategy import SourceStrategy
 
 _BASE_EXTRACT_PAGE = pipeline_module.extract_page
 _BASE_EXTRACT_PDF = pipeline_module.extract_pdf
+_BASE_EXTRACT_PDF_BYTES = pipeline_module.extract_pdf_bytes
 _PROVIDER_OPTION_KEYS = ("ocr_space_enabled", "mistral_enabled", "mistral_model", "request_timeout")
 
 
@@ -45,20 +46,7 @@ def _safe_pdf_name(url: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", raw) or "document.pdf"
 
 
-def _scoped_extract_pdf(url: str, match_level: str = "HIGH", confidence: float = .90):
-    if not pdf_evidence_enabled():
-        emit_pdf_event("PDF_SKIPPED", url=url, detail="Evidencia PDF desactivada")
-        return "", []
-    emit_pdf_event("PDF_FOUND", url=url, detail="PDF candidato")
-    text, evidence = _BASE_EXTRACT_PDF(url, match_level, confidence)
-    local_path = None
-    root = pdf_output_root()
-    if root:
-        try:
-            local_path = download_pdf(url, Path(root) / "pdf_evidence" / _safe_pdf_name(url))
-            emit_pdf_event("PDF_DOWNLOADED", url=url, local_path=str(local_path), detail="PDF guardado")
-        except Exception as exc:
-            emit_pdf_event("PDF_ERROR", url=url, detail=f"No se pudo guardar PDF: {type(exc).__name__}")
+def _annotate_pdf_evidence(evidence, *, local_path: Path | None, url: str, text: str):
     methods = set()
     for row in evidence:
         selector = str(row.selector or "")
@@ -72,6 +60,65 @@ def _scoped_extract_pdf(url: str, match_level: str = "HIGH", confidence: float =
         emit_pdf_event("PDF_TEXT", url=url, detail="Texto PDF extraído")
     if "OCR" in methods:
         emit_pdf_event("PDF_OCR", url=url, detail="OCR aplicado como fallback")
+
+
+def _scoped_extract_pdf(url: str, match_level: str = "HIGH", confidence: float = .90):
+    """Legacy URL hook kept for compatibility with older desktop entrypoints."""
+    if not pdf_evidence_enabled():
+        emit_pdf_event("PDF_SKIPPED", url=url, detail="Evidencia PDF desactivada")
+        return "", []
+    emit_pdf_event("PDF_FOUND", url=url, detail="PDF candidato")
+    text, evidence = _BASE_EXTRACT_PDF(url, match_level, confidence)
+    local_path = None
+    root = pdf_output_root()
+    if root:
+        try:
+            local_path = download_pdf(url, Path(root) / "pdf_evidence" / _safe_pdf_name(url))
+            emit_pdf_event("PDF_DOWNLOADED", url=url, local_path=str(local_path), detail="PDF guardado")
+        except Exception as exc:
+            emit_pdf_event("PDF_ERROR", url=url, detail=f"No se pudo guardar PDF: {type(exc).__name__}")
+    _annotate_pdf_evidence(evidence, local_path=local_path, url=url, text=text)
+    return text, evidence
+
+
+def _scoped_extract_pdf_bytes(
+    data: bytes,
+    url: str,
+    match_level: str = "HIGH",
+    confidence: float = .90,
+    **kwargs,
+):
+    """Desktop hook for the active post-preflight PDF extraction path.
+
+    The pipeline has already downloaded and identity-validated these bytes before
+    this function is called. Persist the same bytes for audit/desktop visibility;
+    never issue a second network request and never bypass the preflight gate.
+    """
+    if not pdf_evidence_enabled():
+        emit_pdf_event("PDF_SKIPPED", url=url, detail="Evidencia PDF desactivada")
+        return "", []
+
+    emit_pdf_event("PDF_FOUND", url=url, detail="PDF validado para extracción")
+    local_path = None
+    root = pdf_output_root()
+    if root:
+        try:
+            local_path = Path(root) / "pdf_evidence" / _safe_pdf_name(url)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(bytes(data))
+            emit_pdf_event("PDF_DOWNLOADED", url=url, local_path=str(local_path), detail="PDF validado guardado")
+        except Exception as exc:
+            local_path = None
+            emit_pdf_event("PDF_ERROR", url=url, detail=f"No se pudo guardar PDF: {type(exc).__name__}")
+
+    text, evidence = _BASE_EXTRACT_PDF_BYTES(
+        data,
+        url,
+        match_level=match_level,
+        confidence=confidence,
+        **kwargs,
+    )
+    _annotate_pdf_evidence(evidence, local_path=local_path, url=url, text=text)
     return text, evidence
 
 
@@ -80,6 +127,7 @@ def _install_hooks():
         return
     pipeline_module.extract_page = _pdf_aware_extract_page
     pipeline_module.extract_pdf = _scoped_extract_pdf
+    pipeline_module.extract_pdf_bytes = _scoped_extract_pdf_bytes
     pipeline_module._stech_pdf_hooks = True
 
 

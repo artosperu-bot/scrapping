@@ -1,0 +1,172 @@
+commit=b55c9518aacd2888ef5c18eb8ac88d3d37b16d2f
+pytest_exit_code=1
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+_________ test_empty_coverage_preserves_not_searched_instead_of_no_hay _________
+
+    def test_empty_coverage_preserves_not_searched_instead_of_no_hay():
+        coverage = build_channel_coverage([])
+        statuses = {row["status"] for row in coverage["channels"]}
+>       assert "NO_HAY" not in statuses
+E       AssertionError: assert 'NO_HAY' not in {'NO_HAY'}
+
+tests/test_price_universal_recall.py:16: AssertionError
+__ test_generic_product_type_cannot_become_brand_from_cross_source_serp_noise __
+
+    def test_generic_product_type_cannot_become_brand_from_cross_source_serp_noise():
+        identity = ProductIdentity(mpn="ZX-4109")
+        candidates = [
+            SearchCandidate(
+                "https://one.example/zx-4109",
+                "Disco Duro ZX-4109 960GB",
+                "Compra disco duro ZX-4109 con envio",
+            ),
+            SearchCandidate(
+                "https://two.example/zx-4109",
+                "Disco Duro ZX-4109 SSD",
+                "Producto disco duro ZX-4109 disponible",
+            ),
+            SearchCandidate(
+                "https://three.example/zx-4109",
+                "Disco Duro ZX-4109 SATA",
+                "Precio del disco duro ZX-4109",
+            ),
+        ]
+    
+        result = resolve_identity_from_candidates(identity, candidates)
+    
+>       assert result.identity.brand is None
+E       AssertionError: assert 'Disco Duro' is None
+E        +  where 'Disco Duro' = ProductIdentity(brand='Disco Duro', manufacturer=None, product_name=None, model=None, mpn='ZX-4109', sku=None, ean=Non...None, color=None, region=None, confidence=0.0, match_level='LOW', identifiers_confirmed=[], identifiers_conflicting=[]).brand
+E        +    where ProductIdentity(brand='Disco Duro', manufacturer=None, product_name=None, model=None, mpn='ZX-4109', sku=None, ean=Non...None, color=None, region=None, confidence=0.0, match_level='LOW', identifiers_confirmed=[], identifiers_conflicting=[]) = IdentityBootstrapResult(identity=ProductIdentity(brand='Disco Duro', manufacturer=None, product_name=None, model=None,... page_probes_attempted=0, page_probes_succeeded=0, page_signals=[], source_role_counts={'UNKNOWN': 3}, hardcoded=False).identity
+
+tests/test_price_universal_recall.py:42: AssertionError
+______________ test_jsonld_seller_sku_never_becomes_gtin_evidence ______________
+
+    def test_jsonld_seller_sku_never_becomes_gtin_evidence():
+        identity = ProductIdentity(mpn="ZX-4109")
+        payload = {
+            "@context": "https://schema.org",
+            "@type": "Product",
+            "name": "Acme ZX-4109",
+            "mpn": "ZX-4109",
+            "sku": "SELLER-SKU-77",
+            "brand": {"@type": "Brand", "name": "Acme"},
+            "offers": {
+                "@type": "Offer",
+                "price": "299.00",
+                "priceCurrency": "PEN",
+                "availability": "https://schema.org/InStock",
+            },
+        }
+        html = f"<html><head><title>Acme ZX-4109</title><script type='application/ld+json'>{json.dumps(payload)}</script></head><body><h1>Acme ZX-4109</h1></body></html>"
+    
+        offers = extract_page_offers(html, "https://shop.example.pe/product/zx-4109", identity, channel="Shop")
+    
+        assert len(offers) == 1
+        assert offers[0].sku == "SELLER-SKU-77"
+>       assert offers[0].evidence.get("gtin") is None
+E       AssertionError: assert 'SELLER-SKU-77' is None
+E        +  where 'SELLER-SKU-77' = <built-in method get of dict object at 0x7f2c1644ccc0>('gtin')
+E        +    where <built-in method get of dict object at 0x7f2c1644ccc0> = {'mpn': 'ZX-4109', 'brand': 'Acme', 'model': 'Acme ZX-4109', 'title': 'Acme ZX-4109', ...}.get
+E        +      where {'mpn': 'ZX-4109', 'brand': 'Acme', 'model': 'Acme ZX-4109', 'title': 'Acme ZX-4109', ...} = PriceOffer(part_number='ZX-4109', brand=None, model=None, channel='Shop', seller_display_name=None, selling_price=299....vidence={'mpn': 'ZX-4109', 'brand': 'Acme', 'model': 'Acme ZX-4109', 'title': 'Acme ZX-4109', 'gtin': 'SELLER-SKU-77'}).evidence
+
+tests/test_price_universal_recall.py:68: AssertionError
+________ test_directed_site_query_filters_wrong_domains_before_ranking _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2c1cd0c830>
+
+    def test_directed_site_query_filters_wrong_domains_before_ranking(monkeypatch):
+        identity = ProductIdentity(mpn="ABC/123")
+        raw = [
+            (
+                "https://www.plazavea.com.pe/product/abc123",
+                "ABC/123 technical specifications product page",
+                "ABC/123 technical specifications",
+            ),
+            (
+                "https://www.memorykings.pe/producto/abc123",
+                "ABC/123 product",
+                "ABC/123",
+            ),
+        ]
+        monkeypatch.setattr(discovery, "_provider_search", lambda _query, _timeout: raw)
+    
+        urls = discovery.search_web_query(identity, '"ABC/123" site:memorykings.pe', limit=1, timeout=1)
+    
+>       assert urls == ["https://www.memorykings.pe/producto/abc123"]
+E       AssertionError: assert ['https://www...oduct/abc123'] == ['https://www...ducto/abc123']
+E         
+E         At index 0 diff: 'https://www.plazavea.com.pe/product/abc123' != 'https://www.memorykings.pe/producto/abc123'
+E         
+E         Full diff:
+E           [
+E         -     'https://www.memorykings.pe/producto/abc123',
+E         ?                   ----------           -
+E         +     'https://www.plazavea.com.pe/product/abc123',
+E         ?                  +++++++++++
+E           ]
+
+tests/test_price_universal_recall.py:89: AssertionError
+_________ test_target_domain_continues_while_later_query_adds_new_pdp __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2c163a9c70>
+
+    def test_target_domain_continues_while_later_query_adds_new_pdp(monkeypatch):
+        identity = ProductIdentity(mpn="ABC/123")
+        calls: list[str] = []
+    
+        def fake_search(_identity, query, limit=6, timeout=8, **_kwargs):
+            calls.append(query)
+            if len(calls) == 1:
+                return ["https://www.falabella.com.pe/falabella-pe/product/100/abc123/100"]
+            if len(calls) == 2:
+                return ["https://www.falabella.com.pe/falabella-pe/product/200/abc123/200"]
+            return []
+    
+        monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    
+        rows = price_peru_coverage._discover_target_domain(identity, "falabella.com.pe", 4)
+    
+>       assert len(calls) >= 2
+E       assert 1 >= 2
+E        +  where 1 = len(['"ABC/123" site:falabella.com.pe'])
+
+tests/test_price_universal_recall.py:108: AssertionError
+_ test_retail_query_plan_includes_safe_separator_alias_without_case_only_duplicates _
+
+    def test_retail_query_plan_includes_safe_separator_alias_without_case_only_duplicates():
+        identity = ProductIdentity(mpn="ABC/123")
+    
+        queries = price_peru_coverage._general_retail_queries(identity)
+        text = "\n".join(queries)
+    
+        assert '"ABC/123"' in text
+>       assert '"ABC123"' in text
+E       assert '"ABC123"' in '"ABC/123" precio Perú\n"ABC/123" "S/" Perú\n"ABC/123" tienda Perú\n"ABC/123" comprar Perú\n"ABC/123" site:infiniti.co...\n"ABC/123" site:memorykings.pe\n"ABC/123" site:estuyo.pe\n"ABC/123" site:bigmarketperu.com\n"ABC/123" site:efe.com.pe'
+
+tests/test_price_universal_recall.py:122: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_price_universal_recall.py::test_empty_coverage_preserves_not_searched_instead_of_no_hay - AssertionError: assert 'NO_HAY' not in {'NO_HAY'}
+FAILED tests/test_price_universal_recall.py::test_generic_product_type_cannot_become_brand_from_cross_source_serp_noise - AssertionError: assert 'Disco Duro' is None
+ +  where 'Disco Duro' = ProductIdentity(brand='Disco Duro', manufacturer=None, product_name=None, model=None, mpn='ZX-4109', sku=None, ean=Non...None, color=None, region=None, confidence=0.0, match_level='LOW', identifiers_confirmed=[], identifiers_conflicting=[]).brand
+ +    where ProductIdentity(brand='Disco Duro', manufacturer=None, product_name=None, model=None, mpn='ZX-4109', sku=None, ean=Non...None, color=None, region=None, confidence=0.0, match_level='LOW', identifiers_confirmed=[], identifiers_conflicting=[]) = IdentityBootstrapResult(identity=ProductIdentity(brand='Disco Duro', manufacturer=None, product_name=None, model=None,... page_probes_attempted=0, page_probes_succeeded=0, page_signals=[], source_role_counts={'UNKNOWN': 3}, hardcoded=False).identity
+FAILED tests/test_price_universal_recall.py::test_jsonld_seller_sku_never_becomes_gtin_evidence - AssertionError: assert 'SELLER-SKU-77' is None
+ +  where 'SELLER-SKU-77' = <built-in method get of dict object at 0x7f2c1644ccc0>('gtin')
+ +    where <built-in method get of dict object at 0x7f2c1644ccc0> = {'mpn': 'ZX-4109', 'brand': 'Acme', 'model': 'Acme ZX-4109', 'title': 'Acme ZX-4109', ...}.get
+ +      where {'mpn': 'ZX-4109', 'brand': 'Acme', 'model': 'Acme ZX-4109', 'title': 'Acme ZX-4109', ...} = PriceOffer(part_number='ZX-4109', brand=None, model=None, channel='Shop', seller_display_name=None, selling_price=299....vidence={'mpn': 'ZX-4109', 'brand': 'Acme', 'model': 'Acme ZX-4109', 'title': 'Acme ZX-4109', 'gtin': 'SELLER-SKU-77'}).evidence
+FAILED tests/test_price_universal_recall.py::test_directed_site_query_filters_wrong_domains_before_ranking - AssertionError: assert ['https://www...oduct/abc123'] == ['https://www...ducto/abc123']
+  
+  At index 0 diff: 'https://www.plazavea.com.pe/product/abc123' != 'https://www.memorykings.pe/producto/abc123'
+  
+  Full diff:
+    [
+  -     'https://www.memorykings.pe/producto/abc123',
+  ?                   ----------           -
+  +     'https://www.plazavea.com.pe/product/abc123',
+  ?                  +++++++++++
+    ]
+FAILED tests/test_price_universal_recall.py::test_target_domain_continues_while_later_query_adds_new_pdp - assert 1 >= 2
+ +  where 1 = len(['"ABC/123" site:falabella.com.pe'])
+FAILED tests/test_price_universal_recall.py::test_retail_query_plan_includes_safe_separator_alias_without_case_only_duplicates - assert '"ABC123"' in '"ABC/123" precio Perú\n"ABC/123" "S/" Perú\n"ABC/123" tienda Perú\n"ABC/123" comprar Perú\n"ABC/123" site:infiniti.co...\n"ABC/123" site:memorykings.pe\n"ABC/123" site:estuyo.pe\n"ABC/123" site:bigmarketperu.com\n"ABC/123" site:efe.com.pe'
+6 failed in 1.58s

@@ -14,7 +14,18 @@ def _identity():
     )
 
 
-def _record(*fields):
+def _printer_identity():
+    return ProductIdentity(
+        brand="Example",
+        model="Printer X1",
+        mpn="PX1-100",
+        confidence=.99,
+        match_level="EXACT",
+        identifiers_confirmed=["mpn"],
+    )
+
+
+def _record_for(identity, *fields):
     evidence = [
         Evidence(
             attribute=field,
@@ -34,7 +45,7 @@ def _record(*fields):
         for field, value in fields
     ]
     return ProductRecord(
-        identity=_identity(),
+        identity=identity,
         evidence=evidence,
         sources=["https://manufacturer.test/spec.pdf"],
         fetch={
@@ -48,6 +59,10 @@ def _record(*fields):
             },
         },
     )
+
+
+def _record(*fields):
+    return _record_for(_identity(), *fields)
 
 
 def _item():
@@ -138,3 +153,44 @@ def test_partial_pdf_sends_only_remaining_field_to_targeted_web(monkeypatch, tmp
     assert audit["missing_fields"] == ["driver_size"]
     assert any("SMART NEXT_SOURCE: WEB_STRUCTURED" in row and "driver_size" in row for row in logs)
     assert any("SMART QUERY:" in row and "engine=WEB_STRUCTURED" in row for row in logs)
+
+
+def test_batch_passes_classification_and_source_kind_to_real_missing_field_search(monkeypatch, tmp_path):
+    calls = []
+    printer = _printer_identity()
+    item = batch.BatchItem(
+        row=2,
+        sheet="Products",
+        identity=printer,
+        source_url="https://manufacturer.test/printer-spec.pdf",
+    )
+
+    monkeypatch.setattr(batch, "search_web", lambda *a, **k: [])
+    monkeypatch.setattr(batch, "discover_product_documents", lambda *a, **k: [])
+    monkeypatch.setattr(
+        batch,
+        "process_pdf_document",
+        lambda *a, **k: _record_for(printer, ("battery_capacity", "5000 mAh")),
+    )
+
+    def search_fields(_identity, fields, **kwargs):
+        calls.append((tuple(fields), dict(kwargs)))
+        return []
+
+    monkeypatch.setattr(batch, "search_web_for_fields", search_fields)
+
+    result = batch.scrape_item(
+        item,
+        str(tmp_path),
+        template_plan=_plan("battery_capacity", "warranty"),
+        source_strategy=SourceStrategy(web=True, pdf=True, ocr=False, mistral=False),
+    )
+
+    assert result is not None
+    assert calls
+    fields, kwargs = calls[0]
+    assert fields == ("warranty",)
+    assert kwargs["source_kind"] == "MANUFACTURER_SUPPORT"
+    assert kwargs["category"] == "PRINTER"
+    audit = result.evidence_graph["smart_orchestrator"]
+    assert audit["category"] == "PRINTER"

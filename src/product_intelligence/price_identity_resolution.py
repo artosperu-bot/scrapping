@@ -68,6 +68,20 @@ def resolve_price_identity(
     raw = _raw(original)
     if not raw:
         return PriceIdentityResolution(original, original.model_copy(deep=True), "FALLBACK_ORIGINAL", reason="NO_RAW_IDENTITY")
+
+    # Explicit user/catalog brand identity is already a strong signal. Avoid spending
+    # network budget resolving what is not unknown; Price still verifies each offer.
+    explicit_brand = str(original.brand or original.manufacturer or "").strip()
+    if explicit_brand and _brand_candidate_quality(explicit_brand, raw):
+        return PriceIdentityResolution(
+            original,
+            original.model_copy(deep=True),
+            "RESOLVED",
+            confidence=max(float(original.confidence or 0), 1.0),
+            reason="BRAND_PROVIDED",
+            evidence_backed=True,
+        )
+
     try:
         result = bootstrap(original.model_copy(deep=True), timeout=timeout, limit_per_query=limit_per_query)
     except Exception as exc:
@@ -101,8 +115,6 @@ def resolve_price_identity(
     if brand and not _brand_candidate_quality(brand, raw):
         return PriceIdentityResolution(original, original.model_copy(deep=True), "REJECTED_RESOLUTION", **common)
 
-    # A caller-provided brand/model is already explicit identity and does not need
-    # web corroboration. Newly learned brand identity must have independent evidence.
     learned_brand = bool(brand and not (original.brand or original.manufacturer))
     if learned_brand and not backed:
         return PriceIdentityResolution(original, original.model_copy(deep=True), "REJECTED_RESOLUTION", **common)

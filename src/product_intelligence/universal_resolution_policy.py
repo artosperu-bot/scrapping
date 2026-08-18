@@ -20,6 +20,46 @@ class ResolutionBudget:
     max_pdfs_analyzed_per_product: int = 8
     max_sources_accepted_per_product: int = 5
 
+
+@dataclass
+class SearchBudgetTracker:
+    """Mutable per-product runtime counter shared by discovery stages.
+
+    The tracker is intentionally tiny: callers reserve a query before sending it.
+    Once the global product budget is exhausted, later identity/gap stages fail
+    closed instead of silently opening more searches.
+    """
+
+    budget: ResolutionBudget
+    queries_used: int = 0
+    candidates_admitted: int = 0
+    pages_fetched: int = 0
+    pdfs_analyzed: int = 0
+    sources_accepted: int = 0
+
+    def reserve_query(self) -> bool:
+        if self.queries_used >= self.budget.max_search_queries_per_product:
+            return False
+        self.queries_used += 1
+        return True
+
+    def remaining_queries(self) -> int:
+        return max(0, self.budget.max_search_queries_per_product - self.queries_used)
+
+    def admit_candidates(self, count: int) -> int:
+        admitted = max(0, min(int(count), self.budget.max_candidates_per_query))
+        self.candidates_admitted += admitted
+        return admitted
+
+    def accept_source(self) -> bool:
+        if self.sources_accepted >= self.budget.max_sources_accepted_per_product:
+            return False
+        self.sources_accepted += 1
+        return True
+
+    def can_accept_source(self) -> bool:
+        return self.sources_accepted < self.budget.max_sources_accepted_per_product
+
 @dataclass(frozen=True)
 class SourceOutcome:
     source: str

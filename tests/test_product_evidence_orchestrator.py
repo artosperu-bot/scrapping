@@ -71,9 +71,9 @@ def test_pdf_resolves_all_important_fields_and_stops_before_web():
 
 
 def test_pdf_partial_passes_only_missing_fields_to_next_source():
-    orchestrator = ProductEvidenceOrchestrator(_identity(gtin="0123456789012"), ["battery_capacity", "gtin"])
+    orchestrator = ProductEvidenceOrchestrator(_identity(), ["battery_capacity", "gtin"])
     snapshot = orchestrator.observe_record(
-        _record(_evidence("battery_capacity", "5000 mAh"), identity=_identity(gtin="0123456789012")),
+        _record(_evidence("battery_capacity", "5000 mAh")),
         engine="PDF",
         source_url="https://example.test/spec.pdf",
     )

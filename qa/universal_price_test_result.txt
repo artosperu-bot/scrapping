@@ -1,45 +1,10 @@
-commit=2c454d37b212428e2b86c60831dff7140654e6d1
+commit=d46a2196d7a65121717867d17004e003a0b57c38
 pytest_exit_code=1
-......FFFF                                                               [100%]
+........FF                                                               [100%]
 =================================== FAILURES ===================================
-______ test_trace_preserves_fetch_blocked_instead_of_collapsing_to_no_hay ______
-
-    def test_trace_preserves_fetch_blocked_instead_of_collapsing_to_no_hay():
-        trace = PriceTrace()
-        trace.record("QUERY_EXECUTED", channel="Ripley", query='"ZX-4109" site:simple.ripley.com.pe')
-        trace.record("URL_DISCOVERED", channel="Ripley", url="https://simple.ripley.com.pe/zx-4109-pmp1")
-        trace.record("FETCH_STARTED", channel="Ripley", url="https://simple.ripley.com.pe/zx-4109-pmp1")
-        trace.record("FETCH_BLOCKED", channel="Ripley", url="https://simple.ripley.com.pe/zx-4109-pmp1", http_status=403)
-    
-        coverage = trace.coverage([])
->       ripley = next(row for row in coverage["channels"] if row["channel"] == "Ripley")
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       StopIteration
-
-tests/test_price_trace_identity_integration.py:37: StopIteration
-________ test_trace_preserves_parser_zero_and_offer_accepted_by_source _________
-
-    def test_trace_preserves_parser_zero_and_offer_accepted_by_source():
-        trace = PriceTrace()
-        falabella_url = "https://www.falabella.com.pe/falabella-pe/product/123/zx-4109/124"
-        trace.record("QUERY_EXECUTED", channel="Falabella", query='"ZX-4109" site:falabella.com.pe')
-        trace.record("URL_DISCOVERED", channel="Falabella", url=falabella_url)
-        trace.record("FETCH_OK", channel="Falabella", url=falabella_url)
-        trace.record("PARSER_STARTED", channel="Falabella", url=falabella_url)
-        trace.record("PARSER_ZERO_OFFERS", channel="Falabella", url=falabella_url)
-    
-        accepted = _offer("Oechsle", "https://www.oechsle.pe/zx-4109/p", availability="https://schema.org/InStock")
-        coverage = trace.coverage([accepted])
-        by_channel = {row["channel"]: row for row in coverage["channels"]}
-    
->       assert by_channel["Falabella"]["final_status"] == "PARSER_ZERO_OFFERS"
-               ^^^^^^^^^^^^^^^^^^^^^^^
-E       KeyError: 'Falabella'
-
-tests/test_price_trace_identity_integration.py:60: KeyError
 _ test_price_workflow_resolves_partial_identity_once_before_all_price_sources __
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7eff1ccded50>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7ff05196ef60>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_price_workflow_resolves_p0')
 
     def test_price_workflow_resolves_partial_identity_once_before_all_price_sources(monkeypatch, tmp_path):
@@ -73,7 +38,7 @@ E       AttributeError: <module 'product_intelligence.price_workflow' from '/hom
 tests/test_price_trace_identity_integration.py:91: AttributeError
 ____ test_unresolved_identity_continues_without_destroying_original_signal _____
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7eff1cbedfa0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7ff05196e870>
 
     def test_unresolved_identity_continues_without_destroying_original_signal(monkeypatch):
         original = ProductIdentity(mpn="ZX-4109")
@@ -92,8 +57,6 @@ E       AttributeError: <module 'product_intelligence.price_workflow' from '/hom
 
 tests/test_price_trace_identity_integration.py:116: AttributeError
 =========================== short test summary info ============================
-FAILED tests/test_price_trace_identity_integration.py::test_trace_preserves_fetch_blocked_instead_of_collapsing_to_no_hay - StopIteration
-FAILED tests/test_price_trace_identity_integration.py::test_trace_preserves_parser_zero_and_offer_accepted_by_source - KeyError: 'Falabella'
 FAILED tests/test_price_trace_identity_integration.py::test_price_workflow_resolves_partial_identity_once_before_all_price_sources - AttributeError: <module 'product_intelligence.price_workflow' from '/home/runner/work/scrapping/scrapping/src/product_intelligence/price_workflow.py'> has no attribute 'bootstrap_identity'
 FAILED tests/test_price_trace_identity_integration.py::test_unresolved_identity_continues_without_destroying_original_signal - AttributeError: <module 'product_intelligence.price_workflow' from '/home/runner/work/scrapping/scrapping/src/product_intelligence/price_workflow.py'> has no attribute 'bootstrap_identity'
-4 failed, 6 passed in 1.70s
+2 failed, 8 passed in 1.67s

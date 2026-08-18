@@ -47,7 +47,7 @@ class ProductEvidenceOrchestrator:
     ):
         self.identity = identity.model_copy(deep=True)
         self.required_fields = tuple(dict.fromkeys(str(field).strip() for field in required_fields or () if str(field).strip()))
-        self.category = category
+        self.category = str(category or "GENERAL").strip().upper() or "GENERAL"
         self.budget = budget or ResolutionBudget()
         self.budget_tracker = SearchBudgetTracker(self.budget)
         self.source_strategy = (source_strategy or SourceStrategy()).normalized()
@@ -172,6 +172,7 @@ class ProductEvidenceOrchestrator:
         ]
         return {
             "identity": self.store.identity.model_dump(),
+            "category": self.category,
             "required_fields": list(snapshot.required_fields),
             "resolved_fields": list(snapshot.resolved_fields),
             "missing_fields": list(snapshot.missing_fields),

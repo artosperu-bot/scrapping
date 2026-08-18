@@ -7,6 +7,7 @@ from typing import Any, Iterable
 from rapidfuzz import fuzz
 
 from .evidence_quality import generic_evidence_gate, strict_semantic_gate
+from .final_evidence_gate import evaluate_field_write
 from .models import Evidence, ProductRecord
 from .normalize import ALIASES, canonical_key, key_norm
 from .semantic_guard import FieldContract, validate_value
@@ -108,7 +109,14 @@ def candidates_for_field(
     contract: FieldContract,
 ) -> list[Candidate]:
     out: list[Candidate] = []
+    gate_field = target_canonical or contract.semantic or field_label
     for ev, q in iter_clean_evidence(rec):
+        # Identity/provenance is load-bearing and is checked before semantic
+        # similarity/scoring. A sibling document can therefore never compensate
+        # for a hard conflict by having a very high text similarity score.
+        write_decision = evaluate_field_write(rec, gate_field, ev)
+        if not write_decision.allowed:
+            continue
         sim = semantic_similarity(field_label, field_description, ev, target_canonical)
         if sim < .88:
             continue
@@ -126,7 +134,7 @@ def candidates_for_field(
         value, normalization_reason = normalize_value_for_excel(raw_value, field_description, contract)
         # Exact semantic identity dominates raw model confidence.
         score = (sim * .52) + (q * .30) + (guard_conf * .18)
-        reasons = [f"semantic={sim:.3f}", f"quality={q:.3f}", guard_reason, sem_reason]
+        reasons = [f"semantic={sim:.3f}", f"quality={q:.3f}", guard_reason, sem_reason, f"write_gate={write_decision.reason}"]
         if normalization_reason:
             reasons.append(normalization_reason)
         out.append(Candidate(value, ev, score, can, reasons))
@@ -146,6 +154,6 @@ def find_explicit_evidence(rec: ProductRecord, patterns: list[str]) -> list[Evid
     out=[]
     for ev, _q in iter_clean_evidence(rec):
         hay=key_norm(f"{ev.attribute} {ev.raw_value} {ev.normalized_value}")
-        if any(re.search(p, hay, re.I) for p in patterns):
+        if any(re.search(p, hay,re.I) for p in patterns):
             out.append(ev)
     return out

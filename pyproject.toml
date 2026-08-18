@@ -27,8 +27,8 @@ ocr = ["numpy>=1.26", "opencv-python-headless>=4.10", "paddleocr>=2.8", "paddlep
 documents = ["docling>=2.0"]
 api = ["fastapi>=0.115", "uvicorn>=0.30", "python-multipart>=0.0.9"]
 cli = ["typer>=0.12"]
-desktop = ["playwright>=1.55", "pyinstaller>=6.10", "keyring>=25.0", "yt-dlp>=2026.7.4", "imageio-ffmpeg>=0.6.0"]
-dev = ["pytest>=8.0", "keyring>=25.0", "yt-dlp>=2026.7.4", "imageio-ffmpeg>=0.6.0"]
+desktop = ["playwright>=1.55", "pyinstaller>=6.10", "keyring>=25.0", "yt-dlp[default]>=2026.7.4", "imageio-ffmpeg>=0.6.0"]
+dev = ["pytest>=8.0", "keyring>=25.0", "yt-dlp[default]>=2026.7.4", "imageio-ffmpeg>=0.6.0"]
 full = [
   "playwright>=1.55",
   "numpy>=1.26",
@@ -40,7 +40,7 @@ full = [
   "uvicorn>=0.30",
   "python-multipart>=0.0.9",
   "typer>=0.12",
-  "yt-dlp>=2026.7.4",
+  "yt-dlp[default]>=2026.7.4",
   "imageio-ffmpeg>=0.6.0",
 ]
 

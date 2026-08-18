@@ -1,0 +1,42 @@
+name: Universal Price Core Tests
+
+on:
+  push:
+    branches:
+      - feat/universal-price-intelligence
+    paths:
+      - 'src/product_intelligence/price_*.py'
+      - 'src/product_intelligence/discovery.py'
+      - 'src/product_intelligence/identity_bootstrap.py'
+      - 'src/product_intelligence/identifiers.py'
+      - 'src/product_intelligence/mercadolibre_oauth.py'
+      - 'tests/test_price_universal_recall.py'
+      - '.github/workflows/universal-price-core-tests.yml'
+  pull_request:
+    paths:
+      - 'src/product_intelligence/price_*.py'
+      - 'src/product_intelligence/discovery.py'
+      - 'src/product_intelligence/identity_bootstrap.py'
+      - 'src/product_intelligence/identifiers.py'
+      - 'src/product_intelligence/mercadolibre_oauth.py'
+      - 'tests/test_price_universal_recall.py'
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Run universal price focused tests
+        run: python -m pytest -q tests/test_price_universal_recall.py

@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from .models import ProductIdentity, ProductRecord, Evidence
 from .identity import compare_identity
 from .html_extract import extract_page, identity_from_page, table_evidence, structured_evidence
-from .pdf_extract import download_bytes, extract_pdf_bytes
+from .pdf_extract import download_bytes, extract_pdf, extract_pdf_bytes
 from .pdf_document_preflight import extract_verified_pdf_bytes
 from .record_builder import build_record_strict
 from .source_policy import classify_source

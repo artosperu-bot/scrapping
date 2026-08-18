@@ -18,6 +18,8 @@ from .price_history import (
     save_validated_source_bindings,
 )
 from .price_identity import competitor_key, dedupe_offers, filter_market_outliers, is_peru_offer
+from .price_identity_resolution import resolve_price_identity
+from .price_trace import PriceCoverageTrace
 from .price_models import PriceOffer
 from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
 from .web_fetch import fetch_page
@@ -233,17 +235,33 @@ def _refresh_learned_sources(urls: list[str], identity: ProductIdentity, emit) -
     return dedupe_offers(rows)
 
 
-def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit) -> list[PriceOffer]:
+def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit, *, trace: PriceCoverageTrace | None = None) -> list[PriceOffer]:
     rows: list[PriceOffer] = []
     emit("status", stage="validating", message=f"Revisando {len(sources)} publicaciones web de Perú")
     for pos, url in enumerate(sources, 1):
         channel = _channel_from_url(url)
+        if trace:
+            trace.record(channel, "URL_DISCOVERED", url=url)
+            trace.record(channel, "FETCH_STARTED", url=url)
         try:
             emit("page", url=url, channel=channel, position=pos, total=len(sources), status="fetching")
             html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
-            rows.extend(_augment_page_rows(url, html, page_rows, identity, channel))
-            emit("page", url=url, channel=channel, status="parsed", offers=len(page_rows))
+            augmented = _augment_page_rows(url, html, page_rows, identity, channel)
+            rows.extend(augmented)
+            if trace:
+                trace.record(channel, "FETCH_OK", url=url)
+                trace.record(channel, "PARSER_STARTED", url=url)
+                if augmented:
+                    trace.record(channel, "IDENTITY_ACCEPTED", url=url)
+                else:
+                    trace.record(channel, "PARSER_ZERO_OFFERS", url=url)
+            emit("page", url=url, channel=channel, status="parsed", offers=len(augmented))
         except Exception as exc:
+            if trace:
+                if isinstance(exc, (requests.Timeout, TimeoutError)):
+                    trace.record(channel, "FETCH_TIMEOUT", url=url, detail=type(exc).__name__)
+                else:
+                    trace.record(channel, "FETCH_BLOCKED", url=url, detail=type(exc).__name__)
             emit("page", url=url, channel=channel, status="error", error=f"{type(exc).__name__}: {exc}")
     return rows
 
@@ -257,34 +275,60 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         if on_event:
             on_event({"type": event_type, "identity": identity.model_dump(), **payload})
 
+    resolution = resolve_price_identity(identity)
+    working_identity = resolution.identity
+    trace = PriceCoverageTrace()
+    emit(
+        "identity",
+        input_identity=identity.model_dump(),
+        resolved_identity=working_identity.model_dump(),
+        resolution_status=resolution.status,
+        resolution_confidence=resolution.confidence,
+        resolution_reason=resolution.reason,
+        evidence_backed=resolution.evidence_backed,
+        official_domain_hint=resolution.official_domain_hint,
+    )
+
     offers: list[PriceOffer] = []
     learned_sources = load_validated_source_urls(output_root, identity)
     warm_path = bool(learned_sources)
     emit("status", stage="searching", message="Consultando APIs y fuentes estructuradas de Perú")
 
     for channel, base_url in PERU_STRUCTURED_SOURCES:
+        trace.record(channel, "FETCH_STARTED", url=base_url)
         try:
-            rows = _try_vtex(base_url, identity, channel)
+            rows = _try_vtex(base_url, working_identity, channel)
             offers.extend(rows)
+            trace.record(channel, "FETCH_OK", url=base_url)
+            if rows:
+                trace.record(channel, "IDENTITY_ACCEPTED", url=base_url)
+            else:
+                trace.record(channel, "PARSER_ZERO_OFFERS", url=base_url)
             emit("source", channel=channel, status="ok", offers=len(rows), method="structured_direct")
         except Exception as exc:
+            trace.record(channel, "FETCH_BLOCKED", url=base_url, detail=type(exc).__name__)
             emit("source", channel=channel, status="error", error=f"structured: {type(exc).__name__}: {exc}")
 
     try:
-        ml = _try_mercadolibre(identity)
+        ml = _try_mercadolibre(working_identity)
         offers.extend(ml)
+        if ml:
+            trace.record("MercadoLibre", "IDENTITY_ACCEPTED")
+        else:
+            trace.record("MercadoLibre", "QUERY_EXECUTED_NO_RESULT")
         emit("source", channel="MercadoLibre", status="ok", offers=len(ml), method="mercadolibre_mpe")
     except Exception as exc:
+        trace.record("MercadoLibre", "FETCH_BLOCKED", detail=type(exc).__name__)
         emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
 
     retail_sources: list[str] = []
     if warm_path:
         emit("source", channel="learned", status="refreshing", urls=len(learned_sources), method="validated_source_memory")
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="price-warm") as pool:
-            learned_future = pool.submit(_refresh_learned_sources, learned_sources, identity, emit)
+            learned_future = pool.submit(_refresh_learned_sources, learned_sources, working_identity, emit)
             retail_future = pool.submit(
                 discover_general_peru_retailers,
-                identity,
+                working_identity,
                 limit=max(10, max_sources // 2),
             )
             try:
@@ -302,24 +346,24 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
         learned_set = set(learned_sources)
         fresh_retail = [url for url in retail_sources if url not in learned_set]
-        offers.extend(_collect_web_offers(fresh_retail[:max_sources], identity, emit))
+        offers.extend(_collect_web_offers(fresh_retail[:max_sources], working_identity, emit, trace=trace))
 
     marketplace_sources: list[str] = []
     base_sources: list[str] = []
     if not warm_path or not _has_trusted_offer(offers):
         try:
-            marketplace_sources = discover_additional_peru_pdps(identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
+            marketplace_sources = discover_additional_peru_pdps(working_identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
             emit("source", channel="peru_directed", status="ok", offers=0, urls=len(marketplace_sources), method="targeted_pdp")
         except Exception as exc:
             emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
         if not warm_path:
             try:
-                retail_sources = discover_general_peru_retailers(identity, limit=max(10, max_sources // 2))
+                retail_sources = discover_general_peru_retailers(working_identity, limit=max(10, max_sources // 2))
                 emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
             except Exception as exc:
                 emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
         try:
-            base_sources = discover_price_sources(identity, limit=max_sources)
+            base_sources = discover_price_sources(working_identity, limit=max_sources)
             emit("source", channel="web", status="ok", offers=0, urls=len(base_sources), method="generic_peru")
         except Exception as exc:
             emit("source", channel="web", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
@@ -330,15 +374,27 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             for url in _merge_sources(marketplace_sources, retail_sources, base_sources, limit=max_sources)
             if url not in skip_urls
         ]
-        offers.extend(_collect_web_offers(sources, identity, emit))
+        offers.extend(_collect_web_offers(sources, working_identity, emit, trace=trace))
 
     deduped = dedupe_offers(offers)
     trusted = [row for row in deduped if _is_trusted_final_offer(row)]
+    trusted_ids = {id(row) for row in trusted}
+    for row in deduped:
+        if id(row) not in trusted_ids:
+            trace.record(row.channel, "PRICE_REJECTED", url=row.url)
     valid, rejected_outliers = filter_market_outliers(trusted)
+    for row in rejected_outliers:
+        trace.record(row.channel, "PRICE_REJECTED", url=row.url, detail="MARKET_OUTLIER")
     if rejected_outliers:
         emit("quality", rejected_outliers=len(rejected_outliers), prices=[r.selling_price for r in rejected_outliers])
+    for row in valid:
+        unavailable = str(row.availability or "").casefold()
+        if row.stock == 0 or "outofstock" in unavailable or unavailable == "unavailable":
+            trace.record(row.channel, "OUT_OF_STOCK", url=row.url, stock=False, seller=row.seller_display_name)
+        else:
+            trace.record(row.channel, "OFFER_ACCEPTED", url=row.url, stock=row.stock, seller=row.seller_display_name)
 
-    coverage = build_channel_coverage(valid)
+    coverage = build_channel_coverage(valid, source_states=trace.source_states())
     emit("status", stage="saving", message=f"Guardando {len(valid)} ofertas peruanas validadas")
     save_price_run(output_root, valid)
     save_validated_source_bindings(output_root, identity, valid)
@@ -351,7 +407,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         offers=len(valid),
         channels=len({r.channel for r in valid}),
         sellers=len({competitor_key(r) for r in valid}),
-        target_channels_found=sum(1 for row in coverage["channels"] if row["status"] == "FOUND"),
+        target_channels_found=sum(1 for row in coverage["channels"] if row.get("offers")),
         individual_stores=coverage["individual_store_count"],
         best_by_currency=_best_by_currency(valid),
     )

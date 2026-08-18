@@ -147,7 +147,7 @@ def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_do
                 break
         if len(found) >= limit_per_domain:
             break
-    if len(found) < limit_per_domain and model:
+    if not found and model:
         for query in _alias_queries(identity, domain):
             try:
                 urls = search_web_query(alias_identity, query, limit=limit_per_domain, timeout=12, required_domain=domain)

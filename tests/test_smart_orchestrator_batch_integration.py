@@ -194,3 +194,44 @@ def test_batch_passes_classification_and_source_kind_to_real_missing_field_searc
     assert kwargs["category"] == "PRINTER"
     audit = result.evidence_graph["smart_orchestrator"]
     assert audit["category"] == "PRINTER"
+
+
+def test_pdf_zero_with_exact_identity_continues_to_targeted_web(monkeypatch, tmp_path):
+    targeted_calls = []
+    logs = []
+    candidate = type(
+        "Candidate",
+        (),
+        {"url": "https://manufacturer.test/model-x", "likely_official": True, "score": 1.0},
+    )()
+
+    monkeypatch.setattr(batch, "search_web", lambda *a, **k: (_ for _ in ()).throw(AssertionError("broad WEB must not run before PDF")))
+    monkeypatch.setattr(batch, "discover_product_documents", lambda *a, **k: [])
+
+    def search_fields(_identity, fields, **kwargs):
+        targeted_calls.append((tuple(fields), dict(kwargs)))
+        return [candidate]
+
+    monkeypatch.setattr(batch, "search_web_for_fields", search_fields)
+
+    class FakePipeline:
+        def process_url(self, *args, **kwargs):
+            return _record(("driver_size", "40 mm"))
+
+    monkeypatch.setattr(batch, "ProductPipeline", FakePipeline)
+
+    item = batch.BatchItem(row=2, sheet="Products", identity=_identity())
+    result = batch.scrape_item(
+        item,
+        str(tmp_path),
+        template_plan=_plan("driver_size"),
+        log=logs.append,
+        source_strategy=SourceStrategy(web=True, pdf=True, ocr=False, mistral=False),
+    )
+
+    assert result is not None
+    assert targeted_calls
+    assert targeted_calls[0][0] == ("driver_size",)
+    assert targeted_calls[0][1]["source_kind"] == "MANUFACTURER"
+    assert result.evidence_graph["smart_orchestrator"]["resolved_fields"] == ["driver_size"]
+    assert any("SMART NEXT_SOURCE: WEB_STRUCTURED" in row for row in logs)

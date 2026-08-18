@@ -7,6 +7,7 @@ on:
     paths:
       - 'tests/test_price_progressive_budget.py'
       - 'scripts/qa_apply_progressive_price_budget.py'
+      - 'scripts/qa_fix_progressive_plan_order.py'
       - '.github/workflows/universal-price-apply-progressive-budget.yml'
 
 permissions:
@@ -44,6 +45,7 @@ jobs:
             if [ "$red" -eq 0 ]; then
               echo "RED_EXPECTATION_FAILED=progressive budget already satisfied unexpectedly"
               echo "PATCH_EXIT=NOT_RUN"
+              echo "ORDER_FIX_EXIT=NOT_RUN"
               echo "FOCUSED_EXIT=NOT_RUN"
               echo "ADJACENT_EXIT=NOT_RUN"
               exit 91
@@ -54,9 +56,20 @@ jobs:
             patch_status=$?
             echo "PATCH_EXIT=$patch_status"
             if [ "$patch_status" -ne 0 ]; then
+              echo "ORDER_FIX_EXIT=NOT_RUN"
               echo "FOCUSED_EXIT=NOT_RUN"
               echo "ADJACENT_EXIT=NOT_RUN"
               exit 92
+            fi
+
+            echo "=== PRESERVE MODEL FALLBACK ORDER ==="
+            python scripts/qa_fix_progressive_plan_order.py
+            order_status=$?
+            echo "ORDER_FIX_EXIT=$order_status"
+            if [ "$order_status" -ne 0 ]; then
+              echo "FOCUSED_EXIT=NOT_RUN"
+              echo "ADJACENT_EXIT=NOT_RUN"
+              exit 94
             fi
 
             echo "=== FOCUSED GREEN ==="
@@ -92,3 +105,4 @@ jobs:
           git diff --cached --quiet || git commit -m 'perf: bound progressive price discovery queries'
           git push origin HEAD:feat/universal-price-intelligence
           exit $overall
+# retrigger: 2

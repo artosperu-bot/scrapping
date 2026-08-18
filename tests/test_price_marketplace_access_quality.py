@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
-
-import pytest
-import requests
 
 from product_intelligence import mercadolibre_oauth, price_workflow
 from product_intelligence.mercadolibre_oauth import MercadoLibreAuthError, MercadoLibreAuthService
@@ -43,18 +39,18 @@ def test_mercadolibre_credentials_fall_back_to_environment_when_keyring_is_unava
     def unavailable(_name):
         raise RuntimeError("NoKeyringError: no recommended backend")
 
-    monkeypatch.setattr(mercadolibre_oauth, "get_key", unavailable)
+    monkeypatch.setattr(mercadolibre_oauth, "load_value", unavailable)
     monkeypatch.setenv("MERCADOLIBRE_CLIENT_ID", "client-from-env")
     monkeypatch.setenv("MERCADOLIBRE_CLIENT_SECRET", "secret-from-env")
     monkeypatch.setenv("MERCADOLIBRE_ACCESS_TOKEN", "access-from-env")
     monkeypatch.setenv("MERCADOLIBRE_REFRESH_TOKEN", "refresh-from-env")
 
     service = MercadoLibreAuthService(timeout=1)
+    current = service.current_state()
 
-    assert service.client_id == "client-from-env"
-    assert service.client_secret == "secret-from-env"
-    current = service.current()
     assert current is not None
+    assert current.client_id == "client-from-env"
+    assert current.client_secret == "secret-from-env"
     assert current.access_token == "access-from-env"
     assert current.refresh_token == "refresh-from-env"
 
@@ -64,7 +60,7 @@ def test_ml_auth_failure_is_semantic_and_does_not_abort_other_price_fallbacks(mo
     events: list[dict] = []
 
     monkeypatch.setattr(price_workflow, "PERU_STRUCTURED_SOURCES", ())
-    monkeypatch.setattr(price_workflow, "_try_mercadolibre", lambda *_a, **_k: (_ for _ in ()).throw(MercadoLibreAuthError("missing credentials")))
+    monkeypatch.setattr(price_workflow, "_try_mercadolibre", lambda *_a, **_k: (_ for _ in ()).throw(MercadoLibreAuthError("ML_AUTH_NOT_CONFIGURED")))
     monkeypatch.setattr(price_workflow, "discover_additional_peru_pdps", lambda *_a, **_k: [])
     monkeypatch.setattr(price_workflow, "discover_general_peru_retailers", lambda *_a, **_k: [])
     monkeypatch.setattr(price_workflow, "discover_price_sources", lambda *_a, **_k: [])

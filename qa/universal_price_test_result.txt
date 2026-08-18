@@ -1,18 +1,111 @@
-commit=051deec0a9933967b19147d663770ea740aa0610
-pytest_exit_code=2
+commit=87190da23163ee659af6b1999350ac1f30fb1cd7
+pytest_exit_code=1
+..........FFF.FF                                                         [100%]
+=================================== FAILURES ===================================
+_____ test_directed_queries_use_safe_separator_aliases_and_verified_brand ______
 
-==================================== ERRORS ====================================
-___________ ERROR collecting tests/test_price_query_capabilities.py ____________
-ImportError while importing test module '/home/runner/work/scrapping/scrapping/tests/test_price_query_capabilities.py'.
-Hint: make sure your test modules/packages have valid Python names.
-Traceback:
-/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/importlib/__init__.py:90: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-tests/test_price_query_capabilities.py:8: in <module>
-    from product_intelligence.price_source_capabilities import SourceCapabilityRegistry, detect_platform
-E   ModuleNotFoundError: No module named 'product_intelligence.price_source_capabilities'
+    def test_directed_queries_use_safe_separator_aliases_and_verified_brand():
+        identity = ProductIdentity(brand="Acme", model="Widget Pro", mpn="ABC/123")
+    
+        queries = price_peru_coverage._queries(identity, "example.com.pe")
+        joined = "\n".join(queries)
+    
+        assert '"ABC/123" site:example.com.pe' in joined
+>       assert '"ABC123" site:example.com.pe' in joined
+E       assert '"ABC123" site:example.com.pe' in '"ABC/123" site:example.com.pe\n"ABC/123" "Widget Pro" site:example.com.pe\n"Widget Pro" Acme site:example.com.pe'
+
+tests/test_price_query_capabilities.py:18: AssertionError
+________ test_search_web_query_reports_raw_in_domain_and_ranked_counts _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f80082f6b10>
+
+    def test_search_web_query_reports_raw_in_domain_and_ranked_counts(monkeypatch):
+        identity = ProductIdentity(mpn="ABC/123")
+        raw = [
+            ("https://shop.example.com.pe/product/abc123", "ABC/123", "ABC/123"),
+            ("https://other.com.pe/product/abc123", "ABC/123", "ABC/123"),
+        ]
+        events: list[dict] = []
+        monkeypatch.setattr(discovery, "_provider_search", lambda _query, _timeout: raw)
+    
+>       urls = discovery.search_web_query(
+            identity,
+            '"ABC/123" site:shop.example.com.pe',
+            limit=5,
+            timeout=1,
+            on_event=events.append,
+        )
+E       TypeError: search_web_query() got an unexpected keyword argument 'on_event'
+
+tests/test_price_query_capabilities.py:33: TypeError
+_ test_target_domain_reports_information_gain_and_stops_when_candidate_budget_is_full _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f800b1fc260>
+
+    def test_target_domain_reports_information_gain_and_stops_when_candidate_budget_is_full(monkeypatch):
+        identity = ProductIdentity(mpn="ABC/123")
+        calls: list[str] = []
+        events: list[dict] = []
+    
+        def fake_search(_identity, query, limit=6, timeout=8, on_event=None, **_kwargs):
+            calls.append(query)
+            index = len(calls)
+            url = f"https://example.com.pe/product/abc123-{index}"
+            if on_event:
+                on_event({"stage": "QUERY_EXECUTED", "query": query, "raw_results": 1, "valid_in_domain": 1, "ranked_results": 1, "domain": "example.com.pe"})
+            return [url]
+    
+        monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    
+>       rows = price_peru_coverage._discover_target_domain(identity, "example.com.pe", 2, on_event=events.append)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: _discover_target_domain() got an unexpected keyword argument 'on_event'
+
+tests/test_price_query_capabilities.py:65: TypeError
+______________ test_platform_detection_prefers_reusable_families _______________
+
+    def test_platform_detection_prefers_reusable_families():
+>       assert detect_platform("https://x.com.pe/p", '<script src="/arquivos/vtex.js"></script>') == "vtex"
+E       AssertionError: assert 'custom' == 'vtex'
+E         
+E         - vtex
+E         + custom
+
+tests/test_price_query_capabilities.py:90: AssertionError
+___ test_source_capability_registry_roundtrip_keeps_timestamped_observations ___
+
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_source_capability_registr0')
+
+    def test_source_capability_registry_roundtrip_keeps_timestamped_observations(tmp_path: Path):
+        path = tmp_path / "source_capabilities.json"
+        registry = SourceCapabilityRegistry(path)
+        registry.observe(
+            "https://nuevatienda.com.pe/product/abc123",
+            platform="shopify",
+            category="general_retail",
+            discovery_method="open_peru_search",
+            extraction_method="shopify_product_json",
+            price_capable=True,
+            stock_capable=True,
+            seller_capable=False,
+            success=True,
+        )
+        registry.save()
+    
+        loaded = SourceCapabilityRegistry(path)
+        row = loaded.get("nuevatienda.com.pe")
+    
+>       assert row is not None
+E       assert None is not None
+
+tests/test_price_query_capabilities.py:116: AssertionError
 =========================== short test summary info ============================
-ERROR tests/test_price_query_capabilities.py
-!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
-1 error in 1.66s
+FAILED tests/test_price_query_capabilities.py::test_directed_queries_use_safe_separator_aliases_and_verified_brand - assert '"ABC123" site:example.com.pe' in '"ABC/123" site:example.com.pe\n"ABC/123" "Widget Pro" site:example.com.pe\n"Widget Pro" Acme site:example.com.pe'
+FAILED tests/test_price_query_capabilities.py::test_search_web_query_reports_raw_in_domain_and_ranked_counts - TypeError: search_web_query() got an unexpected keyword argument 'on_event'
+FAILED tests/test_price_query_capabilities.py::test_target_domain_reports_information_gain_and_stops_when_candidate_budget_is_full - TypeError: _discover_target_domain() got an unexpected keyword argument 'on_event'
+FAILED tests/test_price_query_capabilities.py::test_platform_detection_prefers_reusable_families - AssertionError: assert 'custom' == 'vtex'
+  
+  - vtex
+  + custom
+FAILED tests/test_price_query_capabilities.py::test_source_capability_registry_roundtrip_keeps_timestamped_observations - assert None is not None
+5 failed, 11 passed in 1.41s

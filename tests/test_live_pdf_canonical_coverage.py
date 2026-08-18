@@ -15,10 +15,13 @@ def test_live_discovery_reports_four_language_variants_as_one_unique_document(tm
         confidence=.99,
     )
     resolution = SimpleNamespace(
+        raw="JBLQ350WLBLKAM",
         identity=identity,
         status="RESOLVED",
         source="fixture",
         official_domain="jbl.com",
+        confidence=.99,
+        diagnostics={},
         trace=[],
     )
     candidates = [
@@ -32,14 +35,15 @@ def test_live_discovery_reports_four_language_variants_as_one_unique_document(tm
         for language in ("EN", "DE", "NL", "DA")
     ]
 
-    monkeypatch.setattr(live_pdf_discovery, "resolve_pdf_product_identity", lambda *a, **k: resolution)
-    monkeypatch.setattr(live_pdf_discovery, "discover_review_candidates", lambda *a, **k: list(candidates))
+    monkeypatch.setattr(live_pdf_discovery, "resolve_pdf_identity", lambda *a, **k: resolution)
+    monkeypatch.setattr(live_pdf_discovery, "discover_review_product_documents", lambda *a, **k: list(candidates))
+    monkeypatch.setattr(live_pdf_discovery, "_review_candidate", lambda row: row)
 
     def inspect(_identity, url, cache_dir, **kwargs):
         language = Path(url).stem.rsplit("_", 1)[-1]
         local_path = Path(cache_dir) / f"spec_{language}.pdf"
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_bytes(b"%PDF-fixture")
+        local_path.write_bytes(f"%PDF-fixture-{language}".encode())
         return SimpleNamespace(
             url=url,
             final_url=url,
@@ -63,9 +67,9 @@ def test_live_discovery_reports_four_language_variants_as_one_unique_document(tm
 
     monkeypatch.setattr(live_pdf_discovery, "inspect_pdf_candidate", inspect)
 
-    result = live_pdf_discovery.search_product_pdfs_by_part_number(
-        "JBLQ350WLBLKAM",
-        output_dir=tmp_path,
+    result = live_pdf_discovery.discover_validated_review_pdfs_live(
+        identity,
+        tmp_path,
         limit=8,
     )
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Any
 from urllib.parse import urlparse
 import shutil
+import sys
 
 
 class VideoDownloadError(RuntimeError):
@@ -60,6 +61,52 @@ def resolve_ffmpeg_exe() -> str | None:
     return None
 
 
+def _runtime_roots() -> list[Path]:
+    roots: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))
+    if getattr(sys, "frozen", False):
+        try:
+            roots.append(Path(sys.executable).resolve().parent)
+        except Exception:
+            pass
+    try:
+        roots.append(Path(__file__).resolve().parents[2])
+    except Exception:
+        pass
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def resolve_js_runtime() -> str | None:
+    """Resolve the bundled Deno runtime first, then a system Deno installation."""
+    names = ("deno.exe", "deno")
+    for root in _runtime_roots():
+        for name in names:
+            candidate = root / "vendor" / "deno" / name
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    return str(candidate)
+            except OSError:
+                continue
+    system = shutil.which("deno")
+    if system:
+        try:
+            candidate = Path(system)
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return str(candidate)
+        except OSError:
+            pass
+    return None
+
+
 def _validate_url(url: str) -> str:
     value = str(url or "").strip()
     parsed = urlparse(value)
@@ -87,6 +134,14 @@ def _normalize_error(exc: Exception) -> VideoDownloadError:
         code = "GEO_BLOCKED"
     elif any(token in lowered for token in ("429", "rate limit", "too many requests")):
         code = "RATE_LIMITED"
+    elif any(token in lowered for token in (
+        "no supported javascript runtime",
+        "javascript runtime",
+        "js runtime",
+        "ejs challenge",
+        "yt-dlp-ejs",
+    )):
+        code = "JS_RUNTIME_UNAVAILABLE"
     elif "ffmpeg" in lowered:
         code = "FFMPEG_UNAVAILABLE"
     else:
@@ -97,6 +152,33 @@ def _normalize_error(exc: Exception) -> VideoDownloadError:
 def _error_code(exc: Exception) -> str:
     text = str(exc or "")
     return text.split(":", 1)[0].strip().upper()
+
+
+def _known_platform_url(url: str) -> bool:
+    host = (urlparse(str(url or "")).hostname or "").lower()
+    known = (
+        "youtube.com",
+        "youtube-nocookie.com",
+        "youtu.be",
+        "vimeo.com",
+        "tiktok.com",
+        "dailymotion.com",
+        "dai.ly",
+        "facebook.com",
+        "fb.watch",
+        "instagram.com",
+        "twitch.tv",
+    )
+    return any(host == domain or host.endswith(f".{domain}") for domain in known)
+
+
+def _should_discover_page(source_url: str, error: VideoDownloadError) -> bool:
+    code = _error_code(error)
+    if code == "UNSUPPORTED_URL":
+        return True
+    if code in {"DOWNLOAD_FAILED", "OUTPUT_MP4_NOT_FOUND"}:
+        return not _known_platform_url(source_url)
+    return False
 
 
 def _candidate_paths(info: dict[str, Any], ydl: Any, output_dir: Path) -> list[Path]:
@@ -202,6 +284,7 @@ def _download_with_yt_dlp(
 ) -> VideoDownloadResult:
     selector = build_format_selector(quality)
     ffmpeg_exe = resolve_ffmpeg_exe()
+    js_runtime = resolve_js_runtime()
 
     def emit(**payload):
         if on_progress:
@@ -226,11 +309,18 @@ def _download_with_yt_dlp(
             "quiet": True,
             "no_warnings": True,
             "restrictfilenames": False,
+            "retries": 3,
+            "fragment_retries": 3,
         }
         if ffmpeg_exe:
             # imageio-ffmpeg uses versioned executable names. Passing only its
             # parent directory makes yt-dlp search for a nonexistent ffmpeg.exe.
             options["ffmpeg_location"] = str(ffmpeg_exe)
+        if js_runtime:
+            # yt-dlp's Python API expects the JS runtime executable under the
+            # `path` key. The packaged app bundles Deno so YouTube EJS
+            # challenges do not depend on software installed on the user's PC.
+            options["js_runtimes"] = {"deno": {"path": str(js_runtime)}}
 
         emit(phase="RESOLVE")
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -297,7 +387,7 @@ def download_social_video(
             on_progress=on_progress,
         )
     except VideoDownloadError as direct_error:
-        if _error_code(direct_error) != "UNSUPPORTED_URL":
+        if not _should_discover_page(source_url, direct_error):
             raise
 
         emit(phase="DISCOVER_PAGE")

@@ -50,6 +50,19 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Stage bundled Deno runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path 'vendor/deno' | Out-Null
+          $deno = (Get-Command deno).Source
+          if (-not $deno) { throw 'Deno runtime was not installed' }
+          Copy-Item $deno 'vendor/deno/deno.exe' -Force
+          & 'vendor/deno/deno.exe' --version
+
       - name: Install desktop profile
         shell: cmd
         run: |
@@ -63,6 +76,11 @@ jobs:
           $projectVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
           if ($appVersion.Trim() -ne $projectVersion.Trim()) { throw "Version mismatch: app=$appVersion project=$projectVersion" }
           if ($appVersion.Trim() -ne '0.10.35') { throw "Unexpected release candidate version: $appVersion" }
+
+      - name: Verify YouTube runtime wiring
+        shell: pwsh
+        run: |
+          python -c "import yt_dlp_ejs; from product_intelligence.social_video_downloader import resolve_js_runtime; p=resolve_js_runtime(); assert p and p.lower().endswith('deno.exe'), p; print('YOUTUBE_EJS_RUNTIME=PASS', p)"
 
       - name: Run regression tests
         shell: cmd
@@ -97,12 +115,18 @@ jobs:
           $processing = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'processing.gif'
           $completed = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'completed.gif'
           $ffmpegFiles = Get-ChildItem 'dist/ProductIntelligence' -Recurse -File | Where-Object { $_.Name -match '^ffmpeg.*\.exe$' }
+          $denoFiles = Get-ChildItem 'dist/ProductIntelligence' -Recurse -Filter 'deno.exe'
+          $ejsFiles = Get-ChildItem 'dist/ProductIntelligence' -Recurse -File | Where-Object { $_.FullName -match 'yt_dlp_ejs' }
           if (-not $processing) { throw 'processing.gif not bundled' }
           if (-not $completed) { throw 'completed.gif not bundled' }
           if (-not $ffmpegFiles) { throw 'Bundled FFmpeg binary missing' }
+          if (-not $denoFiles) { throw 'Bundled Deno runtime missing' }
+          if (-not $ejsFiles) { throw 'Bundled yt-dlp EJS scripts missing' }
           Write-Host "processing.gif=$($processing.FullName)"
           Write-Host "completed.gif=$($completed.FullName)"
           Write-Host "ffmpeg=$($ffmpegFiles.FullName -join ', ')"
+          Write-Host "deno=$($denoFiles.FullName -join ', ')"
+          Write-Host "ejs_files=$($ejsFiles.Count)"
 
       - name: Run packaged SMART E2E smoke
         shell: pwsh

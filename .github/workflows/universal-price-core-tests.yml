@@ -61,3 +61,4 @@ jobs:
           git diff --cached --quiet || git commit -m 'test: persist universal price focused result'
           git push origin HEAD:feat/universal-price-intelligence
           exit $status
+# red-marker: 2

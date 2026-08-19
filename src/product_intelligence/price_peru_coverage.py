@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from .discovery import search_web_query
 from .models import ProductIdentity
 from .price_channel_registry import TARGET_CHANNELS
+from .price_queries import build_price_query_plan
 
 PERU_TARGET_DOMAINS: tuple[str, ...] = tuple(dict.fromkeys(
     domain for spec in TARGET_CHANNELS for domain in spec.domains
@@ -80,11 +81,12 @@ def _deterministic_pdps(identity: ProductIdentity) -> list[str]:
 
 
 def _queries(identity: ProductIdentity, domain: str) -> list[str]:
+    plan = build_price_query_plan(identity, limit=8)
     strong = _strong(identity)
     model = str(identity.model or identity.product_name or "").strip()
     brand = str(identity.brand or "").strip()
-    q = [f'"{strong}" site:{domain}']
-    if model:
+    q = [f'"{row.query}" site:{domain}' for row in plan]
+    if model and strong:
         q += [f'"{strong}" "{model}" site:{domain}', f'"{model}" {brand} site:{domain}'.strip()]
     extras = {
         "falabella.com.pe": [
@@ -106,7 +108,15 @@ def _queries(identity: ProductIdentity, domain: str) -> list[str]:
         "jbl.com.pe": [f'"{model}" site:jbl.com.pe'] if model else [],
     }
     q += extras.get(domain, [])
-    return list(dict.fromkeys(x for x in q if x.strip()))
+    seen: set[str] = set()
+    out: list[str] = []
+    for query in q:
+        clean = query.strip()
+        key = clean.casefold()
+        if clean and key not in seen:
+            seen.add(key)
+            out.append(clean)
+    return out
 
 
 def _alias_queries(identity: ProductIdentity, domain: str) -> list[str]:
@@ -130,6 +140,10 @@ def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_do
         if _host_matches(seed, domain) and _is_pdp(seed, domain, strong):
             seen.add(seed)
             found.append(seed)
+    # Primary signal queries include safe MPN separator aliases. Finding an exact
+    # PDP does not stop later signals; only the per-domain budget does. This keeps
+    # publication/seller recall while retaining the older model-only alias lane as
+    # an emergency fallback when no primary signal found anything.
     for query in _queries(identity, domain):
         try:
             urls = search_web_query(identity, query, limit=limit_per_domain, timeout=12, required_domain=domain)
@@ -196,15 +210,29 @@ def _is_peru_retail_candidate(url: str, strong: str) -> bool:
 
 
 def _general_retail_queries(identity: ProductIdentity) -> list[str]:
-    ids = _strong_identifiers(identity) or ([_strong(identity)] if _strong(identity) else [])
+    plan = build_price_query_plan(identity, limit=8)
     model = str(identity.model or identity.product_name or "").strip()
     brand = str(identity.brand or "").strip()
-    q = []
-    for strong in ids:
-        q += [f'"{strong}" precio Perú', f'"{strong}" "S/" Perú', f'"{strong}" tienda Perú', f'"{strong}" comprar Perú']
-        if model: q += [f'"{strong}" "{model}" Perú', f'"{model}" "{strong}" {brand} Perú'.strip()]
+    q: list[str] = []
+    for row in plan:
+        signal = row.query
+        q += [f'"{signal}" precio Perú', f'"{signal}" "S/" Perú', f'"{signal}" tienda Perú']
+    strong = _strong(identity)
+    if strong and model:
+        q += [f'"{strong}" "{model}" Perú', f'"{model}" "{strong}" {brand} Perú'.strip()]
+    # Static known-source lane stays bounded to the strongest original signal;
+    # broad signal queries above remain able to discover previously unknown stores.
+    if strong:
         q += [f'"{strong}" site:{domain}' for domain in PERU_RETAIL_HINT_DOMAINS]
-    return list(dict.fromkeys(x for x in q if x.strip()))
+    seen: set[str] = set()
+    out: list[str] = []
+    for query in q:
+        clean = query.strip()
+        key = clean.casefold()
+        if clean and key not in seen:
+            seen.add(key)
+            out.append(clean)
+    return out
 
 
 def _general_alias_queries(identity: ProductIdentity) -> list[str]:

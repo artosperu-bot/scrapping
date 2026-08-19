@@ -4,12 +4,37 @@ on:
   pull_request:
     paths:
       - scripts/qa_p7_phase1_forensics.py
+      - scripts/qa_p7_promart_vtex_probe.py
       - .github/workflows/temporary-p7-phase1-forensics-pr.yml
 
 permissions:
   contents: read
 
 jobs:
+  promart-vtex:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Probe current Promart VTEX with bounded MPN signals
+        run: python scripts/qa_p7_promart_vtex_probe.py
+      - name: Upload Promart VTEX evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p7-promart-vtex-${{ github.sha }}
+          path: p7_promart_vtex_probe.json
+          if-no-files-found: warn
+          retention-days: 14
+
   forensic:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

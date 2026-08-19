@@ -132,7 +132,7 @@ def discover_targeted_peru_sources(
         seen_local: set[str] = set()
         for query in _targeted_queries(domain, strong):
             try:
-                found = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
+                found = search_web_query(identity, query, limit=limit_per_domain, timeout=12, required_domain=domain)
             except Exception:
                 found = []
             for url in found:
@@ -216,6 +216,36 @@ def _money(value):
         except ValueError:
             return None
     return None
+
+
+_NON_PRODUCT_PRICE_CONTEXT = (
+    "cuota", "cuotas", "mensual", "al mes", "por mes", "envío", "envio", "delivery", "shipping",
+    "despacho", "por kg", "/kg", "kilogram", "precio por unidad", "unit price", "financiamiento",
+    "cupón", "cupon", "coupon",
+)
+_PRODUCT_PRICE_CONTEXT = (
+    "precio internet", "precio online", "precio oferta", "precio con tarjeta", "precio efectivo",
+    "precio venta", "precio", "oferta", "ahora", "venta",
+)
+
+
+def _visible_product_price(text: str) -> float | None:
+    candidates: list[tuple[int, int, float]] = []
+    for match in re.finditer(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,7}(?:[.,][0-9]{1,2})?)", text or "", re.I):
+        price = _money(match.group(1))
+        if not price or price <= 0:
+            continue
+        start = max(0, match.start() - 70)
+        end = min(len(text), match.end() + 70)
+        context = text[start:end].casefold()
+        if any(marker in context for marker in _NON_PRODUCT_PRICE_CONTEXT):
+            continue
+        positive = sum(1 for marker in _PRODUCT_PRICE_CONTEXT if marker in context)
+        candidates.append((positive, match.start(), price))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (-row[0], row[1]))
+    return candidates[0][2]
 
 
 def _seller_from_text(text: str) -> str | None:
@@ -413,8 +443,7 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
     if tag and tag.get("content"):
         meta_currency = str(tag.get("content"))
     if not meta_price:
-        match_price = re.search(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,6}(?:[.,][0-9]{1,2})?)", page_text, re.I)
-        meta_price = _money(match_price.group(1)) if match_price else None
+        meta_price = _visible_product_price(page_text)
     if meta_price and meta_price > 0:
         return [PriceOffer(
             part_number=identity.mpn,

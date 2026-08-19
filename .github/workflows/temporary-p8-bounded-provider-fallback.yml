@@ -1,0 +1,33 @@
+name: Temporary P8 Bounded Provider Fallback
+
+on:
+  pull_request:
+    paths:
+      - tests/test_price_p8_bounded_provider_fallback.py
+      - src/product_intelligence/price_source_capabilities.py
+      - src/product_intelligence/price_workflow.py
+      - scripts/qa_fix_p8_bounded_provider_fallback.py
+      - '.github/workflows/temporary-p8-bounded-provider-fallback.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  p8-bounded-provider-fallback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Focused P8 bounded provider fallback contract
+        run: python -m pytest -q tests/test_price_p8_bounded_provider_fallback.py

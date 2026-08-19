@@ -66,6 +66,25 @@ def test_open_peru_site_queries_enforce_domain_before_ranking(monkeypatch):
     assert calls == [('\"ABC/123\" site:shop.example.pe', "shop.example.pe")]
 
 
+def test_open_peru_site_queries_enforce_domain_without_telemetry(monkeypatch):
+    identity = ProductIdentity(mpn="ABC/123")
+    calls = []
+
+    def fake_search(_identity, query, **kwargs):
+        calls.append((query, kwargs.get("required_domain")))
+        return ["https://shop.example.pe/product/abc123"]
+
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    rows = price_peru_coverage._search_query_batches(
+        identity,
+        ['\"ABC/123\" site:shop.example.pe'],
+        5,
+    )
+
+    assert rows == [["https://shop.example.pe/product/abc123"]]
+    assert calls == [('\"ABC/123\" site:shop.example.pe', "shop.example.pe")]
+
+
 def test_mercadolibre_search_reuses_bounded_signal_plan():
     identity = ProductIdentity(
         brand="ExampleBrand", model="Model 123", mpn="ABC/123", upc="036000291452"

@@ -316,15 +316,22 @@ def _general_alias_queries(identity: ProductIdentity) -> list[str]:
     return list(dict.fromkeys(queries))
 
 
+def _required_domain_from_query(query: str) -> str | None:
+    match = re.search(r"(?:^|\s)site:([a-z0-9.-]+)", str(query or ""), flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).casefold().removeprefix("www.")
+
+
 def _search_query_batches(identity: ProductIdentity, queries: list[str], per_query: int) -> list[list[str]]:
     if not queries:
         return []
     workers = max(1, min(RETAIL_QUERY_WORKERS, len(queries)))
     def run(query: str) -> list[str]:
-        try:
-            return search_web_query(identity, query, limit=per_query, timeout=12)
-        except Exception:
-            return []
+        urls, _metrics = _search_with_metrics(
+            identity, query, limit=per_query, required_domain=_required_domain_from_query(query)
+        )
+        return urls
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="peru-retail") as pool:
         return list(pool.map(run, queries))
 
@@ -335,7 +342,9 @@ def _search_query_specs(identity: ProductIdentity, specs: list[tuple[str, str]],
     workers = max(1, min(RETAIL_QUERY_WORKERS, len(specs)))
     def run(spec: tuple[str, str]):
         query, signal_type = spec
-        urls, metrics = _search_with_metrics(identity, query, limit=per_query)
+        urls, metrics = _search_with_metrics(
+            identity, query, limit=per_query, required_domain=_required_domain_from_query(query)
+        )
         return query, signal_type, urls, metrics
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="peru-retail-metrics") as pool:
         return list(pool.map(run, specs))

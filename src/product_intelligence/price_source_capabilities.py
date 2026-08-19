@@ -63,6 +63,16 @@ class SourceCapabilityRegistry:
     def all(self) -> dict[str, dict[str, Any]]:
         return self._load()
 
+    def successful_domains(self, *, limit: int = 12) -> list[str]:
+        """Return recently successful domains as a soft-priority lane, never a whitelist."""
+        rows = []
+        for domain, row in self._load().items():
+            if int(row.get("success_count") or 0) <= 0:
+                continue
+            rows.append((str(row.get("last_success") or ""), float(row.get("success_rate") or 0), domain))
+        rows.sort(reverse=True)
+        return [domain for _last, _rate, domain in rows[: max(0, int(limit))]]
+
     def record(
         self,
         url_or_domain: str,

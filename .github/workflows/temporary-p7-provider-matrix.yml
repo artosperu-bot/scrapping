@@ -1,0 +1,31 @@
+name: Temporary P7 Provider Matrix
+
+on:
+  pull_request:
+    paths:
+      - scripts/qa_p7_provider_matrix.py
+      - '.github/workflows/temporary-p7-provider-matrix.yml'
+
+jobs:
+  provider-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - run: python scripts/qa_p7_provider_matrix.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p7-provider-matrix-${{ github.sha }}
+          path: p7_provider_matrix.json
+          retention-days: 14

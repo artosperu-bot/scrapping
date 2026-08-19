@@ -23,6 +23,7 @@ from .price_trace import PriceCoverageTrace
 from .price_models import PriceOffer
 from .price_queries import build_price_query_plan
 from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
+from .price_source_capabilities import SourceCapabilityRegistry, detect_ecommerce_platform
 from .web_fetch import fetch_page
 
 PERU_STRUCTURED_SOURCES: tuple[tuple[str, str], ...] = (
@@ -231,7 +232,37 @@ def _refresh_learned_sources(urls: list[str], identity: ProductIdentity, emit) -
     return dedupe_offers(rows)
 
 
-def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit, *, trace: PriceCoverageTrace | None = None) -> list[PriceOffer]:
+def _remember_source_capability(registry, url: str, html: str, rows: list[PriceOffer], identity: ProductIdentity, discovery_method: str | None, *, success: bool) -> None:
+    if registry is None:
+        return
+    methods = list(dict.fromkeys(str(row.source_method or "").strip() for row in rows if str(row.source_method or "").strip()))
+    extraction_method = methods[0] if len(methods) == 1 else "multi" if methods else None
+    try:
+        registry.record(
+            url,
+            platform=detect_ecommerce_platform(url, html),
+            discovery_method=discovery_method,
+            extraction_method=extraction_method,
+            price_capable=bool(rows),
+            stock_capable=any(row.stock is not None or bool(row.availability) for row in rows),
+            seller_capable=any(bool(row.seller_display_name or row.seller_legal_name or row.seller_tax_id) for row in rows),
+            success=success,
+            category=getattr(identity, "category", None),
+        )
+    except Exception:
+        # Source memory is advisory. Persistence failure must never abort a price run.
+        pass
+
+
+def _collect_web_offers(
+    sources: list[str],
+    identity: ProductIdentity,
+    emit,
+    *,
+    trace: PriceCoverageTrace | None = None,
+    capability_registry: SourceCapabilityRegistry | None = None,
+    discovery_method: str | None = None,
+) -> list[PriceOffer]:
     rows: list[PriceOffer] = []
     emit("status", stage="validating", message=f"Revisando {len(sources)} publicaciones web de Perú")
     for pos, url in enumerate(sources, 1):
@@ -244,6 +275,7 @@ def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit, *, 
             html, page_rows = _parse_page_with_dynamic_retry(url, identity, channel, emit)
             augmented = _augment_page_rows(url, html, page_rows, identity, channel)
             rows.extend(augmented)
+            _remember_source_capability(capability_registry, url, html, augmented, identity, discovery_method, success=bool(augmented))
             if trace:
                 trace.record(channel, "FETCH_OK", url=url)
                 trace.record(channel, "PARSER_STARTED", url=url)
@@ -253,6 +285,7 @@ def _collect_web_offers(sources: list[str], identity: ProductIdentity, emit, *, 
                     trace.record(channel, "PARSER_ZERO_OFFERS", url=url)
             emit("page", url=url, channel=channel, status="parsed", offers=len(augmented))
         except Exception as exc:
+            _remember_source_capability(capability_registry, url, "", [], identity, discovery_method, success=False)
             if trace:
                 if isinstance(exc, (requests.Timeout, TimeoutError)):
                     trace.record(channel, "FETCH_TIMEOUT", url=url, detail=type(exc).__name__)
@@ -274,6 +307,8 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     resolution = resolve_price_identity(identity)
     working_identity = resolution.identity
     trace = PriceCoverageTrace()
+    capability_registry = SourceCapabilityRegistry(output_root)
+    priority_domains = tuple(capability_registry.successful_domains())
     emit(
         "identity",
         input_identity=identity.model_dump(),
@@ -326,6 +361,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
                 discover_general_peru_retailers,
                 working_identity,
                 limit=max(10, max_sources // 2),
+                priority_domains=priority_domains,
             )
             try:
                 learned_rows = learned_future.result()
@@ -342,7 +378,10 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
         learned_set = set(learned_sources)
         fresh_retail = [url for url in retail_sources if url not in learned_set]
-        offers.extend(_collect_web_offers(fresh_retail[:max_sources], working_identity, emit, trace=trace))
+        offers.extend(_collect_web_offers(
+            fresh_retail[:max_sources], working_identity, emit, trace=trace,
+            capability_registry=capability_registry, discovery_method="open_web",
+        ))
 
     marketplace_sources: list[str] = []
     base_sources: list[str] = []
@@ -354,7 +393,9 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
         if not warm_path:
             try:
-                retail_sources = discover_general_peru_retailers(working_identity, limit=max(10, max_sources // 2))
+                retail_sources = discover_general_peru_retailers(
+                    working_identity, limit=max(10, max_sources // 2), priority_domains=priority_domains,
+                )
                 emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
             except Exception as exc:
                 emit("source", channel="peru_retail", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
@@ -370,7 +411,10 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             for url in _merge_sources(marketplace_sources, retail_sources, base_sources, limit=max_sources)
             if url not in skip_urls
         ]
-        offers.extend(_collect_web_offers(sources, working_identity, emit, trace=trace))
+        offers.extend(_collect_web_offers(
+            sources, working_identity, emit, trace=trace,
+            capability_registry=capability_registry, discovery_method="mixed_web",
+        ))
 
     deduped = dedupe_offers(offers)
     trusted = [row for row in deduped if _is_trusted_final_offer(row)]

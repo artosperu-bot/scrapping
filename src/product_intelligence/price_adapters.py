@@ -88,7 +88,15 @@ def _vtex_evidence(product: dict, identity: ProductIdentity) -> dict:
     product_name = str(product.get("productName") or product.get("productTitle") or "")
     declared_model = _first(product.get("Modelo") or product.get("Model") or product.get("model"))
     expected_mpn = _norm(identity.mpn)
-    candidates = [declared_model, product_name, product.get("productTitle"), product.get("linkText"), product.get("productReference"), product.get("productReferenceCode")]
+    candidates = [
+        declared_model,
+        product_name,
+        product.get("productTitle"),
+        product.get("linkText"),
+        product.get("productReference"),
+        product.get("productReferenceCode"),
+        product.get("description"),
+    ]
     exact_mpn = None
     if expected_mpn:
         for candidate in candidates:

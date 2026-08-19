@@ -82,6 +82,11 @@ def is_peru_offer(row: PriceOffer) -> bool:
     path = (parsed.path or "").lower()
     if host.endswith(".pe") or host.endswith(".com.pe"):
         return True
+    # Geography is independent from settlement currency. Some Peru retailers use
+    # a generic .com and expose Peru explicitly in the registrable host label;
+    # final trust still requires the existing identity/confidence/positive-price gates.
+    if any(label.endswith("peru") for label in host.split(".")):
+        return True
     if host in _PERU_RETAIL_HOSTS and str(row.currency or "").upper() == "PEN":
         return True
     return bool(host in _PERU_PATH_HOSTS and (path.startswith("/peru/") or path == "/peru") and str(row.currency or "").upper() == "PEN")

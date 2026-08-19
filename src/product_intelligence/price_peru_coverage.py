@@ -295,6 +295,16 @@ def _general_retail_query_specs(identity: ProductIdentity, *, priority_domains: 
             (f'"{strong}" site:.pe', "PERU_TLD_SCOPE"),
             (f'"{strong}" site:.com.pe', "PERU_TLD_SCOPE"),
         ]
+        # Price receives identity.brand only after the upstream identity bridge has
+        # accepted an explicit valid brand or an evidence-backed resolved brand.
+        # Add exactly two country-scope representations for the canonical MPN;
+        # do not expand punctuation aliases or invent a brand when MPN is absent.
+        canonical_mpn = str(identity.mpn or "").strip()
+        if brand and canonical_mpn:
+            specs += [
+                (f'"{brand}" "{canonical_mpn}" site:.pe', "VERIFIED_BRAND_MPN_PERU_TLD_SCOPE"),
+                (f'"{brand}" "{canonical_mpn}" site:.com.pe', "VERIFIED_BRAND_MPN_PERU_TLD_SCOPE"),
+            ]
         learned = tuple(dict.fromkeys(str(domain or "").strip().casefold().removeprefix("www.") for domain in priority_domains if str(domain or "").strip()))[:12]
         # Reuse the same bounded MPN alias family that the directed lane already
         # trusts. This prevents exact-separator indexing differences from hiding

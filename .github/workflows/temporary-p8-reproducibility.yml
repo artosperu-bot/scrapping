@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
+      P8_CHECKPOINT: b346520
     steps:
       - uses: actions/checkout@v4
         with:

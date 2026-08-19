@@ -7,9 +7,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .models import ProductIdentity
+from .product_classification import classify_product
+
 
 def _host(value: str) -> str:
     return (urlparse(str(value or "")).hostname or str(value or "")).casefold().removeprefix("www.").strip(" /")
+
+
+def _country_for_domain(domain: str) -> str | None:
+    domain = _host(domain)
+    if domain.endswith(".pe") or domain.endswith(".com.pe") or "peru" in domain:
+        return "PE"
+    return None
 
 
 def detect_ecommerce_platform(url: str, html: str | None = None) -> str:
@@ -35,10 +45,14 @@ def detect_ecommerce_platform(url: str, html: str | None = None) -> str:
 
 
 class SourceCapabilityRegistry:
-    """Timestamped observations about price-source capabilities.
+    """Persistent source capability evidence used by bounded routing policy.
 
-    This is memory, not policy: callers must still inspect the current page/source.
+    The registry stores how a source works, never a product answer or current price.
+    Every direct route still performs a fresh source request and the normal identity,
+    market, confidence, price-quality, and dedupe gates remain authoritative.
     """
+
+    _DIRECT_PLATFORM_METHODS = {"vtex": "vtex_catalog"}
 
     def __init__(self, output_root: str | Path) -> None:
         root = Path(output_root)
@@ -73,6 +87,77 @@ class SourceCapabilityRegistry:
         rows.sort(reverse=True)
         return [domain for _last, _rate, domain in rows[: max(0, int(limit))]]
 
+    def direct_candidates(
+        self,
+        identity: ProductIdentity,
+        *,
+        limit: int = 8,
+        exclude_domains: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
+        """Select learned sources that have a *proven* direct mechanism.
+
+        Currently VTEX catalog search is the only source-native mechanism exposed by
+        the price workflow that can start from a domain alone. Other remembered
+        platforms stay in memory and continue through open-provider fallback until a
+        source-native mechanism is separately demonstrated and tested.
+        """
+        classification = classify_product(identity)
+        requested_category = str(classification.category or "GENERAL")
+        strong_category = classification.confidence >= 0.80 and requested_category != "GENERAL"
+        excluded = {_host(value) for value in exclude_domains if _host(value)}
+        now = datetime.now(timezone.utc)
+        candidates: list[tuple[float, str, dict[str, Any]]] = []
+
+        for domain, raw in self._load().items():
+            row = dict(raw or {})
+            platform = str(row.get("platform") or "").casefold()
+            direct_method = self._DIRECT_PLATFORM_METHODS.get(platform)
+            successes = int(row.get("success_count") or 0)
+            failures = int(row.get("failure_count") or 0)
+            if not direct_method or successes <= 0 or domain in excluded:
+                continue
+            if row.get("price_capable") is False:
+                continue
+
+            categories = {str(value) for value in row.get("categories") or [] if str(value)}
+            if strong_category and categories and "GENERAL" not in categories and requested_category not in categories:
+                continue
+
+            total = successes + failures
+            success_rate = float(row.get("success_rate") if row.get("success_rate") is not None else (successes / total if total else 0.0))
+            health = float(row.get("health") if row.get("health") is not None else ((successes + 1) / (total + 2)))
+            score = (2.0 * success_rate) + health + min(successes, 3) * 0.25
+            if row.get("price_capable") is True:
+                score += 1.0
+            if requested_category in categories:
+                score += 1.5
+            elif not categories or "GENERAL" in categories:
+                score += 0.25
+            last_success = str(row.get("last_success") or "")
+            if last_success:
+                try:
+                    observed = datetime.fromisoformat(last_success.replace("Z", "+00:00"))
+                    age_days = max(0.0, (now - observed.astimezone(timezone.utc)).total_seconds() / 86400.0)
+                    if age_days <= 30:
+                        score += 0.25
+                    elif age_days <= 90:
+                        score += 0.10
+                except (ValueError, TypeError):
+                    pass
+
+            row.update({
+                "domain": domain,
+                "direct_method": direct_method,
+                "source_recovery_method": "DIRECT_SOURCE",
+                "routing_score": round(score, 4),
+                "routing_category": requested_category,
+                "routing_category_confidence": classification.confidence,
+            })
+            candidates.append((score, str(row.get("last_success") or ""), row))
+
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]["domain"]), reverse=True)
+        return [row for _score, _last, row in candidates[: max(0, int(limit))]]
+
     def record(
         self,
         url_or_domain: str,
@@ -92,7 +177,7 @@ class SourceCapabilityRegistry:
         data = self._load()
         row = dict(data.get(domain) or {})
         row.setdefault("domain", domain)
-        row.setdefault("country", "PE" if domain.endswith(".pe") or domain.endswith(".com.pe") else None)
+        row.setdefault("country", _country_for_domain(domain))
         row.setdefault("categories", [])
         row.setdefault("discovery_methods", [])
         row.setdefault("extraction_methods", [])
@@ -101,6 +186,7 @@ class SourceCapabilityRegistry:
         row.setdefault("observation_count", 0)
         row["observation_count"] = int(row["observation_count"] or 0) + 1
         row["last_observed_at"] = datetime.now(timezone.utc).isoformat()
+        row["observed_at"] = row["last_observed_at"]
         if platform:
             row["platform"] = str(platform)
         for field, value in (("discovery_methods", discovery_method), ("extraction_methods", extraction_method), ("categories", category)):
@@ -114,8 +200,10 @@ class SourceCapabilityRegistry:
             row["last_success"] = row["last_observed_at"]
         elif success is False:
             row["failure_count"] = int(row["failure_count"] or 0) + 1
+            row["last_failure"] = row["last_observed_at"]
         total = int(row["success_count"] or 0) + int(row["failure_count"] or 0)
         row["success_rate"] = round(int(row["success_count"] or 0) / total, 4) if total else None
+        row["health"] = round((int(row["success_count"] or 0) + 1) / (total + 2), 4)
         data[domain] = row
         self._save(data)
         return row

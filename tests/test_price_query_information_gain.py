@@ -63,6 +63,30 @@ def test_directed_alias_queries_emit_novelty_gain_until_plan_or_domain_budget(mo
     assert all("stop_reason" in row for row in events)
 
 
+def test_open_peru_queries_emit_raw_valid_and_new_domain_gain(monkeypatch):
+    events = []
+    url = "https://freshstore.pe/product/abc123"
+
+    def fake_search(_identity, query, **kwargs):
+        rows = [url] if query == '"ABC/123" precio Perú' else []
+        callback = kwargs.get("on_metrics")
+        if callback:
+            callback({"query": query, "raw_results": len(rows), "domain_results": len(rows), "valid_results": len(rows)})
+        return rows
+
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    rows = price_peru_coverage.discover_general_peru_retailers(
+        _identity(), limit=5, on_query_event=events.append,
+    )
+    assert url in rows
+    event = next(row for row in events if row["query"] == '"ABC/123" precio Perú')
+    assert event["signal_type"] == "MPN_ORIGINAL"
+    assert event["raw_results"] == 1
+    assert event["valid_results"] == 1
+    assert event["new_urls"] == 1
+    assert event["new_domains"] == 1
+
+
 def test_mercadolibre_query_events_report_publication_and_seller_gain(monkeypatch):
     payload = {
         "results": [{

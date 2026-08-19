@@ -36,6 +36,25 @@ STRICT_MARKETPLACE_CHANNELS = {"falabella","ripley","plazavea","oechsle","mercad
 BROWSER_PRICE_CHANNELS = {"Ripley", "MercadoLibre", "Mercado Libre", "JBL Perú"}
 
 
+class _PriceFetchStatusError(RuntimeError):
+    def __init__(self, status_code: int):
+        self.status_code = int(status_code)
+        self.trace_status = "FETCH_NOT_FOUND" if self.status_code in {404, 410} else "FETCH_BLOCKED"
+        super().__init__(f"HTTP {self.status_code}")
+
+
+def _ensure_usable_price_fetch(result) -> None:
+    raw = getattr(result, "status_code", None)
+    if raw is None:
+        return
+    try:
+        status = int(raw)
+    except (TypeError, ValueError):
+        return
+    if status >= 400:
+        raise _PriceFetchStatusError(status)
+
+
 def _query(identity: ProductIdentity) -> str:
     return str(identity.mpn or identity.ean or identity.upc or identity.gtin or identity.model or identity.product_name or "").strip()
 
@@ -197,12 +216,14 @@ def _merge_sources(*groups: list[str], limit: int) -> list[str]:
 
 def _parse_page_with_dynamic_retry(url: str, identity: ProductIdentity, channel: str, emit) -> tuple[str, list[PriceOffer]]:
     fetched = fetch_page(url, timeout=25, browser_fallback=True, activate_lazy_media=False)
+    _ensure_usable_price_fetch(fetched)
     final_url = str(getattr(fetched, "final_url", None) or url)
     html = str(getattr(fetched, "html", "") or "")
     page_rows = extract_page_offers(html, final_url, identity, channel=channel)
     if not page_rows and channel in BROWSER_PRICE_CHANNELS and getattr(fetched, "method", "") != "playwright":
         try:
             rendered = fetch_page(url, timeout=35, browser_fallback=True, prefer_browser=True, activate_lazy_media=False)
+            _ensure_usable_price_fetch(rendered)
             rendered_url = str(getattr(rendered, "final_url", None) or final_url)
             rendered_html = str(getattr(rendered, "html", "") or "")
             rendered_rows = extract_page_offers(rendered_html, rendered_url, identity, channel=channel)
@@ -233,6 +254,7 @@ def _refresh_learned_static(url: str, identity: ProductIdentity) -> tuple[list[P
     channel = _channel_from_url(url)
     try:
         fetched = fetch_page(url, timeout=8, browser_fallback=False, activate_lazy_media=False)
+        _ensure_usable_price_fetch(fetched)
         final_url = str(getattr(fetched, "final_url", None) or url)
         html = str(getattr(fetched, "html", "") or "")
         page_rows = extract_page_offers(html, final_url, identity, channel=channel)
@@ -330,7 +352,10 @@ def _collect_web_offers(
         except Exception as exc:
             _remember_source_capability(capability_registry, url, "", [], identity, discovery_method, success=False)
             if trace:
-                if isinstance(exc, (requests.Timeout, TimeoutError)):
+                trace_status = getattr(exc, "trace_status", None)
+                if trace_status:
+                    trace.record(channel, trace_status, url=url, detail=f"HTTP_{getattr(exc, 'status_code', 0)}")
+                elif isinstance(exc, (requests.Timeout, TimeoutError)):
                     trace.record(channel, "FETCH_TIMEOUT", url=url, detail=type(exc).__name__)
                 else:
                     trace.record(channel, "FETCH_BLOCKED", url=url, detail=type(exc).__name__)

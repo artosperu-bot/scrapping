@@ -296,8 +296,20 @@ def _general_retail_query_specs(identity: ProductIdentity, *, priority_domains: 
             (f'"{strong}" site:.com.pe', "PERU_TLD_SCOPE"),
         ]
         learned = tuple(dict.fromkeys(str(domain or "").strip().casefold().removeprefix("www.") for domain in priority_domains if str(domain or "").strip()))[:12]
-        specs += [(f'"{strong}" site:{domain}', "LEARNED_DOMAIN") for domain in learned]
-        specs += [(f'"{strong}" site:{domain}', "KNOWN_DOMAIN_HINT") for domain in PERU_RETAIL_HINT_DOMAINS]
+        # Reuse the same bounded MPN alias family that the directed lane already
+        # trusts. This prevents exact-separator indexing differences from hiding
+        # a PDP inside a domain we already know, without expanding the source oracle.
+        domain_signals = [row for row in plan if str(row.signal_type).startswith("MPN_")][:3]
+        if not domain_signals:
+            domain_signals = list(plan[:1])
+        for domain in learned:
+            for index, row in enumerate(domain_signals):
+                signal_type = "LEARNED_DOMAIN" if index == 0 else f"LEARNED_DOMAIN_{row.signal_type}"
+                specs.append((f'"{row.query}" site:{domain}', signal_type))
+        for domain in PERU_RETAIL_HINT_DOMAINS:
+            for index, row in enumerate(domain_signals):
+                signal_type = "KNOWN_DOMAIN_HINT" if index == 0 else f"KNOWN_DOMAIN_HINT_{row.signal_type}"
+                specs.append((f'"{row.query}" site:{domain}', signal_type))
     seen: set[str] = set()
     out: list[tuple[str, str]] = []
     for query, signal_type in specs:

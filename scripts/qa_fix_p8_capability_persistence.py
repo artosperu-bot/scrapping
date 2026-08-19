@@ -18,15 +18,22 @@ if "self._write_lock = Lock()" not in cap:
     cap = cap.replace(anchor, anchor + "        self._write_lock = Lock()\n", 1)
 
 if "with self._write_lock:" not in cap:
-    start = cap.find("        data = self._load()\n", cap.find("    def record(\n"))
-    end_token = "        return row\n"
-    end = cap.find(end_token, start)
-    if start < 0 or end < 0:
-        raise SystemExit("P8 persistence patch abort: record body anchors missing")
-    end += len(end_token)
-    body = cap[start:end]
-    indented = "        with self._write_lock:\n" + "".join("    " + line if line.strip() else line for line in body.splitlines(keepends=True))
-    cap = cap[:start] + indented + cap[end:]
+    record_pos = cap.find("\n    def record(\n")
+    if record_pos < 0:
+        record_pos = cap.find("    def record(\n")
+    start = cap.find("        data = self._load()", record_pos)
+    if record_pos < 0 or start < 0:
+        raise SystemExit("P8 persistence patch abort: record body start missing")
+    # record() is deliberately the final method in this compact registry.  Use EOF
+    # rather than depending on a trailing newline after `return row`.
+    body = cap[start:]
+    if "        return row" not in body:
+        raise SystemExit("P8 persistence patch abort: record return missing")
+    indented = "        with self._write_lock:\n" + "".join(
+        "    " + line if line.strip() else line
+        for line in body.splitlines(keepends=True)
+    )
+    cap = cap[:start] + indented
 
 CAP.write_text(cap, encoding="utf-8")
 

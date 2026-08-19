@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -14,6 +15,67 @@ from product_intelligence.price_queries import build_price_query_plan
 
 IDENTITY = ProductIdentity(mpn="SA400S37/960G")
 ORIGIN = "https://www.promart.pe"
+EXPECTED = re.sub(r"[^a-z0-9]+", "", IDENTITY.mpn.casefold())
+
+
+def _norm(value) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _identity_paths(value, path="$", *, max_hits=30):
+    hits = []
+    def walk(node, current):
+        if len(hits) >= max_hits:
+            return
+        if isinstance(node, dict):
+            for key, child in node.items():
+                next_path = f"{current}.{key}"
+                if isinstance(child, (str, int, float, bool)):
+                    normalized = _norm(child)
+                    if EXPECTED and EXPECTED in normalized:
+                        hits.append({"path": next_path, "value": str(child)[:500]})
+                else:
+                    walk(child, next_path)
+        elif isinstance(node, list):
+            for index, child in enumerate(node[:200]):
+                walk(child, f"{current}[{index}]")
+    walk(value, path)
+    return hits
+
+
+def _product_forensics(product):
+    if not isinstance(product, dict):
+        return {}
+    name = str(product.get("productName") or "")
+    if "kingston" not in name.casefold() or "960" not in name.casefold():
+        return {}
+    scalar_fields = {
+        key: value for key, value in product.items()
+        if isinstance(value, (str, int, float, bool, type(None)))
+    }
+    structured_fields = {}
+    for key in ("allSpecifications", "allSpecificationsGroups", "categories", "categoryId", "description", "items", "Modelo", "Model", "MPN", "Part Number", "productReference", "productReferenceCode"):
+        if key in product:
+            value = product.get(key)
+            if key == "items" and isinstance(value, list):
+                structured_fields[key] = [
+                    {
+                        k: item.get(k)
+                        for k in ("itemId", "name", "nameComplete", "complementName", "ean", "referenceId", "variations")
+                        if k in item
+                    }
+                    for item in value[:10] if isinstance(item, dict)
+                ]
+            else:
+                structured_fields[key] = value
+    return {
+        "productId": product.get("productId"),
+        "productName": name,
+        "keys": sorted(product.keys()),
+        "scalar_fields": scalar_fields,
+        "selected_structured_fields": structured_fields,
+        "exact_mpn_paths": _identity_paths(product),
+    }
 
 
 def main() -> int:
@@ -33,15 +95,18 @@ def main() -> int:
             raw_count = len(payload) if isinstance(payload, list) else 0
             offers = parse_vtex_payload(payload, IDENTITY, channel="Promart", source_url=ORIGIN) if isinstance(payload, (list, dict)) else []
             products = []
+            forensic_products = []
             if isinstance(payload, list):
-                for product in payload[:10]:
+                for product in payload[:50]:
                     if not isinstance(product, dict):
                         continue
                     products.append({
                         "productId": product.get("productId"),
                         "productName": product.get("productName"),
+                        "brand": product.get("brand"),
                         "link": product.get("link"),
                         "linkText": product.get("linkText"),
+                        "productReference": product.get("productReference"),
                         "items": [
                             {
                                 "itemId": item.get("itemId"),
@@ -63,6 +128,9 @@ def main() -> int:
                             if isinstance(item, dict)
                         ],
                     })
+                    forensic = _product_forensics(product)
+                    if forensic:
+                        forensic_products.append(forensic)
             entry = {
                 "query": row.query,
                 "signal_type": row.signal_type,
@@ -71,6 +139,7 @@ def main() -> int:
                 "runtime_seconds": elapsed,
                 "raw_products": raw_count,
                 "products": products,
+                "forensic_products": forensic_products,
                 "accepted_offers": [offer.to_dict() for offer in offers],
             }
             report["queries"].append(entry)

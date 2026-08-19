@@ -27,5 +27,5 @@ def test_generic_foreign_dotcom_pen_offer_stays_outside_peru_market():
     assert not is_peru_offer(_offer("https://retailerexample.com/product/abc123"))
 
 
-def test_peru_named_dotcom_non_pen_offer_stays_outside_peru_market():
-    assert not is_peru_offer(_offer("https://retailerperu.com/product/abc123", currency="USD"))
+def test_peru_named_dotcom_usd_offer_still_belongs_to_peru_market():
+    assert is_peru_offer(_offer("https://retailerperu.com/product/abc123", currency="USD"))

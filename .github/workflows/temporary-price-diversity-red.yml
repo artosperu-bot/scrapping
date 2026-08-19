@@ -1,0 +1,31 @@
+name: Temporary Price Diversity RED
+
+on:
+  push:
+    branches:
+      - feat/universal-price-identity-recall
+    paths:
+      - tests/test_price_query_plan_integration.py
+      - .github/workflows/temporary-price-diversity-red.yml
+
+permissions:
+  contents: read
+
+jobs:
+  focused-red:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Run focused domain-diversity contract
+        run: python -m pytest -q tests/test_price_query_plan_integration.py

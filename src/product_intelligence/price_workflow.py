@@ -6,7 +6,7 @@ from urllib.parse import quote_plus, urlparse
 
 import requests
 
-from .mercadolibre_oauth import build_mercadolibre_api_client
+from .mercadolibre_oauth import MercadoLibreAuthError, build_mercadolibre_api_client
 from .models import ProductIdentity
 from .price_adapters import parse_mercadolibre_payload, parse_shopify_product_payload, parse_vtex_payload
 from .price_channel_registry import build_channel_coverage, target_spec_for_url
@@ -85,6 +85,15 @@ def _is_trusted_final_offer(row: PriceOffer) -> bool:
     if _channel_key(row.channel) in STRICT_MARKETPLACE_CHANNELS and row.source_method == "html":
         return False
     return True
+
+
+def _mercadolibre_terminal_status(exc: MercadoLibreAuthError) -> str:
+    code = str(getattr(exc, "code", "") or "").upper()
+    if code == "ML_AUTH_NOT_CONFIGURED":
+        return "ML_NOT_CONFIGURED"
+    if code in {"ML_REFRESH_TOKEN_INVALID", "ML_CLIENT_CREDENTIALS_INVALID", "ERROR_AUTH_MERCADOLIBRE"}:
+        return "ML_AUTH_FAILED"
+    return "ML_ACCESS_BLOCKED"
 
 
 def _mercadolibre_queries(identity: ProductIdentity) -> list[str]:
@@ -421,9 +430,13 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         else:
             trace.record("MercadoLibre", "QUERY_EXECUTED_NO_RESULT")
         emit("source", channel="MercadoLibre", status="ok", offers=len(ml), method="mercadolibre_mpe")
+    except MercadoLibreAuthError as exc:
+        terminal = _mercadolibre_terminal_status(exc)
+        trace.record("MercadoLibre", terminal, detail=exc.code)
+        emit("source", channel="MercadoLibre", status="error", terminal=terminal, error_code=exc.code, error=str(exc))
     except Exception as exc:
-        trace.record("MercadoLibre", "FETCH_BLOCKED", detail=type(exc).__name__)
-        emit("source", channel="MercadoLibre", status="error", error=f"{type(exc).__name__}: {exc}")
+        trace.record("MercadoLibre", "ML_ACCESS_BLOCKED", detail=type(exc).__name__)
+        emit("source", channel="MercadoLibre", status="error", terminal="ML_ACCESS_BLOCKED", error=f"{type(exc).__name__}: {exc}")
 
     retail_sources: list[str] = []
     if warm_path:

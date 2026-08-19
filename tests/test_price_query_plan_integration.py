@@ -48,6 +48,18 @@ def test_open_peru_queries_include_verified_barcode_and_brand_model_without_case
     assert len(queries) == len(set(q.casefold() for q in queries))
 
 
+def test_open_peru_domain_hints_reuse_bounded_mpn_alias_family():
+    identity = ProductIdentity(mpn="ABC/123")
+    learned = "learned.example.pe"
+    known = price_peru_coverage.PERU_RETAIL_HINT_DOMAINS[0]
+    queries = _general_retail_queries(identity, priority_domains=(learned,))
+
+    for domain in (learned, known):
+        assert f'\"ABC/123\" site:{domain}' in queries
+        assert f'\"ABC123\" site:{domain}' in queries
+        assert f'\"ABC-123\" site:{domain}' in queries
+
+
 def test_open_peru_queries_include_country_scope_for_source_discovery():
     queries = _general_retail_queries(ProductIdentity(mpn="ABC/123"))
     assert '\"ABC/123\" site:.pe' in queries

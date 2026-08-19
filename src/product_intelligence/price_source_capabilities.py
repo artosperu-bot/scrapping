@@ -4,6 +4,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import urlparse
 
@@ -57,6 +58,7 @@ class SourceCapabilityRegistry:
     def __init__(self, output_root: str | Path) -> None:
         root = Path(output_root)
         self.path = root / "price_intelligence" / "source_capabilities.json"
+        self._write_lock = Lock()
 
     def _load(self) -> dict[str, dict[str, Any]]:
         try:
@@ -174,36 +176,37 @@ class SourceCapabilityRegistry:
         domain = _host(url_or_domain)
         if not domain:
             raise ValueError("Source capability observation requires a domain")
-        data = self._load()
-        row = dict(data.get(domain) or {})
-        row.setdefault("domain", domain)
-        row.setdefault("country", _country_for_domain(domain))
-        row.setdefault("categories", [])
-        row.setdefault("discovery_methods", [])
-        row.setdefault("extraction_methods", [])
-        row.setdefault("success_count", 0)
-        row.setdefault("failure_count", 0)
-        row.setdefault("observation_count", 0)
-        row["observation_count"] = int(row["observation_count"] or 0) + 1
-        row["last_observed_at"] = datetime.now(timezone.utc).isoformat()
-        row["observed_at"] = row["last_observed_at"]
-        if platform:
-            row["platform"] = str(platform)
-        for field, value in (("discovery_methods", discovery_method), ("extraction_methods", extraction_method), ("categories", category)):
-            if value and value not in row[field]:
-                row[field].append(value)
-        for field, value in (("price_capable", price_capable), ("stock_capable", stock_capable), ("seller_capable", seller_capable)):
-            if value is not None:
-                row[field] = bool(value)
-        if success is True:
-            row["success_count"] = int(row["success_count"] or 0) + 1
-            row["last_success"] = row["last_observed_at"]
-        elif success is False:
-            row["failure_count"] = int(row["failure_count"] or 0) + 1
-            row["last_failure"] = row["last_observed_at"]
-        total = int(row["success_count"] or 0) + int(row["failure_count"] or 0)
-        row["success_rate"] = round(int(row["success_count"] or 0) / total, 4) if total else None
-        row["health"] = round((int(row["success_count"] or 0) + 1) / (total + 2), 4)
-        data[domain] = row
-        self._save(data)
-        return row
+        with self._write_lock:
+            data = self._load()
+            row = dict(data.get(domain) or {})
+            row.setdefault("domain", domain)
+            row.setdefault("country", _country_for_domain(domain))
+            row.setdefault("categories", [])
+            row.setdefault("discovery_methods", [])
+            row.setdefault("extraction_methods", [])
+            row.setdefault("success_count", 0)
+            row.setdefault("failure_count", 0)
+            row.setdefault("observation_count", 0)
+            row["observation_count"] = int(row["observation_count"] or 0) + 1
+            row["last_observed_at"] = datetime.now(timezone.utc).isoformat()
+            row["observed_at"] = row["last_observed_at"]
+            if platform:
+                row["platform"] = str(platform)
+            for field, value in (("discovery_methods", discovery_method), ("extraction_methods", extraction_method), ("categories", category)):
+                if value and value not in row[field]:
+                    row[field].append(value)
+            for field, value in (("price_capable", price_capable), ("stock_capable", stock_capable), ("seller_capable", seller_capable)):
+                if value is not None:
+                    row[field] = bool(value)
+            if success is True:
+                row["success_count"] = int(row["success_count"] or 0) + 1
+                row["last_success"] = row["last_observed_at"]
+            elif success is False:
+                row["failure_count"] = int(row["failure_count"] or 0) + 1
+                row["last_failure"] = row["last_observed_at"]
+            total = int(row["success_count"] or 0) + int(row["failure_count"] or 0)
+            row["success_rate"] = round(int(row["success_count"] or 0) / total, 4) if total else None
+            row["health"] = round((int(row["success_count"] or 0) + 1) / (total + 2), 4)
+            data[domain] = row
+            self._save(data)
+            return row

@@ -347,17 +347,22 @@ def _collect_direct_source_offers(
             found = dedupe_offers(found)
             extraction = next((str(row.source_method or "").strip() for row in found if str(row.source_method or "").strip()), method or None)
             if capability_registry is not None:
-                capability_registry.record(
-                    domain,
-                    platform=platform,
-                    discovery_method=f"direct_{method}" if method else "direct_source",
-                    extraction_method=extraction,
-                    price_capable=True if found else None,
-                    stock_capable=True if any(row.stock is not None or bool(row.availability) for row in found) else None,
-                    seller_capable=True if any(bool(row.seller_display_name or row.seller_legal_name or row.seller_tax_id) for row in found) else None,
-                    success=bool(found),
-                    category=category,
-                )
+                try:
+                    capability_registry.record(
+                        domain,
+                        platform=platform,
+                        discovery_method=f"direct_{method}" if method else "direct_source",
+                        extraction_method=extraction,
+                        price_capable=True if found else None,
+                        stock_capable=True if any(row.stock is not None or bool(row.availability) for row in found) else None,
+                        seller_capable=True if any(bool(row.seller_display_name or row.seller_legal_name or row.seller_tax_id) for row in found) else None,
+                        success=bool(found),
+                        category=category,
+                    )
+                except Exception:
+                    # Capability memory is advisory. A persistence failure must never
+                    # discard a fresh offer already returned by the source adapter.
+                    pass
             if trace:
                 trace.record(channel, "FETCH_OK", url=base_url)
                 trace.record(channel, "IDENTITY_ACCEPTED" if found else "PARSER_ZERO_OFFERS", url=base_url)

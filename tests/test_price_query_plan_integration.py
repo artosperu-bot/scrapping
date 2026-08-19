@@ -48,6 +48,18 @@ def test_open_peru_queries_include_verified_barcode_and_brand_model_without_case
     assert len(queries) == len(set(q.casefold() for q in queries))
 
 
+def test_open_peru_queries_include_country_scope_for_source_discovery():
+    queries = _general_retail_queries(ProductIdentity(mpn="ABC/123"))
+    assert '\"ABC/123\" site:.pe' in queries
+    assert '\"ABC/123\" site:.com.pe' in queries
+
+
+def test_country_scope_site_query_is_not_treated_as_one_literal_host():
+    assert price_peru_coverage._required_domain_from_query('\"ABC/123\" site:.pe') is None
+    assert price_peru_coverage._required_domain_from_query('\"ABC/123\" site:.com.pe') is None
+    assert price_peru_coverage._required_domain_from_query('\"ABC/123\" site:shop.example.pe') == "shop.example.pe"
+
+
 def test_open_peru_site_queries_enforce_domain_before_ranking(monkeypatch):
     identity = ProductIdentity(mpn="ABC/123")
     calls = []

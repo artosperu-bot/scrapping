@@ -1,0 +1,25 @@
+name: Temporary P8 Memory Kings Native Probe
+
+on:
+  pull_request:
+    paths:
+      - scripts/qa_p8_memorykings_native_probe.py
+      - '.github/workflows/temporary-p8-memorykings-native-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  memorykings-native-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - run: python scripts/qa_p8_memorykings_native_probe.py

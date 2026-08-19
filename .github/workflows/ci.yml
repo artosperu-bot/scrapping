@@ -38,6 +38,15 @@ jobs:
           pip install -e ".[dev]"
       - name: Run full regression suite
         run: python -m pytest -q
+      - name: Run price identity universality matrix
+        run: python scripts/qa_price_universality_matrix.py
+      - name: Upload price identity universality matrix
+        uses: actions/upload-artifact@v4
+        with:
+          name: price-identity-universality-${{ github.sha }}
+          path: universality_matrix.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Run deterministic SMART before-after benchmark
         run: |
           python -m product_intelligence.smart_orchestrator_benchmark --output smart-orchestrator-before-after.json

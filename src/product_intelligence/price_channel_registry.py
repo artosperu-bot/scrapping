@@ -92,7 +92,23 @@ def _offer_row(row: PriceOffer, *, channel: str | None = None) -> dict:
     }
 
 
-def build_channel_coverage(offers: list[PriceOffer]) -> dict:
+def _state_for_channel(source_states: dict | None, spec: ChannelSpec) -> dict | None:
+    if not source_states:
+        return None
+    wanted = {_key(spec.label), *(_key(alias) for alias in spec.aliases)}
+    for name, state in source_states.items():
+        if _key(name) in wanted:
+            return dict(state or {})
+    return None
+
+
+def build_channel_coverage(offers: list[PriceOffer], *, source_states: dict | None = None) -> dict:
+    """Build coverage while preserving backward compatibility.
+
+    With no source_states this returns the historical FOUND/NO_HAY view. When a
+    PriceCoverageTrace is supplied, an empty offer list retains the deepest real
+    stage reached instead of inventing NO_HAY.
+    """
     grouped: dict[str, list[PriceOffer]] = {spec.label: [] for spec in TARGET_CHANNELS}
     individual: list[PriceOffer] = []
     for row in offers:
@@ -105,12 +121,39 @@ def build_channel_coverage(offers: list[PriceOffer]) -> dict:
     channels = []
     for spec in TARGET_CHANNELS:
         rows = sorted(grouped[spec.label], key=lambda item: item.selling_price)
-        channels.append({
+        state = _state_for_channel(source_states, spec)
+        if rows:
+            status = "OFFER_ACCEPTED" if source_states is not None else "FOUND"
+            failure_stage = None
+        elif state:
+            status = state.get("status") or "NOT_SEARCHED"
+            failure_stage = state.get("failure_stage")
+        else:
+            status = "NOT_SEARCHED" if source_states is not None else "NO_HAY"
+            failure_stage = "DISCOVERY_NOT_TARGETED" if source_states is not None else None
+
+        item = {
             "channel": spec.label,
             "aliases": list(spec.aliases),
-            "status": "FOUND" if rows else "NO_HAY",
+            "status": status,
             "offers": [_offer_row(row, channel=spec.label) for row in rows],
-        })
+        }
+        if source_states is not None:
+            item.update({
+                "failure_stage": failure_stage,
+                "searched": bool(state and state.get("searched")),
+                "raw_hit": bool(state and state.get("raw_hit")),
+                "url_found": bool(state and state.get("url_found")),
+                "fetched": bool(state and state.get("fetched")),
+                "fetch_ok": bool(state and state.get("fetch_ok")),
+                "parsed": bool(state and state.get("parsed")),
+                "identity_valid": bool(rows) or bool(state and state.get("identity_valid")),
+                "price_found": bool(rows) or bool(state and state.get("price_found")),
+                "stock": state.get("stock") if state else None,
+                "seller": state.get("seller") if state else None,
+                "urls": list(state.get("urls") or []) if state else [],
+            })
+        channels.append(item)
 
     individual_rows = [_offer_row(row) for row in sorted(individual, key=lambda item: item.selling_price)]
     return {

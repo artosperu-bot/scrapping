@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 from .discovery import search_web, search_web_query
 from .models import ProductIdentity
+from .identifiers import canonical_gtin, clean_identifier_value
 from .price_identity import score_offer_identity
 from .price_models import PriceOffer
 
@@ -115,6 +116,21 @@ def _targeted_queries(domain: str, strong: str) -> list[str]:
     return queries
 
 
+def _directed_search(identity: ProductIdentity, query: str, *, limit: int, domain: str) -> list[str]:
+    """Use domain-aware admission while tolerating legacy injected search callables.
+
+    The real search_web_query supports required_domain. The TypeError retry only keeps
+    older test/plugin callables with the pre-required_domain signature compatible;
+    returned URLs are still domain-checked below before admission.
+    """
+    try:
+        return search_web_query(identity, query, limit=limit, timeout=12, required_domain=domain)
+    except TypeError as exc:
+        if "required_domain" not in str(exc):
+            raise
+        return search_web_query(identity, query, limit=limit, timeout=12)
+
+
 def discover_targeted_peru_sources(
     identity: ProductIdentity,
     *,
@@ -131,7 +147,7 @@ def discover_targeted_peru_sources(
         seen_local: set[str] = set()
         for query in _targeted_queries(domain, strong):
             try:
-                found = search_web_query(identity, query, limit=limit_per_domain, timeout=12)
+                found = _directed_search(identity, query, limit=limit_per_domain, domain=domain)
             except Exception:
                 found = []
             for url in found:
@@ -215,6 +231,51 @@ def _money(value):
         except ValueError:
             return None
     return None
+
+
+_NON_PRODUCT_PRICE_CONTEXT = (
+    "cuota", "cuotas", "mensual", "al mes", "por mes", "envío", "envio", "delivery", "shipping",
+    "despacho", "por kg", "/kg", "kilogram", "precio por unidad", "unit price", "financiamiento",
+    "cupón", "cupon", "coupon", "precio lista", "precio regular", "precio normal", "list price", "antes",
+)
+_PRODUCT_PRICE_CONTEXT = (
+    "precio internet", "precio online", "precio oferta", "precio con tarjeta", "precio efectivo",
+    "precio venta", "precio", "oferta", "ahora", "venta",
+)
+
+
+def _visible_product_price(text: str) -> float | None:
+    matches = list(re.finditer(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,7}(?:[.,][0-9]{1,2})?)", text or "", re.I))
+    candidates: list[tuple[int, int, float]] = []
+    for index, match in enumerate(matches):
+        price = _money(match.group(1))
+        if not price or price <= 0:
+            continue
+        previous_end = matches[index - 1].end() if index else max(0, match.start() - 80)
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else min(len(text), match.end() + 80)
+        start = max(previous_end, match.start() - 60)
+        end = min(next_start, match.end() + 60)
+        context = text[start:end].casefold()
+        if any(marker in context for marker in _NON_PRODUCT_PRICE_CONTEXT):
+            continue
+        # Some commerce templates render a reference/unit value as
+        # ``SKU: 0.2kg S/ 16.92``. This is not the product selling price.
+        # Keep the guard deliberately narrower than a generic weight-before-price
+        # rule so normal products such as ``1L ... Precio S/ 10`` stay eligible.
+        prefix = text[max(0, match.start() - 48):match.start()].casefold()
+        sku_weight = re.search(
+            r"\bsku\s*:\s*\d+(?:[.,]\d+)?\s*(?:kg|g|gr|lb|l|ml)\s*$",
+            prefix,
+            re.I,
+        )
+        if sku_weight:
+            continue
+        positive = sum(1 for marker in _PRODUCT_PRICE_CONTEXT if marker in context)
+        candidates.append((positive, match.start(), price))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (-row[0], row[1]))
+    return candidates[0][2]
 
 
 def _seller_from_text(text: str) -> str | None:
@@ -355,7 +416,8 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                 "mpn": node.get("mpn") or base_evidence.get("mpn"),
                 "brand": (node.get("brand") or {}).get("name") if isinstance(node.get("brand"), dict) else node.get("brand") or base_evidence.get("brand"),
                 "model": node.get("model") or node.get("name") or base_evidence.get("model"),
-                "gtin": node.get("gtin13") or node.get("gtin12") or node.get("gtin") or node.get("sku"),
+                "gtin": canonical_gtin(node.get("gtin14") or node.get("gtin13") or node.get("gtin12") or node.get("gtin8") or node.get("gtin")),
+                "sku": clean_identifier_value(node.get("sku")),
                 "title": node.get("name") or base_evidence.get("title"),
             })
             score, match, conflicts = score_offer_identity(identity, evidence)
@@ -386,7 +448,7 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
                     identity_match=match,
                     source_type="structured",
                     source_method="jsonld",
-                    sku=str(node.get("sku") or "") or None,
+                    sku=clean_identifier_value(node.get("sku")),
                     evidence=evidence,
                 ))
 
@@ -411,8 +473,7 @@ def extract_page_offers(html: str, url: str, identity: ProductIdentity, channel:
     if tag and tag.get("content"):
         meta_currency = str(tag.get("content"))
     if not meta_price:
-        match_price = re.search(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,6}(?:[.,][0-9]{1,2})?)", page_text, re.I)
-        meta_price = _money(match_price.group(1)) if match_price else None
+        meta_price = _visible_product_price(page_text)
     if meta_price and meta_price > 0:
         return [PriceOffer(
             part_number=identity.mpn,

@@ -1,0 +1,52 @@
+name: Temporary P8 Active Source Routing
+
+on:
+  pull_request:
+    paths:
+      - tests/test_price_p8_active_source_routing.py
+      - tests/test_price_p8_routing_concurrency.py
+      - tests/test_price_source_memory.py
+      - tests/test_price_source_memory_integration.py
+      - tests/test_price_marketplace_expansion.py
+      - src/product_intelligence/price_source_capabilities.py
+      - src/product_intelligence/price_workflow.py
+      - scripts/qa_fix_p8_active_source_routing.py
+      - scripts/qa_fix_p8_capability_persistence.py
+      - '.github/workflows/temporary-p8-active-source-routing.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  p8-active-routing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Apply minimal P8 routing implementation
+        run: python scripts/qa_fix_p8_active_source_routing.py
+      - name: Apply P8 persistence isolation
+        run: python scripts/qa_fix_p8_capability_persistence.py
+      - name: Focused P8 contract
+        run: python -m pytest -q tests/test_price_p8_active_source_routing.py tests/test_price_p8_routing_concurrency.py
+      - name: Related source-memory regression
+        run: python -m pytest -q tests/test_price_source_memory.py tests/test_price_source_memory_integration.py tests/test_price_marketplace_expansion.py
+      - name: Commit only after GREEN
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/product_intelligence/price_workflow.py src/product_intelligence/price_source_capabilities.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'fix: isolate P8 capability persistence'
+          git push origin HEAD:feat/universal-price-identity-recall

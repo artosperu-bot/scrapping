@@ -1,0 +1,46 @@
+name: Temporary P8 Category Routing
+
+on:
+  pull_request:
+    paths:
+      - tests/test_price_p8_category_routing_universality.py
+      - tests/test_price_p8_active_source_routing.py
+      - src/product_intelligence/product_classification.py
+      - src/product_intelligence/price_source_capabilities.py
+      - scripts/qa_fix_p8_category_routing.py
+      - '.github/workflows/temporary-p8-category-routing.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  p8-category-routing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Apply minimal P8 category routing implementation
+        run: python scripts/qa_fix_p8_category_routing.py
+      - name: P8 category routing contract
+        run: python -m pytest -q tests/test_price_p8_category_routing_universality.py
+      - name: Related active-routing regression
+        run: python -m pytest -q tests/test_price_p8_active_source_routing.py tests/test_price_p8_routing_concurrency.py
+      - name: Commit only after GREEN
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/product_intelligence/product_classification.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'feat: make learned source routing category aware'
+          git push origin HEAD:feat/universal-price-identity-recall

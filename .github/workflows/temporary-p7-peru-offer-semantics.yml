@@ -1,0 +1,40 @@
+name: Temporary P7 Peru Offer Semantics
+
+on:
+  pull_request:
+    paths:
+      - tests/test_price_p7_peru_offer_semantics.py
+      - scripts/qa_fix_p7_peru_offer_semantics.py
+      - src/product_intelligence/price_identity.py
+      - '.github/workflows/temporary-p7-peru-offer-semantics.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  peru-offer-semantics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - run: python scripts/qa_fix_p7_peru_offer_semantics.py
+      - run: python -m pytest -q tests/test_price_p7_peru_offer_semantics.py tests/test_price_p7_publication_dedupe.py
+      - run: python -m pytest -q tests/test_price_marketplace_expansion.py
+      - name: Commit only after GREEN
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/product_intelligence/price_identity.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'fix: recognize Peru-named dotcom offers'
+          git push origin HEAD:feat/universal-price-identity-recall

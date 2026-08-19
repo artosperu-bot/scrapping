@@ -6,12 +6,13 @@ on:
       - scripts/qa_p7_phase1_forensics.py
       - scripts/qa_p7_promart_vtex_probe.py
       - scripts/qa_p7_phase3_forensics.py
+      - scripts/qa_fix_p7_mercadolibre_semantics.py
       - tests/test_price_marketplace_expansion.py
       - tests/test_price_p7_mercadolibre_semantics.py
       - '.github/workflows/temporary-p7-phase1-forensics-pr.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   ml-terminal-contract:
@@ -19,6 +20,9 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -26,7 +30,16 @@ jobs:
       - run: |
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
-      - run: python -m pytest -q tests/test_price_p7_mercadolibre_semantics.py
+      - run: python scripts/qa_fix_p7_mercadolibre_semantics.py
+      - run: python -m pytest -q tests/test_price_p7_mercadolibre_semantics.py tests/test_mercadolibre_oauth.py tests/test_price_marketplace_expansion.py
+      - name: Commit only after GREEN
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/product_intelligence/price_workflow.py src/product_intelligence/price_trace.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'fix: classify Mercado Libre terminal states'
+          git push origin HEAD:feat/universal-price-identity-recall
 
   specialist-forensics:
     runs-on: ubuntu-24.04
@@ -34,20 +47,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
+        with: {python-version: '3.12', cache: pip}
       - run: |
           python -m pip install --upgrade pip
           pip install -e '.[desktop,dev]'
       - run: python scripts/qa_p7_phase3_forensics.py
       - uses: actions/upload-artifact@v4
         if: always()
-        with:
-          name: p7-phase3-forensics-${{ github.sha }}
-          path: p7_phase3_forensics.json
-          if-no-files-found: warn
-          retention-days: 14
+        with: {name: 'p7-phase3-forensics-${{ github.sha }}', path: p7_phase3_forensics.json, retention-days: 14}
 
   vtex-identity-contract:
     runs-on: ubuntu-24.04
@@ -55,9 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
+        with: {python-version: '3.12', cache: pip}
       - run: |
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
@@ -69,39 +74,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
+        with: {python-version: '3.12', cache: pip}
       - run: |
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
       - run: python scripts/qa_p7_promart_vtex_probe.py
       - uses: actions/upload-artifact@v4
         if: always()
-        with:
-          name: p7-promart-vtex-${{ github.sha }}
-          path: p7_promart_vtex_probe.json
-          if-no-files-found: warn
-          retention-days: 14
-
-  forensic:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-      - run: |
-          python -m pip install --upgrade pip
-          pip install -e '.[desktop,dev]'
-          python -m playwright install chromium
-      - run: python scripts/qa_p7_phase1_forensics.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: p7-phase1-forensics-${{ github.sha }}
-          path: p7_phase1_forensics.json
-          if-no-files-found: warn
-          retention-days: 14
+        with: {name: 'p7-promart-vtex-${{ github.sha }}', path: p7_promart_vtex_probe.json, retention-days: 14}

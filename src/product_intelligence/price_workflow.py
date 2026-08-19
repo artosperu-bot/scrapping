@@ -21,6 +21,7 @@ from .price_identity import competitor_key, dedupe_offers, filter_market_outlier
 from .price_identity_resolution import resolve_price_identity
 from .price_trace import PriceCoverageTrace
 from .price_models import PriceOffer
+from .price_queries import build_price_query_plan
 from .price_peru_coverage import discover_additional_peru_pdps, discover_general_peru_retailers
 from .web_fetch import fetch_page
 
@@ -67,12 +68,7 @@ def _is_trusted_final_offer(row: PriceOffer) -> bool:
 
 
 def _mercadolibre_queries(identity: ProductIdentity) -> list[str]:
-    values = [
-        _query(identity),
-        " ".join(v for v in (identity.brand, identity.model or identity.product_name) if v).strip(),
-        str(identity.model or identity.product_name or "").strip(),
-    ]
-    return list(dict.fromkeys(v for v in values if v))
+    return [row.query for row in build_price_query_plan(identity, limit=12)]
 
 
 def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[PriceOffer]:

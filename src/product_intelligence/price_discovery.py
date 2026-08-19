@@ -258,6 +258,18 @@ def _visible_product_price(text: str) -> float | None:
         context = text[start:end].casefold()
         if any(marker in context for marker in _NON_PRODUCT_PRICE_CONTEXT):
             continue
+        # Some commerce templates render a reference/unit value as
+        # ``SKU: 0.2kg S/ 16.92``. This is not the product selling price.
+        # Keep the guard deliberately narrower than a generic weight-before-price
+        # rule so normal products such as ``1L ... Precio S/ 10`` stay eligible.
+        prefix = text[max(0, match.start() - 48):match.start()].casefold()
+        sku_weight = re.search(
+            r"\bsku\s*:\s*\d+(?:[.,]\d+)?\s*(?:kg|g|gr|lb|l|ml)\s*$",
+            prefix,
+            re.I,
+        )
+        if sku_weight:
+            continue
         positive = sum(1 for marker in _PRODUCT_PRICE_CONTEXT if marker in context)
         candidates.append((positive, match.start(), price))
     if not candidates:

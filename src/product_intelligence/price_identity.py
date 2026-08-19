@@ -113,12 +113,24 @@ def competitor_key(row: PriceOffer) -> str:
     return f"url:{_canonical_url(row.url)}"
 
 
+def _numeric_publication_route(url: str) -> str | None:
+    parsed = urlsplit(url)
+    path = parsed.path or ""
+    match = re.search(r"/(product|producto|products|p)/(\d{3,})(?:[-/]|$)", path, re.I)
+    if not match:
+        return None
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    marker = match.group(1).lower()
+    return f"route:{host}:{marker}:{match.group(2)}"
+
+
 def dedupe_offers(offers: list[PriceOffer]) -> list[PriceOffer]:
     best: dict[tuple, PriceOffer] = {}
     for row in offers:
         canonical = _canonical_url(row.url)
         specific_pdp = bool((urlsplit(row.url).path or "").strip("/"))
-        locator = canonical if specific_pdp else (row.publication_id or row.sku or canonical)
+        route_locator = _numeric_publication_route(row.url)
+        locator = route_locator or (canonical if specific_pdp else (row.publication_id or row.sku or canonical))
         key = (_norm(row.channel), competitor_key(row), _norm(row.part_number or row.model), locator)
         current = best.get(key)
         if current is None or row.confidence > current.confidence or (row.confidence == current.confidence and row.source_type == "api" and current.source_type != "api"):

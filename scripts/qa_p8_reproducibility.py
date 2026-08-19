@@ -169,7 +169,9 @@ def run(label: str, output: Path, seed_capabilities: Path | None, report_path: P
 
     events = []
     started = time.monotonic()
-    offers = run_price_product(identity, output, on_event=lambda event: events.append(dict(event)), max_sources=72)
+    # Deliberately use the production default source budget. Reproducibility must
+    # come from routing intelligence, not a larger search allowance.
+    offers = run_price_product(identity, output, on_event=lambda event: events.append(dict(event)))
     runtime = round(time.monotonic() - started, 3)
 
     statuses, recovery = status_table(offers, events)

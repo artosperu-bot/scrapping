@@ -11,9 +11,13 @@ on:
       - '.github/workflows/temporary-p8-reproducibility.yml'
   workflow_dispatch:
 
+concurrency:
+  group: p8-reproducibility
+  cancel-in-progress: true
+
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 jobs:
   p8-reproducibility:
@@ -30,6 +34,20 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - name: Cancel older P8 reproducibility runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$GITHUB_RUN_ID"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/temporary-p8-reproducibility.yml/runs?per_page=30" \
+            --jq '.workflow_runs[] | select(.status == "in_progress" or .status == "queued" or .status == "requested" or .status == "waiting") | .id' \
+            | while read -r id; do
+                [ -n "$id" ] || continue
+                if [ "$id" != "$current" ]; then
+                  gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/cancel" >/dev/null || true
+                  echo "CANCELLED_OLDER_P8_RUN=$id"
+                fi
+              done
       - run: |
           python -m pip install --upgrade pip
           pip install -e '.[dev]'

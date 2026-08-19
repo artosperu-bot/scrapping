@@ -76,13 +76,14 @@ def test_vtex_catalog_item_preserves_multiple_marketplace_sellers():
         assert all(row.publication_id == "CAT-1" for row in rows)
 
 
-def test_vtex_exact_mpn_query_can_supply_identity_when_payload_hides_mpn_but_brand_and_discriminator_match():
+def test_vtex_reads_exact_mpn_from_deep_product_description():
     identity = ProductIdentity(brand="ExampleBrand", mpn="ABC-960G")
     payload = [
         {
             "productId": "RIGHT",
             "productName": "ExampleBrand Fast SSD 960GB",
             "brand": "ExampleBrand",
+            "description": "MARCA EXAMPLEBRAND\nMODELO FAST\nNUMERO DE PARTE ABC-960G\nCAPACIDAD 960 GB",
             "items": [{"itemId": "SKU-R", "name": "Fast SSD 960GB", "sellers": [
                 {"sellerId": "seller-r", "sellerName": "Seller Right", "commertialOffer": {
                     "Price": 580, "ListPrice": 650, "AvailableQuantity": 5, "IsAvailable": True,
@@ -90,19 +91,10 @@ def test_vtex_exact_mpn_query_can_supply_identity_when_payload_hides_mpn_but_bra
             ]}],
         },
         {
-            "productId": "WRONG-BRAND",
-            "productName": "OtherBrand Fast SSD 960GB",
-            "brand": "OtherBrand",
-            "items": [{"itemId": "SKU-B", "name": "Fast SSD 960GB", "sellers": [
-                {"sellerId": "seller-b", "sellerName": "Seller Wrong", "commertialOffer": {
-                    "Price": 400, "AvailableQuantity": 5, "IsAvailable": True,
-                }}
-            ]}],
-        },
-        {
             "productId": "WRONG-CAPACITY",
             "productName": "ExampleBrand Fast SSD 480GB",
             "brand": "ExampleBrand",
+            "description": "MARCA EXAMPLEBRAND\nNUMERO DE PARTE ABC-480G\nCAPACIDAD 480 GB",
             "items": [{"itemId": "SKU-C", "name": "Fast SSD 480GB", "sellers": [
                 {"sellerId": "seller-c", "sellerName": "Seller Wrong Capacity", "commertialOffer": {
                     "Price": 300, "AvailableQuantity": 5, "IsAvailable": True,
@@ -110,14 +102,7 @@ def test_vtex_exact_mpn_query_can_supply_identity_when_payload_hides_mpn_but_bra
             ]}],
         },
     ]
-    rows = parse_vtex_payload(
-        payload,
-        identity,
-        channel="Example",
-        source_url="https://shop.example.pe",
-        retrieval_query="ABC-960G",
-        retrieval_signal="MPN_ORIGINAL",
-    )
+    rows = parse_vtex_payload(payload, identity, channel="Example", source_url="https://shop.example.pe")
     assert len(rows) == 1
     assert rows[0].publication_id == "RIGHT"
     assert rows[0].seller_display_name == "Seller Right"
@@ -125,12 +110,13 @@ def test_vtex_exact_mpn_query_can_supply_identity_when_payload_hides_mpn_but_bra
     assert rows[0].identity_match == "EXACT_MPN"
 
 
-def test_vtex_payload_without_retrieval_context_does_not_infer_missing_mpn_from_brand_capacity_alone():
+def test_vtex_does_not_infer_missing_mpn_from_brand_capacity_alone():
     identity = ProductIdentity(brand="ExampleBrand", mpn="ABC-960G")
     payload = [{
         "productId": "RIGHT",
         "productName": "ExampleBrand Fast SSD 960GB",
         "brand": "ExampleBrand",
+        "description": "ExampleBrand Fast SSD with 960GB capacity but no part number",
         "items": [{"itemId": "SKU-R", "name": "Fast SSD 960GB", "sellers": [
             {"sellerId": "seller-r", "sellerName": "Seller Right", "commertialOffer": {
                 "Price": 580, "AvailableQuantity": 5, "IsAvailable": True,

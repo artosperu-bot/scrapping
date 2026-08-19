@@ -236,7 +236,7 @@ def _money(value):
 _NON_PRODUCT_PRICE_CONTEXT = (
     "cuota", "cuotas", "mensual", "al mes", "por mes", "envío", "envio", "delivery", "shipping",
     "despacho", "por kg", "/kg", "kilogram", "precio por unidad", "unit price", "financiamiento",
-    "cupón", "cupon", "coupon",
+    "cupón", "cupon", "coupon", "precio lista", "precio regular", "precio normal", "list price", "antes",
 )
 _PRODUCT_PRICE_CONTEXT = (
     "precio internet", "precio online", "precio oferta", "precio con tarjeta", "precio efectivo",

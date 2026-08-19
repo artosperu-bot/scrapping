@@ -44,6 +44,38 @@ jobs:
           if grep -q 'on_metrics=None' src/product_intelligence/discovery.py; then
             echo 'QUERY_TELEMETRY_ALREADY_APPLIED=1'
           else
+            python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/qa_apply_price_query_telemetry.py')
+          text = p.read_text(encoding='utf-8')
+          anchor = "\ndef replace_once(path: str, old: str, new: str) -> None:\n"
+          helper = '''
+          def replace_tail(path: str, start: str, replacement: str) -> None:
+              target = ROOT / path
+              source = target.read_text(encoding="utf-8")
+              if source.count(start) != 1:
+                  raise SystemExit(f"{path}: ambiguous tail marker {start!r}")
+              left = source.index(start)
+              target.write_text(source[:left] + replacement + "\\n", encoding="utf-8")
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+          '''
+          if 'def replace_tail(' not in text:
+              text = text.replace(anchor, '\n' + helper, 1)
+          old = '''replace_section(
+              "src/product_intelligence/price_peru_coverage.py",
+              "def discover_general_peru_retailers(",
+              "return rows",
+          '''
+          new = '''replace_tail(
+              "src/product_intelligence/price_peru_coverage.py",
+              "def discover_general_peru_retailers(",
+          '''
+          if old not in text:
+              raise SystemExit('telemetry patcher tail call not found')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
             python scripts/qa_apply_price_query_telemetry.py
             python -m pytest -q tests/test_price_query_information_gain.py tests/test_price_query_plan_integration.py tests/test_price_source_memory_integration.py
             git config user.name 'github-actions[bot]'

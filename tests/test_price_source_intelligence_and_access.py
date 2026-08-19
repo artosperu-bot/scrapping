@@ -119,6 +119,20 @@ def test_generic_html_ignores_non_product_money_when_real_price_exists(noise):
     assert rows[0].selling_price == 499.0
 
 
+def test_generic_html_rejects_weight_prefixed_reference_price():
+    rows = _generic_rows('<div>5un = 1Kg(aprox) | SKU: 0.2kg S/ 16.92 - Cancelar + Aceptar</div>')
+    assert rows == []
+
+
+def test_generic_html_skips_weight_prefixed_reference_price_when_real_price_exists():
+    rows = _generic_rows('''
+      <div>5un = 1Kg(aprox) | SKU: 0.2kg S/ 16.92 - Cancelar + Aceptar</div>
+      <div>Precio Internet S/ 499.00</div>
+    ''')
+    assert len(rows) == 1
+    assert rows[0].selling_price == 499.0
+
+
 def test_generic_html_does_not_choose_list_price_over_explicit_selling_price():
     rows = _generic_rows('<div>Precio lista S/ 599.00</div><div>Precio Internet S/ 499.00</div>')
     assert len(rows) == 1

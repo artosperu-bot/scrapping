@@ -35,18 +35,18 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Cancel older P8 reproducibility runs
+      - name: Isolate P8 provider traffic
         shell: bash
         run: |
           set -euo pipefail
           current="$GITHUB_RUN_ID"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/temporary-p8-reproducibility.yml/runs?per_page=30" \
-            --jq '.workflow_runs[] | select(.status == "in_progress" or .status == "queued" or .status == "requested" or .status == "waiting") | .id' \
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" \
+            --jq '.workflow_runs[] | select((.status == "in_progress" or .status == "queued" or .status == "requested" or .status == "waiting" or .status == "pending") and (.name == "Temporary P8 Reproducibility" or .name == "Price Intelligence Smoke" or .name == "Temporary P7 Provider Matrix" or .name == "Temporary P7 Phase1 Forensics PR" or .name == "Temporary P8 Memory Kings Native Probe")) | .id' \
             | while read -r id; do
                 [ -n "$id" ] || continue
                 if [ "$id" != "$current" ]; then
                   gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/cancel" >/dev/null || true
-                  echo "CANCELLED_OLDER_P8_RUN=$id"
+                  echo "CANCELLED_PROVIDER_COMPETITOR_RUN=$id"
                 fi
               done
       - run: |

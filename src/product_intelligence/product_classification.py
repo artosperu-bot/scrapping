@@ -50,6 +50,9 @@ def classify_product(
         ("COMPUTER", ("laptop", "notebook", "desktop pc", "laptop pc", "workstation", "all in one pc", "computer")),
         ("NETWORK", ("wifi router", "wi fi router", "router", "network switch", "ethernet switch", "access point", "network equipment", "mesh wifi")),
         ("AUDIO", ("headphones", "headphone", "headset", "earbuds", "earphones", "speaker", "microphone", "audio device")),
+        ("TOOL", ("power tool", "cordless drill", "power drill", "impact driver", "angle grinder", "rotary hammer", "taladro", "amoladora", "esmeril angular")),
+        ("APPLIANCE", ("microwave oven", "refrigerator", "washing machine", "dishwasher", "vacuum cleaner", "air fryer", "blender appliance", "microondas", "refrigeradora", "lavadora", "aspiradora")),
+        ("BABY_CARE", ("baby diapers", "baby diaper", "diapers size", "pañales bebe", "pañales bebé", "panales bebe", "panales bebé")),
         ("ACCESSORY", ("mouse accessory", "wireless mouse", "computer mouse", "keyboard", "dock", "docking station", "charger", "charging cable", "usb cable", "accessory")),
     )
 

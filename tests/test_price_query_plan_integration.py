@@ -78,6 +78,59 @@ def test_country_scope_query_reaches_search_without_fake_required_host(monkeypat
     assert calls == [('\"ABC/123\" site:.pe', None)]
 
 
+def test_country_scope_diversity_query_excludes_seen_domains():
+    query = price_peru_coverage._country_scope_diversity_query(
+        "ABC/123", {"first.pe", "second.com.pe"}, round_index=0
+    )
+    assert query.startswith('\"ABC/123\" site:.pe')
+    assert "-site:first.pe" in query
+    assert "-site:second.com.pe" in query
+
+
+def test_open_peru_diversity_lane_surfaces_new_domain_after_initial_plateau(monkeypatch):
+    identity = ProductIdentity(mpn="ABC/123")
+    events = []
+    calls = []
+
+    monkeypatch.setattr(
+        price_peru_coverage,
+        "_general_retail_query_specs",
+        lambda *_args, **_kwargs: [('\"ABC/123\" precio Perú', "MPN_ORIGINAL")],
+    )
+    monkeypatch.setattr(
+        price_peru_coverage,
+        "_search_query_specs",
+        lambda *_args, **_kwargs: [
+            (
+                '\"ABC/123\" precio Perú',
+                "MPN_ORIGINAL",
+                ["https://first.pe/product/abc123"],
+                {"raw_results": 1, "valid_results": 1},
+            )
+        ],
+    )
+
+    def fake_search(_identity, query, **kwargs):
+        calls.append(query)
+        if "-site:first.pe" in query:
+            return ["https://second.pe/product/abc123"], {
+                "query": query,
+                "raw_results": 1,
+                "valid_results": 1,
+            }
+        return [], {"query": query, "raw_results": 0, "valid_results": 0}
+
+    monkeypatch.setattr(price_peru_coverage, "_search_with_metrics", fake_search)
+    rows = price_peru_coverage.discover_general_peru_retailers(
+        identity, limit=5, on_query_event=events.append
+    )
+
+    assert "https://first.pe/product/abc123" in rows
+    assert "https://second.pe/product/abc123" in rows
+    assert any("-site:first.pe" in query for query in calls)
+    assert any(event.get("signal_type") == "PERU_TLD_DIVERSITY" for event in events)
+
+
 def test_open_peru_site_queries_enforce_domain_before_ranking(monkeypatch):
     identity = ProductIdentity(mpn="ABC/123")
     calls = []

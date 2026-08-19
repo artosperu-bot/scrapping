@@ -7,10 +7,10 @@ from product_intelligence.price_workflow import _mercadolibre_queries
 def test_directed_domain_queries_use_mpn_separator_aliases():
     identity = ProductIdentity(brand="ExampleBrand", model="Model 123", mpn="ABC/123")
     queries = _queries(identity, "shop.example.pe")
-    assert any('"ABC/123" site:shop.example.pe' == q for q in queries)
-    assert any('"ABC123" site:shop.example.pe' == q for q in queries)
-    assert any('"ABC-123" site:shop.example.pe' == q for q in queries)
-    assert any('"ABC 123" site:shop.example.pe' == q for q in queries)
+    assert any('\"ABC/123\" site:shop.example.pe' == q for q in queries)
+    assert any('\"ABC123\" site:shop.example.pe' == q for q in queries)
+    assert any('\"ABC-123\" site:shop.example.pe' == q for q in queries)
+    assert any('\"ABC 123\" site:shop.example.pe' == q for q in queries)
 
 
 def test_directed_discovery_keeps_alias_novelty_after_exact_pdp(monkeypatch):
@@ -22,9 +22,9 @@ def test_directed_discovery_keeps_alias_novelty_after_exact_pdp(monkeypatch):
 
     def fake_search(_identity, query, **kwargs):
         calls.append((query, kwargs.get("required_domain")))
-        if query == '"ABC/123" site:shop.example.pe':
+        if query == '\"ABC/123\" site:shop.example.pe':
             return [exact]
-        if query == '"ABC123" site:shop.example.pe':
+        if query == '\"ABC123\" site:shop.example.pe':
             return [compact_b, compact_c]
         return []
 
@@ -32,8 +32,8 @@ def test_directed_discovery_keeps_alias_novelty_after_exact_pdp(monkeypatch):
     rows = price_peru_coverage._discover_target_domain(identity, "shop.example.pe", 5)
 
     assert rows == [exact, compact_b, compact_c]
-    assert ('"ABC/123" site:shop.example.pe', "shop.example.pe") in calls
-    assert ('"ABC123" site:shop.example.pe', "shop.example.pe") in calls
+    assert ('\"ABC/123\" site:shop.example.pe', "shop.example.pe") in calls
+    assert ('\"ABC123\" site:shop.example.pe', "shop.example.pe") in calls
 
 
 def test_open_peru_queries_include_verified_barcode_and_brand_model_without_case_noise():
@@ -42,10 +42,28 @@ def test_open_peru_queries_include_verified_barcode_and_brand_model_without_case
     )
     queries = _general_retail_queries(identity)
     joined = "\n".join(queries)
-    assert '"ABC123" precio Perú' in joined
-    assert '"036000291452" precio Perú' in joined
-    assert '"Model 123"' in joined
+    assert '\"ABC123\" precio Perú' in joined
+    assert '\"036000291452\" precio Perú' in joined
+    assert '\"Model 123\"' in joined
     assert len(queries) == len(set(q.casefold() for q in queries))
+
+
+def test_open_peru_site_queries_enforce_domain_before_ranking(monkeypatch):
+    identity = ProductIdentity(mpn="ABC/123")
+    calls = []
+
+    def fake_search(_identity, query, **kwargs):
+        calls.append((query, kwargs.get("required_domain")))
+        return ["https://shop.example.pe/product/abc123"]
+
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    price_peru_coverage._search_query_specs(
+        identity,
+        [('\"ABC/123\" site:shop.example.pe', "KNOWN_DOMAIN_HINT")],
+        5,
+    )
+
+    assert calls == [('\"ABC/123\" site:shop.example.pe', "shop.example.pe")]
 
 
 def test_mercadolibre_search_reuses_bounded_signal_plan():

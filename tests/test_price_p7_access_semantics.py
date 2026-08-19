@@ -19,7 +19,11 @@ def _run_status(monkeypatch, url: str, status_code: int, title: str = "blocked")
     )
     monkeypatch.setattr(price_workflow, "fetch_page", lambda *_a, **_k: fetched)
     monkeypatch.setattr(price_workflow, "extract_page_offers", lambda *_a, **_k: [])
-    rows = price_workflow._collect_web_offers([url], IDENTITY, events.append, trace=trace)
+
+    def emit(event_type: str, **payload):
+        events.append({"type": event_type, **payload})
+
+    rows = price_workflow._collect_web_offers([url], IDENTITY, emit, trace=trace)
     return rows, events, trace.source_states()
 
 

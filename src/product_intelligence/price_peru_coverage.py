@@ -263,9 +263,13 @@ def _is_peru_retail_candidate(url: str, strong: str, *, priority_domains: tuple[
     if not host or any(marker in path for marker in _LISTING_MARKERS): return False
     if any(_host_matches(url, domain) for domain in PERU_MARKETPLACE_DOMAINS): return False
     local = host.endswith(".pe") or host.endswith(".com.pe")
+    # Some Peru retailers use a generic .com while carrying an explicit Peru cue
+    # in the hostname. This is geography evidence only; the existing strong-ID /
+    # product-marker gate below still decides whether the URL is a product candidate.
+    peru_host = "peru" in host
     hinted = any(_host_matches(url, domain) for domain in (*PERU_RETAIL_HINT_DOMAINS, *priority_domains))
     peru_path = path.startswith("/peru")
-    if not (local or hinted or peru_path): return False
+    if not (local or peru_host or hinted or peru_path): return False
     return bool((_compact(strong) and _compact(strong) in _compact(url)) or any(marker in path for marker in _PRODUCT_MARKERS))
 
 

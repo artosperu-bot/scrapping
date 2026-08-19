@@ -116,6 +116,21 @@ def _targeted_queries(domain: str, strong: str) -> list[str]:
     return queries
 
 
+def _directed_search(identity: ProductIdentity, query: str, *, limit: int, domain: str) -> list[str]:
+    """Use domain-aware admission while tolerating legacy injected search callables.
+
+    The real search_web_query supports required_domain. The TypeError retry only keeps
+    older test/plugin callables with the pre-required_domain signature compatible;
+    returned URLs are still domain-checked below before admission.
+    """
+    try:
+        return search_web_query(identity, query, limit=limit, timeout=12, required_domain=domain)
+    except TypeError as exc:
+        if "required_domain" not in str(exc):
+            raise
+        return search_web_query(identity, query, limit=limit, timeout=12)
+
+
 def discover_targeted_peru_sources(
     identity: ProductIdentity,
     *,
@@ -132,7 +147,7 @@ def discover_targeted_peru_sources(
         seen_local: set[str] = set()
         for query in _targeted_queries(domain, strong):
             try:
-                found = search_web_query(identity, query, limit=limit_per_domain, timeout=12, required_domain=domain)
+                found = _directed_search(identity, query, limit=limit_per_domain, domain=domain)
             except Exception:
                 found = []
             for url in found:
@@ -230,13 +245,16 @@ _PRODUCT_PRICE_CONTEXT = (
 
 
 def _visible_product_price(text: str) -> float | None:
+    matches = list(re.finditer(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,7}(?:[.,][0-9]{1,2})?)", text or "", re.I))
     candidates: list[tuple[int, int, float]] = []
-    for match in re.finditer(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,7}(?:[.,][0-9]{1,2})?)", text or "", re.I):
+    for index, match in enumerate(matches):
         price = _money(match.group(1))
         if not price or price <= 0:
             continue
-        start = max(0, match.start() - 70)
-        end = min(len(text), match.end() + 70)
+        previous_end = matches[index - 1].end() if index else max(0, match.start() - 80)
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else min(len(text), match.end() + 80)
+        start = max(previous_end, match.start() - 60)
+        end = min(next_start, match.end() + 60)
         context = text[start:end].casefold()
         if any(marker in context for marker in _NON_PRODUCT_PRICE_CONTEXT):
             continue

@@ -1,0 +1,36 @@
+name: Temporary P7 Phase1 Forensics PR
+
+on:
+  pull_request:
+    paths:
+      - scripts/qa_p7_phase1_forensics.py
+      - .github/workflows/temporary-p7-phase1-forensics-pr.yml
+
+permissions:
+  contents: read
+
+jobs:
+  forensic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[desktop,dev]'
+          python -m playwright install chromium
+      - name: Run P7 Phase1 forensic probe
+        run: python scripts/qa_p7_phase1_forensics.py
+      - name: Upload P7 Phase1 forensic evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p7-phase1-forensics-${{ github.sha }}
+          path: p7_phase1_forensics.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -5,12 +5,29 @@ on:
     paths:
       - scripts/qa_p7_phase1_forensics.py
       - scripts/qa_p7_promart_vtex_probe.py
+      - tests/test_price_marketplace_expansion.py
       - .github/workflows/temporary-p7-phase1-forensics-pr.yml
 
 permissions:
   contents: read
 
 jobs:
+  vtex-identity-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Run focused VTEX identity contract
+        run: python -m pytest -q tests/test_price_marketplace_expansion.py
+
   promart-vtex:
     runs-on: ubuntu-24.04
     timeout-minutes: 8

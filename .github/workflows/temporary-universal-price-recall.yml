@@ -5,7 +5,7 @@ on:
     branches:
       - feat/universal-price-identity-recall
     paths:
-      - scripts/qa_apply_price_query_source_access.py
+      - scripts/qa_apply_price_query_telemetry.py
       - .github/workflows/temporary-universal-price-recall.yml
 
 permissions:
@@ -28,19 +28,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
-      - name: Apply deterministic query/source/access patch
-        run: python scripts/qa_apply_price_query_source_access.py
-      - name: Verify focused RED contracts now GREEN
+      - name: Apply deterministic query telemetry patch
+        run: python scripts/qa_apply_price_query_telemetry.py
+      - name: Verify information-gain contracts
         run: |
-          python -m pytest -q tests/test_price_query_plan_integration.py tests/test_price_source_intelligence_and_access.py tests/test_price_identity_resolution_and_queries.py tests/test_price_trace_coverage.py tests/test_price_workflow_canonical_trace.py
-      - name: Verify related Price and identity regressions
+          python -m pytest -q tests/test_price_query_information_gain.py tests/test_price_query_plan_integration.py tests/test_price_source_memory_integration.py
+      - name: Verify related price and identity regressions
         run: |
-          python -m pytest -q tests/test_price_workflow.py tests/test_price_channel_coverage.py tests/test_universal_price_identity_recall.py tests/test_identity_bootstrap.py tests/test_identity_general_hardening.py tests/test_identity_remaining_general_failures.py tests/test_mercadolibre_oauth.py
+          python -m pytest -q tests/test_price_workflow.py tests/test_price_channel_coverage.py tests/test_price_source_intelligence_and_access.py tests/test_price_marketplace_expansion.py tests/test_price_workflow_canonical_trace.py tests/test_price_identity_resolution_and_queries.py tests/test_universal_price_identity_recall.py tests/test_mercadolibre_oauth.py
       - name: Commit only verified productive files
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/product_intelligence/price_peru_coverage.py src/product_intelligence/price_workflow.py src/product_intelligence/price_discovery.py src/product_intelligence/mercadolibre_oauth.py
+          git add src/product_intelligence/discovery.py src/product_intelligence/price_peru_coverage.py src/product_intelligence/price_workflow.py
           git diff --cached --exit-code && exit 0 || true
-          git commit -m 'feat: integrate universal price queries and safe access semantics'
+          git commit -m 'feat: add price query information gain telemetry'
           git push origin HEAD:feat/universal-price-identity-recall

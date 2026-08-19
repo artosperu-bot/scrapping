@@ -60,6 +60,24 @@ def test_country_scope_site_query_is_not_treated_as_one_literal_host():
     assert price_peru_coverage._required_domain_from_query('\"ABC/123\" site:shop.example.pe') == "shop.example.pe"
 
 
+def test_country_scope_query_reaches_search_without_fake_required_host(monkeypatch):
+    identity = ProductIdentity(mpn="ABC/123")
+    calls = []
+
+    def fake_search(_identity, query, **kwargs):
+        calls.append((query, kwargs.get("required_domain")))
+        return ["https://retailer.pe/product/abc123"]
+
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    price_peru_coverage._search_query_specs(
+        identity,
+        [('\"ABC/123\" site:.pe', "PERU_TLD_SCOPE")],
+        5,
+    )
+
+    assert calls == [('\"ABC/123\" site:.pe', None)]
+
+
 def test_open_peru_site_queries_enforce_domain_before_ranking(monkeypatch):
     identity = ProductIdentity(mpn="ABC/123")
     calls = []

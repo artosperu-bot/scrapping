@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .identifiers import canonical_gtin, clean_identifier_value, mpn_aliases
@@ -11,6 +12,15 @@ class PriceQuery:
     query: str
     signal_type: str
     signal_value: str
+
+
+def _mpn_signal_type(original: str, alias: str) -> str:
+    if alias == original:
+        return "MPN_ORIGINAL"
+    compact = re.sub(r"[^A-Za-z0-9]+", "", original)
+    if alias == compact:
+        return "MPN_COMPACT"
+    return "MPN_SEPARATOR_ALIAS"
 
 
 def build_price_query_plan(identity: ProductIdentity, *, limit: int = 12) -> list[PriceQuery]:
@@ -35,7 +45,7 @@ def build_price_query_plan(identity: ProductIdentity, *, limit: int = 12) -> lis
     mpn = clean_identifier_value(identity.mpn)
     if mpn:
         for alias in mpn_aliases(mpn):
-            add(alias, "MPN" if alias == mpn else "MPN_ALIAS", mpn)
+            add(alias, _mpn_signal_type(mpn, alias), mpn)
 
     brand = str(identity.brand or identity.manufacturer or "").strip()
     if brand and mpn:

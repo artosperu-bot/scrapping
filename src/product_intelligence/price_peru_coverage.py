@@ -334,6 +334,13 @@ def _required_domain_from_query(query: str) -> str | None:
     return domain
 
 
+def _country_scope_diversity_query(strong: str, seen_domains: set[str], *, round_index: int) -> str:
+    scope = ".pe" if round_index % 2 == 0 else ".com.pe"
+    domains = sorted({str(domain or "").strip().casefold().removeprefix("www.") for domain in seen_domains if str(domain or "").strip()})[:8]
+    exclusions = " ".join(f"-site:{domain}" for domain in domains)
+    return f'"{strong}" site:{scope} {exclusions}'.strip()
+
+
 def _search_query_batches(identity: ProductIdentity, queries: list[str], per_query: int) -> list[list[str]]:
     if not queries:
         return []
@@ -407,6 +414,49 @@ def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 2
             _emit_query_gain(on_query_event, lane="open_peru", query=query, signal_type=signal_type, metrics=metrics, before=before, after=set(seen), stop_reason=reason)
             if len(rows) >= limit:
                 return rows
+
+    # Search engines often keep returning the same high-ranked Peru retailers.
+    # Use bounded negative-site expansion only after at least one valid retailer
+    # was found; this surfaces new domains without hardcoding an oracle/source list.
+    if rows and len(rows) < limit:
+        no_novelty_rounds = 0
+        for round_index in range(4):
+            before = set(seen)
+            seen_domains = {_host(url) for url in seen if _host(url)}
+            query = _country_scope_diversity_query(strong, seen_domains, round_index=round_index)
+            found, metrics = _search_with_metrics(identity, query, limit=per_query)
+            for raw in found:
+                url = str(raw or "").strip()
+                if not url.startswith(("http://", "https://")) or url in seen:
+                    continue
+                if not _is_peru_retail_candidate(url, strong, priority_domains=priority_domains):
+                    continue
+                seen.add(url)
+                rows.append(url)
+                if len(rows) >= limit:
+                    break
+            gained = bool(seen - before)
+            no_novelty_rounds = 0 if gained else no_novelty_rounds + 1
+            if len(rows) >= limit:
+                reason = "RETAIL_LIMIT_REACHED"
+            elif no_novelty_rounds >= 2:
+                reason = "DIVERSITY_NO_NOVELTY_STOP"
+            elif gained:
+                reason = "CONTINUE_NOVELTY"
+            else:
+                reason = "CONTINUE_NO_NOVELTY"
+            _emit_query_gain(
+                on_query_event,
+                lane="open_peru_diversity",
+                query=query,
+                signal_type="PERU_TLD_DIVERSITY",
+                metrics=metrics,
+                before=before,
+                after=set(seen),
+                stop_reason=reason,
+            )
+            if len(rows) >= limit or no_novelty_rounds >= 2:
+                break
 
     model = str(identity.model or identity.product_name or "").strip()
     if model and len(rows) < limit:

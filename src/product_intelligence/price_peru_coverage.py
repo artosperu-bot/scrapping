@@ -288,6 +288,13 @@ def _general_retail_query_specs(identity: ProductIdentity, *, priority_domains: 
             (f'"{model}" "{strong}" {brand} Perú'.strip(), "BRAND_MODEL"),
         ]
     if strong:
+        # Country-scope discovery finds Peru retailers that are not yet known to
+        # capability memory or the static hint set. These are search-engine scopes,
+        # not one literal hostname, so admission remains identity + Peru constrained.
+        specs += [
+            (f'"{strong}" site:.pe', "PERU_TLD_SCOPE"),
+            (f'"{strong}" site:.com.pe', "PERU_TLD_SCOPE"),
+        ]
         learned = tuple(dict.fromkeys(str(domain or "").strip().casefold().removeprefix("www.") for domain in priority_domains if str(domain or "").strip()))[:12]
         specs += [(f'"{strong}" site:{domain}', "LEARNED_DOMAIN") for domain in learned]
         specs += [(f'"{strong}" site:{domain}', "KNOWN_DOMAIN_HINT") for domain in PERU_RETAIL_HINT_DOMAINS]
@@ -320,7 +327,11 @@ def _required_domain_from_query(query: str) -> str | None:
     match = re.search(r"(?:^|\s)site:([a-z0-9.-]+)", str(query or ""), flags=re.IGNORECASE)
     if not match:
         return None
-    return match.group(1).casefold().removeprefix("www.")
+    domain = match.group(1).casefold().removeprefix("www.")
+    # site:.pe / site:.com.pe are country-wide search scopes, not literal hosts.
+    if domain.startswith("."):
+        return None
+    return domain
 
 
 def _search_query_batches(identity: ProductIdentity, queries: list[str], per_query: int) -> list[list[str]]:

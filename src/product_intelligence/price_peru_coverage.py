@@ -194,7 +194,8 @@ def _discover_target_domain(identity: ProductIdentity, domain: str, limit_per_do
         if _host_matches(seed, domain) and _is_pdp(seed, domain, strong):
             seen.add(seed)
             found.append(seed)
-    specs = _query_specs(identity, domain)
+    signal_map = {query: signal for query, signal in _query_specs(identity, domain)}
+    specs = [(query, signal_map.get(query, "UNKNOWN_SIGNAL")) for query in _queries(identity, domain)]
     for index, (query, signal_type) in enumerate(specs):
         before = set(seen)
         urls, metrics = _search_with_metrics(identity, query, limit=limit_per_domain, required_domain=domain)

@@ -9,6 +9,7 @@ on:
       - scripts/qa_fix_p7_mercadolibre_semantics.py
       - scripts/qa_fix_p7_brand_mpn_discovery.py
       - scripts/qa_p7_micro_gate.py
+      - scripts/qa_p7_residual_forensics.py
       - tests/test_price_marketplace_expansion.py
       - tests/test_price_p7_mercadolibre_semantics.py
       - tests/test_price_p7_brand_mpn_discovery.py
@@ -56,6 +57,22 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with: {name: 'p7-micro-gate-${{ github.sha }}', path: p7_micro_gate.json, retention-days: 14}
+
+  p7-residual-forensics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: feat/universal-price-identity-recall, fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12', cache: pip}
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[desktop,dev]'
+      - run: python scripts/qa_p7_residual_forensics.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: 'p7-residual-forensics-${{ github.sha }}', path: p7_residual_forensics.json, retention-days: 14}
 
   ml-terminal-contract:
     runs-on: ubuntu-24.04

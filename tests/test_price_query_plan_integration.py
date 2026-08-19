@@ -1,3 +1,4 @@
+from product_intelligence import price_peru_coverage
 from product_intelligence.models import ProductIdentity
 from product_intelligence.price_peru_coverage import _general_retail_queries, _queries
 from product_intelligence.price_workflow import _mercadolibre_queries
@@ -10,6 +11,29 @@ def test_directed_domain_queries_use_mpn_separator_aliases():
     assert any('"ABC123" site:shop.example.pe' == q for q in queries)
     assert any('"ABC-123" site:shop.example.pe' == q for q in queries)
     assert any('"ABC 123" site:shop.example.pe' == q for q in queries)
+
+
+def test_directed_discovery_keeps_alias_novelty_after_exact_pdp(monkeypatch):
+    identity = ProductIdentity(brand="ExampleBrand", model="Model 123", mpn="ABC/123")
+    exact = "https://shop.example.pe/product/listing-a"
+    compact_b = "https://shop.example.pe/product/listing-b"
+    compact_c = "https://shop.example.pe/product/listing-c"
+    calls = []
+
+    def fake_search(_identity, query, **kwargs):
+        calls.append((query, kwargs.get("required_domain")))
+        if query == '"ABC/123" site:shop.example.pe':
+            return [exact]
+        if query == '"ABC123" site:shop.example.pe':
+            return [compact_b, compact_c]
+        return []
+
+    monkeypatch.setattr(price_peru_coverage, "search_web_query", fake_search)
+    rows = price_peru_coverage._discover_target_domain(identity, "shop.example.pe", 5)
+
+    assert rows == [exact, compact_b, compact_c]
+    assert ('"ABC/123" site:shop.example.pe', "shop.example.pe") in calls
+    assert ('"ABC123" site:shop.example.pe', "shop.example.pe") in calls
 
 
 def test_open_peru_queries_include_verified_barcode_and_brand_model_without_case_noise():

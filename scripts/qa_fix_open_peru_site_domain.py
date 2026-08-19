@@ -15,17 +15,13 @@ def replace_once(text: str, old: str, new: str) -> str:
 
 text = TARGET.read_text(encoding="utf-8")
 
-anchor = '''def _search_query_batches(identity: ProductIdentity, queries: list[str], per_query: int) -> list[list[str]]:\n'''
-helper = '''def _required_domain_from_query(query: str) -> str | None:\n    match = re.search(r"(?:^|\\s)site:([a-z0-9.-]+)", str(query or ""), flags=re.IGNORECASE)\n    if not match:\n        return None\n    return match.group(1).casefold().removeprefix("www.")\n\n\ndef _search_query_batches(identity: ProductIdentity, queries: list[str], per_query: int) -> list[list[str]]:\n'''
-text = replace_once(text, anchor, helper)
+old_scope = '''    if strong:\n        learned = tuple(dict.fromkeys(str(domain or "").strip().casefold().removeprefix("www.") for domain in priority_domains if str(domain or "").strip()))[:12]\n        specs += [(f'"{strong}" site:{domain}', "LEARNED_DOMAIN") for domain in learned]\n        specs += [(f'"{strong}" site:{domain}', "KNOWN_DOMAIN_HINT") for domain in PERU_RETAIL_HINT_DOMAINS]\n'''
+new_scope = '''    if strong:\n        # Country-scope discovery finds Peru retailers that are not yet known to\n        # capability memory or the static hint set. These are search-engine scopes,\n        # not one literal hostname, so admission remains identity + Peru constrained.\n        specs += [\n            (f'"{strong}" site:.pe', "PERU_TLD_SCOPE"),\n            (f'"{strong}" site:.com.pe', "PERU_TLD_SCOPE"),\n        ]\n        learned = tuple(dict.fromkeys(str(domain or "").strip().casefold().removeprefix("www.") for domain in priority_domains if str(domain or "").strip()))[:12]\n        specs += [(f'"{strong}" site:{domain}', "LEARNED_DOMAIN") for domain in learned]\n        specs += [(f'"{strong}" site:{domain}', "KNOWN_DOMAIN_HINT") for domain in PERU_RETAIL_HINT_DOMAINS]\n'''
+text = replace_once(text, old_scope, new_scope)
 
-old_batch = '''    def run(query: str) -> list[str]:\n        try:\n            return search_web_query(identity, query, limit=per_query, timeout=12)\n        except Exception:\n            return []\n'''
-new_batch = '''    def run(query: str) -> list[str]:\n        urls, _metrics = _search_with_metrics(\n            identity, query, limit=per_query, required_domain=_required_domain_from_query(query)\n        )\n        return urls\n'''
-text = replace_once(text, old_batch, new_batch)
-
-old_specs = '''    def run(spec: tuple[str, str]):\n        query, signal_type = spec\n        urls, metrics = _search_with_metrics(identity, query, limit=per_query)\n        return query, signal_type, urls, metrics\n'''
-new_specs = '''    def run(spec: tuple[str, str]):\n        query, signal_type = spec\n        urls, metrics = _search_with_metrics(\n            identity, query, limit=per_query, required_domain=_required_domain_from_query(query)\n        )\n        return query, signal_type, urls, metrics\n'''
-text = replace_once(text, old_specs, new_specs)
+old_helper = '''def _required_domain_from_query(query: str) -> str | None:\n    match = re.search(r"(?:^|\\s)site:([a-z0-9.-]+)", str(query or ""), flags=re.IGNORECASE)\n    if not match:\n        return None\n    return match.group(1).casefold().removeprefix("www.")\n'''
+new_helper = '''def _required_domain_from_query(query: str) -> str | None:\n    match = re.search(r"(?:^|\\s)site:([a-z0-9.-]+)", str(query or ""), flags=re.IGNORECASE)\n    if not match:\n        return None\n    domain = match.group(1).casefold().removeprefix("www.")\n    # site:.pe / site:.com.pe are country-wide search scopes, not literal hosts.\n    if domain.startswith("."):\n        return None\n    return domain\n'''
+text = replace_once(text, old_helper, new_helper)
 
 TARGET.write_text(text, encoding="utf-8")
-print("OPEN_PERU_SITE_DOMAIN_PATCH=APPLIED")
+print("OPEN_PERU_TLD_SCOPE_PATCH=APPLIED")

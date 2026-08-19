@@ -28,8 +28,10 @@ new = '''        specs += [
         learned = tuple(dict.fromkeys(str(domain or "").strip().casefold().removeprefix("www.") for domain in priority_domains if str(domain or "").strip()))[:12]
 '''
 
-if old not in text:
+if new in text:
+    print("P7 brand+MPN country-scope patch already present")
+elif old in text:
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    print("P7 brand+MPN country-scope patch applied")
+else:
     raise SystemExit("expected country-scope block not found; refusing broad rewrite")
-
-path.write_text(text.replace(old, new, 1), encoding="utf-8")
-print("P7 brand+MPN country-scope patch applied")

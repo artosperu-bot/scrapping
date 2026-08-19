@@ -1,0 +1,109 @@
+name: Temporary P8 Reproducibility
+
+on:
+  pull_request:
+    paths:
+      - scripts/qa_p8_reproducibility.py
+      - scripts/qa_p8_stability_report.py
+      - src/product_intelligence/price_source_capabilities.py
+      - src/product_intelligence/price_workflow.py
+      - src/product_intelligence/product_classification.py
+      - '.github/workflows/temporary-p8-reproducibility.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  p8-reproducibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/universal-price-identity-recall
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Recover P7 capability-only seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf p7-seed p8-evidence p8-run
+          mkdir -p p7-seed p8-evidence p8-run
+          gh run download 32216096848 -R artosperu-bot/scrapping -n price-after-78bf2c7 -D p7-seed
+          seed="$(find p7-seed -type f -path '*/price_intelligence/source_capabilities.json' -print -quit)"
+          test -n "$seed"
+          cp "$seed" p8-evidence/p7-source-capabilities.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('p8-evidence/p7-source-capabilities.json')
+          data = json.loads(path.read_text(encoding='utf-8'))
+          text = json.dumps(data, ensure_ascii=False).casefold()
+          assert isinstance(data, dict) and data
+          for token in ('sa400s37', 'kingston', 'https://', 'http://', '/producto/', '/product/'):
+              assert token not in text, token
+          print('P8_CAPABILITY_ONLY_SEED=PASS', len(data))
+          PY
+      - name: Cold start MPN-only
+        run: |
+          python scripts/qa_p8_reproducibility.py \
+            --label cold \
+            --output p8-run/cold \
+            --report p8-evidence/cold.json
+      - name: Warm run 1 capability-only MPN-only
+        run: |
+          python scripts/qa_p8_reproducibility.py \
+            --label warm1 \
+            --output p8-run/warm1 \
+            --seed-capabilities p8-evidence/p7-source-capabilities.json \
+            --report p8-evidence/warm1.json
+      - name: Warm run 2 capability-only MPN-only
+        run: |
+          python scripts/qa_p8_reproducibility.py \
+            --label warm2 \
+            --output p8-run/warm2 \
+            --seed-capabilities p8-evidence/p7-source-capabilities.json \
+            --report p8-evidence/warm2.json
+      - name: Warm run 3 capability-only MPN-only
+        run: |
+          python scripts/qa_p8_reproducibility.py \
+            --label warm3 \
+            --output p8-run/warm3 \
+            --seed-capabilities p8-evidence/p7-source-capabilities.json \
+            --report p8-evidence/warm3.json
+      - name: Aggregate stability
+        run: |
+          python scripts/qa_p8_stability_report.py \
+            --reports p8-evidence/cold.json p8-evidence/warm1.json p8-evidence/warm2.json p8-evidence/warm3.json \
+            --output p8-evidence/stability.json
+          cp p8-run/warm3/price_intelligence/source_capabilities.json p8-evidence/warm3-source-capabilities.json
+      - name: Capability-only invariant
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f p8-evidence/warm3-source-capabilities.json
+          # Reports may contain product URLs by design; the reusable warm seed may not.
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('p8-evidence/warm3-source-capabilities.json').read_text(encoding='utf-8'))
+          text = json.dumps(data, ensure_ascii=False).casefold()
+          for token in ('sa400s37', 'kingston', 'https://', 'http://', '/producto/', '/product/'):
+              assert token not in text, token
+          print('P8_EVOLVED_CAPABILITY_MEMORY_NO_PRODUCT_CACHE=PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p8-reproducibility-${{ github.sha }}
+          path: p8-evidence/
+          retention-days: 14

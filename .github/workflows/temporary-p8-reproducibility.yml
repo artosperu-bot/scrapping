@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           rm -rf p7-seed p8-evidence p8-run
           mkdir -p p7-seed p8-evidence p8-run
-          gh run download 32216096848 -R artosperu-bot/scrapping -n price-after-78bf2c7 -D p7-seed
+          gh run download 32216096848 -R artosperu-bot/scrapping -n price-after-sa400s37-960g -D p7-seed
           seed="$(find p7-seed -type f -path '*/price_intelligence/source_capabilities.json' -print -quit)"
           test -n "$seed"
           cp "$seed" p8-evidence/p7-source-capabilities.json
@@ -92,7 +92,6 @@ jobs:
         run: |
           set -euo pipefail
           test -f p8-evidence/warm3-source-capabilities.json
-          # Reports may contain product URLs by design; the reusable warm seed may not.
           python - <<'PY'
           import json
           from pathlib import Path

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
@@ -97,6 +96,22 @@ def hydration_markers(html: str) -> list[str]:
     return [marker for marker in markers if marker in lower]
 
 
+def money_contexts(html: str, *, target: str | None = None, max_rows: int = 12) -> list[dict[str, Any]]:
+    text = BeautifulSoup(html or "", "lxml").get_text(" ", strip=True)
+    rows: list[dict[str, Any]] = []
+    pattern = re.compile(r"(?:S/\.?|S\s*/|PEN\s*)\s*([0-9]{1,7}(?:[.,][0-9]{1,2})?)", re.I)
+    for match in pattern.finditer(text):
+        value = match.group(1).replace(",", "")
+        if target is not None and value != target:
+            continue
+        start = max(0, match.start() - 180)
+        end = min(len(text), match.end() + 180)
+        rows.append({"value": value, "context": text[start:end]})
+        if len(rows) >= max_rows:
+            break
+    return rows
+
+
 def summarize_fetch(label: str, result) -> dict[str, Any]:
     html = str(getattr(result, "html", "") or "")
     soup = BeautifulSoup(html, "lxml")
@@ -125,6 +140,7 @@ def summarize_fetch(label: str, result) -> dict[str, Any]:
         "mpn_exact_in_html": IDENTITY.mpn.casefold() in html.casefold(),
         "mpn_compact_in_html": MPN_COMPACT in norm(html),
         "hydration_markers": hydration_markers(html),
+        "money_contexts_16_92": money_contexts(html, target="16.92"),
         "embedded_identity_price_json": embedded_json_candidates(html),
         "captured_json_count": len(getattr(result, "json_responses", []) or []),
         "captured_identity_price_json": json_rows,

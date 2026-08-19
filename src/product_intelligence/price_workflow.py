@@ -72,19 +72,62 @@ def _mercadolibre_queries(identity: ProductIdentity) -> list[str]:
     return [row.query for row in build_price_query_plan(identity, limit=12)]
 
 
-def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15) -> list[PriceOffer]:
+def _try_mercadolibre(identity: ProductIdentity, timeout: int = 15, on_query_event=None) -> list[PriceOffer]:
     rows: list[PriceOffer] = []
     errors: list[Exception] = []
     queries = _mercadolibre_queries(identity)
+    signal_map = {row.query: row.signal_type for row in build_price_query_plan(identity, limit=12)}
     client = build_mercadolibre_api_client(timeout=timeout)
-    for q in queries:
+    seen_listings: set[str] = set()
+    seen_sellers: set[str] = set()
+    seen_domains: set[str] = set()
+    for index, q in enumerate(queries):
+        raw_count = 0
+        parsed_rows: list[PriceOffer] = []
+        before_listings = set(seen_listings)
+        before_sellers = set(seen_sellers)
+        before_domains = set(seen_domains)
         try:
             url = f"https://api.mercadolibre.com/sites/MPE/search?q={quote_plus(q)}&limit=50"
             response = client.get(url, timeout=timeout)
             response.raise_for_status()
-            rows.extend(parse_mercadolibre_payload(response.json(), identity))
+            payload = response.json()
+            raw_results = payload.get("results") if isinstance(payload, dict) else []
+            raw_count = len(raw_results) if isinstance(raw_results, list) else 0
+            parsed_rows = parse_mercadolibre_payload(payload, identity)
+            rows.extend(parsed_rows)
+            for row in parsed_rows:
+                listing = str(row.publication_id or row.url or "").strip()
+                seller = str(row.seller_tax_id or row.seller_legal_name or row.seller_display_name or "").strip().casefold()
+                host = (urlparse(row.url).hostname or "").casefold().removeprefix("www.")
+                if listing: seen_listings.add(listing)
+                if seller: seen_sellers.add(seller)
+                if host: seen_domains.add(host)
         except Exception as exc:
             errors.append(exc)
+        if on_query_event:
+            new_listings = seen_listings - before_listings
+            new_sellers = seen_sellers - before_sellers
+            if index == len(queries) - 1:
+                reason = "QUERY_PLAN_EXHAUSTED"
+            elif new_listings or new_sellers:
+                reason = "CONTINUE_NOVELTY"
+            else:
+                reason = "CONTINUE_NO_NOVELTY"
+            on_query_event({
+                "lane": "mercadolibre_api",
+                "domain": "mercadolibre.com.pe",
+                "query": q,
+                "signal_type": signal_map.get(q, "UNKNOWN_SIGNAL"),
+                "raw_results": raw_count,
+                "valid_results": len(parsed_rows),
+                "new_urls": len(new_listings),
+                "new_domains": len(seen_domains - before_domains),
+                "new_pdps": len(new_listings),
+                "new_listings": len(new_listings),
+                "new_sellers": len(new_sellers),
+                "stop_reason": reason,
+            })
     if rows:
         return dedupe_offers(rows)
     if errors and len(errors) == len(queries):
@@ -304,6 +347,9 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         if on_event:
             on_event({"type": event_type, "identity": identity.model_dump(), **payload})
 
+    def emit_query(payload: dict):
+        emit("query", **payload)
+
     resolution = resolve_price_identity(identity)
     working_identity = resolution.identity
     trace = PriceCoverageTrace()
@@ -318,6 +364,8 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         resolution_reason=resolution.reason,
         evidence_backed=resolution.evidence_backed,
         official_domain_hint=resolution.official_domain_hint,
+        candidate_urls=list(resolution.candidate_urls),
+        page_signals=list(resolution.page_signals),
     )
 
     offers: list[PriceOffer] = []
@@ -341,7 +389,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             emit("source", channel=channel, status="error", error=f"structured: {type(exc).__name__}: {exc}")
 
     try:
-        ml = _try_mercadolibre(working_identity)
+        ml = _try_mercadolibre(working_identity, on_query_event=emit_query)
         offers.extend(ml)
         if ml:
             trace.record("MercadoLibre", "IDENTITY_ACCEPTED")
@@ -362,6 +410,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
                 working_identity,
                 limit=max(10, max_sources // 2),
                 priority_domains=priority_domains,
+                on_query_event=emit_query,
             )
             try:
                 learned_rows = learned_future.result()
@@ -387,7 +436,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     base_sources: list[str] = []
     if not warm_path or not _has_trusted_offer(offers):
         try:
-            marketplace_sources = discover_additional_peru_pdps(working_identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)))
+            marketplace_sources = discover_additional_peru_pdps(working_identity, limit_per_domain=max(4, min(10, max_sources // 4 or 4)), on_query_event=emit_query)
             emit("source", channel="peru_directed", status="ok", offers=0, urls=len(marketplace_sources), method="targeted_pdp")
         except Exception as exc:
             emit("source", channel="peru_directed", status="error", error=f"discovery: {type(exc).__name__}: {exc}")
@@ -395,6 +444,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             try:
                 retail_sources = discover_general_peru_retailers(
                     working_identity, limit=max(10, max_sources // 2), priority_domains=priority_domains,
+                    on_query_event=emit_query,
                 )
                 emit("source", channel="peru_retail", status="ok", offers=0, urls=len(retail_sources), method="identifier_and_alias_retail")
             except Exception as exc:
@@ -450,5 +500,10 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         target_channels_found=sum(1 for row in coverage["channels"] if row.get("offers")),
         individual_stores=coverage["individual_store_count"],
         best_by_currency=_best_by_currency(valid),
+        candidate_offers=len(offers),
+        deduped_offers=len(deduped),
+        duplicates=max(0, len(offers) - len(deduped)),
+        trusted_offers=len(trusted),
+        price_rejected=max(0, len(deduped) - len(trusted)) + len(rejected_outliers),
     )
     return valid

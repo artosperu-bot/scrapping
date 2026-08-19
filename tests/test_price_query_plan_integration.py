@@ -131,6 +131,45 @@ def test_open_peru_diversity_lane_surfaces_new_domain_after_initial_plateau(monk
     assert any(event.get("signal_type") == "PERU_TLD_DIVERSITY" for event in events)
 
 
+def test_open_peru_diversity_lane_stops_after_two_no_novelty_rounds(monkeypatch):
+    identity = ProductIdentity(mpn="ABC/123")
+    events = []
+    calls = []
+
+    monkeypatch.setattr(
+        price_peru_coverage,
+        "_general_retail_query_specs",
+        lambda *_args, **_kwargs: [('\"ABC/123\" precio Perú', "MPN_ORIGINAL")],
+    )
+    monkeypatch.setattr(
+        price_peru_coverage,
+        "_search_query_specs",
+        lambda *_args, **_kwargs: [
+            (
+                '\"ABC/123\" precio Perú',
+                "MPN_ORIGINAL",
+                ["https://first.pe/product/abc123"],
+                {"raw_results": 1, "valid_results": 1},
+            )
+        ],
+    )
+
+    def fake_search(_identity, query, **kwargs):
+        calls.append(query)
+        return [], {"query": query, "raw_results": 0, "valid_results": 0}
+
+    monkeypatch.setattr(price_peru_coverage, "_search_with_metrics", fake_search)
+    rows = price_peru_coverage.discover_general_peru_retailers(
+        identity, limit=5, on_query_event=events.append
+    )
+
+    diversity_events = [event for event in events if event.get("signal_type") == "PERU_TLD_DIVERSITY"]
+    assert rows == ["https://first.pe/product/abc123"]
+    assert len(calls) == 2
+    assert len(diversity_events) == 2
+    assert diversity_events[-1]["stop_reason"] == "DIVERSITY_NO_NOVELTY_STOP"
+
+
 def test_open_peru_site_queries_enforce_domain_before_ranking(monkeypatch):
     identity = ProductIdentity(mpn="ABC/123")
     calls = []

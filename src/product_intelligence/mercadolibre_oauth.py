@@ -8,6 +8,7 @@ from typing import Any, Callable
 from urllib.parse import urljoin
 
 import requests
+from keyring.errors import NoKeyringError
 
 from .key_store import delete_value, load_value, save_value
 
@@ -50,7 +51,13 @@ class MercadoLibreTokenStore:
         self.key = key
 
     def load(self) -> MercadoLibreOAuthState | None:
-        raw = load_value(self.key)
+        try:
+            raw = load_value(self.key)
+        except NoKeyringError:
+            # Headless/Linux environments may legitimately have no keyring backend.
+            # Treat this exactly like absent configuration so Price Intelligence can
+            # continue with web/other marketplaces instead of crashing globally.
+            return None
         if not raw:
             return None
         try:

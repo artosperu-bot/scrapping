@@ -1,5 +1,6 @@
 name: Temporary Universal Price Recall Core
 
+# telemetry trigger v2
 on:
   push:
     branches:

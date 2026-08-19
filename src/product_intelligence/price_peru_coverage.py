@@ -198,18 +198,18 @@ def discover_additional_peru_pdps(identity: ProductIdentity, *, limit_per_domain
     return merged
 
 
-def _is_peru_retail_candidate(url: str, strong: str) -> bool:
+def _is_peru_retail_candidate(url: str, strong: str, *, priority_domains: tuple[str, ...] = ()) -> bool:
     path, host = (urlparse(url).path or "").lower(), _host(url)
     if not host or any(marker in path for marker in _LISTING_MARKERS): return False
     if any(_host_matches(url, domain) for domain in PERU_MARKETPLACE_DOMAINS): return False
     local = host.endswith(".pe") or host.endswith(".com.pe")
-    hinted = any(_host_matches(url, domain) for domain in PERU_RETAIL_HINT_DOMAINS)
+    hinted = any(_host_matches(url, domain) for domain in (*PERU_RETAIL_HINT_DOMAINS, *priority_domains))
     peru_path = path.startswith("/peru")
     if not (local or hinted or peru_path): return False
     return bool((_compact(strong) and _compact(strong) in _compact(url)) or any(marker in path for marker in _PRODUCT_MARKERS))
 
 
-def _general_retail_queries(identity: ProductIdentity) -> list[str]:
+def _general_retail_queries(identity: ProductIdentity, *, priority_domains: tuple[str, ...] = ()) -> list[str]:
     plan = build_price_query_plan(identity, limit=8)
     model = str(identity.model or identity.product_name or "").strip()
     brand = str(identity.brand or "").strip()
@@ -220,9 +220,11 @@ def _general_retail_queries(identity: ProductIdentity) -> list[str]:
     strong = _strong(identity)
     if strong and model:
         q += [f'"{strong}" "{model}" Perú', f'"{model}" "{strong}" {brand} Perú'.strip()]
-    # Static known-source lane stays bounded to the strongest original signal;
-    # broad signal queries above remain able to discover previously unknown stores.
+    # Learned successful domains are a bounded soft-priority lane. Broad open Peru
+    # queries remain in the plan so memory can never become a permanent whitelist.
     if strong:
+        learned = tuple(dict.fromkeys(str(domain or "").strip().casefold().removeprefix("www.") for domain in priority_domains if str(domain or "").strip()))[:12]
+        q += [f'"{strong}" site:{domain}' for domain in learned]
         q += [f'"{strong}" site:{domain}' for domain in PERU_RETAIL_HINT_DOMAINS]
     seen: set[str] = set()
     out: list[str] = []
@@ -258,13 +260,13 @@ def _search_query_batches(identity: ProductIdentity, queries: list[str], per_que
         return list(pool.map(run, queries))
 
 
-def _append_retail_candidates(rows: list[str], seen: set[str], batches: list[list[str]], marker: str, limit: int) -> bool:
+def _append_retail_candidates(rows: list[str], seen: set[str], batches: list[list[str]], marker: str, limit: int, *, priority_domains: tuple[str, ...] = ()) -> bool:
     for found in batches:
         for raw in found:
             url = str(raw or "").strip()
             if not url.startswith(("http://", "https://")) or url in seen:
                 continue
-            if not _is_peru_retail_candidate(url, marker):
+            if not _is_peru_retail_candidate(url, marker, priority_domains=priority_domains):
                 continue
             seen.add(url)
             rows.append(url)
@@ -273,7 +275,7 @@ def _append_retail_candidates(rows: list[str], seen: set[str], batches: list[lis
     return False
 
 
-def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 20) -> list[str]:
+def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 20, priority_domains: tuple[str, ...] = ()) -> list[str]:
     strong = _strong(identity)
     if not strong or limit <= 0:
         return []
@@ -281,13 +283,13 @@ def discover_general_peru_retailers(identity: ProductIdentity, *, limit: int = 2
     seen: set[str] = set()
     per_query = max(6, min(20, limit * 2))
 
-    exact_batches = _search_query_batches(identity, _general_retail_queries(identity), per_query)
-    if _append_retail_candidates(rows, seen, exact_batches, strong, limit):
+    exact_batches = _search_query_batches(identity, _general_retail_queries(identity, priority_domains=priority_domains), per_query)
+    if _append_retail_candidates(rows, seen, exact_batches, strong, limit, priority_domains=priority_domains):
         return rows
 
     model = str(identity.model or identity.product_name or "").strip()
     if model and len(rows) < limit:
         alias_identity = _alias_identity(identity)
         alias_batches = _search_query_batches(alias_identity, _general_alias_queries(identity), per_query)
-        _append_retail_candidates(rows, seen, alias_batches, model, limit)
+        _append_retail_candidates(rows, seen, alias_batches, model, limit, priority_domains=priority_domains)
     return rows

@@ -9,24 +9,33 @@ on:
       - scripts/qa_fix_p7_mercadolibre_semantics.py
       - tests/test_price_marketplace_expansion.py
       - tests/test_price_p7_mercadolibre_semantics.py
+      - tests/test_price_p7_brand_mpn_discovery.py
       - '.github/workflows/temporary-p7-phase1-forensics-pr.yml'
 
 permissions:
   contents: write
 
 jobs:
+  brand-mpn-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12', cache: pip}
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - run: python -m pytest -q tests/test_price_p7_brand_mpn_discovery.py
+
   ml-terminal-contract:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: feat/universal-price-identity-recall
-          fetch-depth: 0
+        with: {ref: feat/universal-price-identity-recall, fetch-depth: 0}
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
+        with: {python-version: '3.12', cache: pip}
       - run: |
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
@@ -67,18 +76,3 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
       - run: python -m pytest -q tests/test_price_marketplace_expansion.py
-
-  promart-vtex:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.12', cache: pip}
-      - run: |
-          python -m pip install --upgrade pip
-          pip install -e '.[dev]'
-      - run: python scripts/qa_p7_promart_vtex_probe.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: {name: 'p7-promart-vtex-${{ github.sha }}', path: p7_promart_vtex_probe.json, retention-days: 14}

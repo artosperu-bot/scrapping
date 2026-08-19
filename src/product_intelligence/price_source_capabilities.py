@@ -89,6 +89,65 @@ class SourceCapabilityRegistry:
         rows.sort(reverse=True)
         return [domain for _last, _rate, domain in rows[: max(0, int(limit))]]
 
+    def provider_fallback_domains(
+        self,
+        identity: ProductIdentity,
+        *,
+        limit: int = 4,
+        exclude_domains: tuple[str, ...] = (),
+    ) -> list[str]:
+        """Rank a small learned-domain provider fallback set.
+
+        This preserves P2.5 targeted provider recovery without turning every warm
+        run into a search across all remembered stores. Sources already recovered
+        through structured/direct lanes are excluded by the caller; a temporarily
+        failed direct source remains eligible for fallback.
+        """
+        classification = classify_product(identity)
+        requested_category = str(classification.category or "GENERAL")
+        strong_category = classification.confidence >= 0.80 and requested_category != "GENERAL"
+        excluded = {_host(value) for value in exclude_domains if _host(value)}
+        now = datetime.now(timezone.utc)
+        ranked: list[tuple[float, str, str]] = []
+
+        for domain, raw in self._load().items():
+            row = dict(raw or {})
+            successes = int(row.get("success_count") or 0)
+            failures = int(row.get("failure_count") or 0)
+            if successes <= 0 or domain in excluded or row.get("price_capable") is False:
+                continue
+            categories = {str(value) for value in row.get("categories") or [] if str(value)}
+            if strong_category and categories and "GENERAL" not in categories and requested_category not in categories:
+                continue
+
+            total = successes + failures
+            success_rate = float(row.get("success_rate") if row.get("success_rate") is not None else (successes / total if total else 0.0))
+            health = float(row.get("health") if row.get("health") is not None else ((successes + 1) / (total + 2)))
+            score = (2.0 * success_rate) + health + min(successes, 3) * 0.25
+            if row.get("price_capable") is True:
+                score += 1.0
+            if row.get("extraction_methods"):
+                score += 0.25
+            if requested_category in categories:
+                score += 1.5
+            elif not categories or "GENERAL" in categories:
+                score += 0.25
+            last_success = str(row.get("last_success") or "")
+            if last_success:
+                try:
+                    observed = datetime.fromisoformat(last_success.replace("Z", "+00:00"))
+                    age_days = max(0.0, (now - observed.astimezone(timezone.utc)).total_seconds() / 86400.0)
+                    if age_days <= 30:
+                        score += 0.25
+                    elif age_days <= 90:
+                        score += 0.10
+                except (ValueError, TypeError):
+                    pass
+            ranked.append((score, last_success, domain))
+
+        ranked.sort(reverse=True)
+        return [domain for _score, _last, domain in ranked[: max(0, int(limit))]]
+
     def direct_candidates(
         self,
         identity: ProductIdentity,

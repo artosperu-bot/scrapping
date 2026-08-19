@@ -497,7 +497,6 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
     working_identity = resolution.identity
     trace = PriceCoverageTrace()
     capability_registry = SourceCapabilityRegistry(output_root)
-    priority_domains = tuple(capability_registry.successful_domains())
     emit(
         "identity",
         input_identity=identity.model_dump(),
@@ -521,6 +520,7 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
         limit=max(1, min(8, max_sources // 6 or 1)),
         exclude_domains=structured_domains,
     )
+    direct_rows: list[PriceOffer] = []
     if direct_capabilities:
         emit(
             "source_routing",
@@ -528,13 +528,44 @@ def run_price_product(identity: ProductIdentity, output_root: str | Path, *, on_
             candidates=len(direct_capabilities),
             domains=[row.get("domain") for row in direct_capabilities],
         )
-        offers.extend(_collect_direct_source_offers(
+        direct_rows = _collect_direct_source_offers(
             direct_capabilities,
             working_identity,
             emit,
             trace=trace,
             capability_registry=capability_registry,
-        ))
+        )
+        offers.extend(direct_rows)
+
+    direct_candidate_domains = {str(row.get("domain") or "").casefold().removeprefix("www.") for row in direct_capabilities}
+    direct_success_domains = {
+        (urlparse(row.url).hostname or "").casefold().removeprefix("www.")
+        for row in direct_rows
+        if (urlparse(row.url).hostname or "")
+    }
+    direct_success_domains = {
+        domain for domain in direct_success_domains
+        if domain in direct_candidate_domains or any(domain.endswith("." + candidate) for candidate in direct_candidate_domains)
+    }
+    provider_limit = max(1, min(4, max_sources // 12 or 1))
+    excluded_provider_domains = tuple(dict.fromkeys((*structured_domains, *sorted(direct_success_domains))))
+    failed_direct_domains = [
+        domain for domain in (str(row.get("domain") or "").casefold().removeprefix("www.") for row in direct_capabilities)
+        if domain and domain not in direct_success_domains and domain not in structured_domains
+    ]
+    ranked_provider_domains = capability_registry.provider_fallback_domains(
+        working_identity,
+        limit=provider_limit,
+        exclude_domains=excluded_provider_domains,
+    )
+    priority_domains = tuple(dict.fromkeys((*failed_direct_domains, *ranked_provider_domains)))[:provider_limit]
+    if priority_domains:
+        emit(
+            "source_routing",
+            recovery_method="LEARNED_PROVIDER_FALLBACK",
+            candidates=len(priority_domains),
+            domains=list(priority_domains),
+        )
     learned_sources = load_validated_source_urls(output_root, identity)
     warm_path = bool(learned_sources)
     emit("status", stage="searching", message="Consultando APIs y fuentes estructuradas de Perú")
